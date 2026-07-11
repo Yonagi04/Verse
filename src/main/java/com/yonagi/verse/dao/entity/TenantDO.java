@@ -6,16 +6,14 @@ import lombok.Data;
 import java.util.Date;
 
 /**
- * 用户实体
+ * 租户实体
  *
  * @author Yonagi
- * @version 1.0
- * @program Verse
- * @date 2026/05/18 19:36
+ * @date 2026/07/11
  */
 @Data
-@TableName("t_user")
-public class UserDO {
+@TableName("t_tenant")
+public class TenantDO {
 
     /**
      * 自增主键
@@ -23,39 +21,34 @@ public class UserDO {
     private Long id;
 
     /**
-     * 用户唯一标识（业务ID）
+     * 租户唯一标识（业务ID）
      */
-    private Long userId;
+    private Long tenantId;
 
     /**
-     * 用户名
+     * 租户名称
      */
-    private String username;
+    private String name;
 
     /**
-     * 密码（BCrypt加密）
+     * 类型：PERSONAL / TEAM
      */
-    private String password;
+    private String type;
 
     /**
-     * 邮箱
+     * 创建者用户ID
      */
-    private String email;
+    private Long ownerId;
 
     /**
-     * 手机号
+     * 租户描述
      */
-    private String phone;
+    private String description;
 
     /**
-     * 状态：0=禁用, 1=正常
+     * 状态：0=停用, 1=正常
      */
     private Integer status;
-
-    /**
-     * 当前活跃租户ID
-     */
-    private Long lastActiveTenantId;
 
     /**
      * 创建时间
@@ -68,7 +61,7 @@ public class UserDO {
     private Date updateTime;
 
     /**
-     * 逻辑删除：0=未删除, 1=已删除
+     * 逻辑删除
      */
     private Integer delFlag;
 }
