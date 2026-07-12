@@ -196,6 +196,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         return update > 0;
     }
 
+    @Override
+    public Boolean logout(Long userId) {
+        // TODO 接入redis后，把登录信息从redis中删除
+        return null;
+    }
+
     private Long getEmailBindCount(String email) {
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getEmail, email);

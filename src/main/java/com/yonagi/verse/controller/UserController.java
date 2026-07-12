@@ -56,4 +56,9 @@ public class UserController {
                                          @RequestBody UserUpdateReqDTO reqDTO) {
         return Results.success(userService.updateProfile(userId, reqDTO));
     }
+
+    @GetMapping("/api/v1/users/logout")
+    public Result<Boolean> logout(@CurrentUser Long userId) {
+        return Results.success(userService.logout(userId));
+    }
 }
