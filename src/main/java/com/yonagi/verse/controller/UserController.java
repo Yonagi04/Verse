@@ -5,6 +5,7 @@ import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.UserLoginReqDTO;
 import com.yonagi.verse.dto.req.UserRegisterReqDTO;
+import com.yonagi.verse.dto.req.UserUpdatePasswordReqDTO;
 import com.yonagi.verse.dto.req.UserUpdateReqDTO;
 import com.yonagi.verse.dto.resp.UserLoginRespDTO;
 import com.yonagi.verse.dto.resp.UserRegisterRespDTO;
@@ -33,14 +34,14 @@ public class UserController {
     }
 
     @PostMapping("/api/v1/users/register")
-    public Result<UserRegisterRespDTO> register(@Valid @RequestBody UserRegisterReqDTO userRegisterReqDTO) {
-        UserRegisterRespDTO dto = userService.register(userRegisterReqDTO);
+    public Result<UserRegisterRespDTO> register(@Valid @RequestBody UserRegisterReqDTO requestParam) {
+        UserRegisterRespDTO dto = userService.register(requestParam);
         return Results.success(dto);
     }
 
     @PostMapping("/api/v1/users/login")
-    public Result<UserLoginRespDTO> login(@Valid @RequestBody UserLoginReqDTO reqDTO) {
-        UserLoginRespDTO dto = userService.login(reqDTO);
+    public Result<UserLoginRespDTO> login(@Valid @RequestBody UserLoginReqDTO requestParam) {
+        UserLoginRespDTO dto = userService.login(requestParam);
         return Results.success(dto);
     }
 
@@ -53,12 +54,18 @@ public class UserController {
 
     @PutMapping("/api/v1/users/me")
     public Result<Boolean> updateProfile(@CurrentUser Long userId,
-                                         @RequestBody UserUpdateReqDTO reqDTO) {
-        return Results.success(userService.updateProfile(userId, reqDTO));
+                                         @RequestBody UserUpdateReqDTO requestParam) {
+        return Results.success(userService.updateProfile(userId, requestParam));
     }
 
     @GetMapping("/api/v1/users/logout")
     public Result<Boolean> logout(@CurrentUser Long userId) {
         return Results.success(userService.logout(userId));
+    }
+
+    @PostMapping("/api/v1/users/updatePassword")
+    public Result<Boolean> updatePassword(@CurrentUser Long userId,
+                                          @RequestBody UserUpdatePasswordReqDTO requestParam) {
+        return Results.success(userService.updatePassword(userId, requestParam));
     }
 }

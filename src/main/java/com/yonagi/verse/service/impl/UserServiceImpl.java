@@ -19,6 +19,7 @@ import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.dto.req.UserLoginReqDTO;
 import com.yonagi.verse.dto.req.UserRegisterReqDTO;
+import com.yonagi.verse.dto.req.UserUpdatePasswordReqDTO;
 import com.yonagi.verse.dto.req.UserUpdateReqDTO;
 import com.yonagi.verse.dto.resp.UserLoginRespDTO;
 import com.yonagi.verse.dto.resp.UserRegisterRespDTO;
@@ -57,20 +58,20 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public UserRegisterRespDTO register(UserRegisterReqDTO reqDTO) {
-        if (hasUsername(reqDTO.getUsername())) {
+    public UserRegisterRespDTO register(UserRegisterReqDTO requestParam) {
+        if (hasUsername(requestParam.getUsername())) {
             throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
         }
-        long emailBindCount = getEmailBindCount(reqDTO.getEmail());
+        long emailBindCount = getEmailBindCount(requestParam.getEmail());
         if (emailBindCount >= 3) {
             throw new ClientException(UserErrorCodeEnum.EMAIL_BIND_COUNT_EXCEED);
         }
 
         Long userId = SnowflakeIdUtil.nextId();
-        String encodedPassword = passwordEncoder.encode(reqDTO.getPassword());
+        String encodedPassword = passwordEncoder.encode(requestParam.getPassword());
 
         UserDO userDO = new UserDO();
-        BeanUtil.copyProperties(reqDTO, userDO);
+        BeanUtil.copyProperties(requestParam, userDO);
         userDO.setUserId(userId);
         userDO.setPassword(encodedPassword);
         userDO.setStatus(1);
@@ -84,7 +85,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         Long tenantId = SnowflakeIdUtil.nextId();
         TenantDO tenantDO = new TenantDO();
         tenantDO.setTenantId(tenantId);
-        tenantDO.setName(reqDTO.getUsername() + "的个人空间");
+        tenantDO.setName(requestParam.getUsername() + "的个人空间");
         tenantDO.setType("PERSONAL");
         tenantDO.setOwnerId(userId);
         tenantDO.setStatus(1);
@@ -107,20 +108,20 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         UserRegisterRespDTO resp = new UserRegisterRespDTO();
         resp.setUserId(userId);
-        resp.setUsername(reqDTO.getUsername());
+        resp.setUsername(requestParam.getUsername());
         return resp;
     }
 
     @Override
-    public UserLoginRespDTO login(UserLoginReqDTO reqDTO) {
+    public UserLoginRespDTO login(UserLoginReqDTO requestParam) {
         // TODO 接入redis后，把登录信息存到redis
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getUsername, reqDTO.getUsername());
+                .eq(UserDO::getUsername, requestParam.getUsername());
         UserDO userDO = baseMapper.selectOne(queryWrapper);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
-        if (!passwordEncoder.matches(reqDTO.getPassword(), userDO.getPassword())) {
+        if (!passwordEncoder.matches(requestParam.getPassword(), userDO.getPassword())) {
             throw new ClientException(UserErrorCodeEnum.PASSWORD_ERROR);
         }
         if (userDO.getStatus() != null && userDO.getStatus() == 0) {
@@ -179,6 +180,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Boolean updateProfile(Long userId, UserUpdateReqDTO requestParam) {
         // 校验
         if (hasUsername(requestParam.getUsername())) {
@@ -200,6 +202,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     public Boolean logout(Long userId) {
         // TODO 接入redis后，把登录信息从redis中删除
         return null;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean updatePassword(Long userId, UserUpdatePasswordReqDTO requestParam) {
+        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getUserId, userId);
+        UserDO userDO = baseMapper.selectOne(queryWrapper);
+        if (userDO == null) {
+            throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
+        }
+        if (passwordEncoder.matches(requestParam.getPassword(), userDO.getPassword())) {
+            throw new ClientException(UserErrorCodeEnum.PASSWORD_MATCHED);
+        }
+        String encodedNewPassword = passwordEncoder.encode(requestParam.getPassword());
+        requestParam.setPassword(encodedNewPassword);
+        LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
+                .eq(UserDO::getUserId, userId);
+        int update = baseMapper.update(BeanUtil.toBean(requestParam, UserDO.class), updateWrapper);
+        return update > 0;
     }
 
     private Long getEmailBindCount(String email) {
