@@ -13,11 +13,14 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.Collections;
 
 /**
  * JWT 认证过滤器 — 从请求头提取 Token，验证并设置用户上下文
@@ -56,6 +59,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     .setUsername(username);
             UserContextHolder.set(ctx);
 
+            // 设置 Spring Security 认证上下文，否则后续 SecurityFilterChain 会因无认证信息而返回 401
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(ctx, null, Collections.emptyList());
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+
             filterChain.doFilter(request, response);
         } catch (ExpiredJwtException e) {
             log.debug("Token 已过期: {}", e.getMessage());
@@ -65,6 +73,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
         } finally {
             UserContextHolder.clear();
+            SecurityContextHolder.clearContext();
         }
     }
 
