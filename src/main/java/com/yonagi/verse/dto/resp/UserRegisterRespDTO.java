@@ -2,25 +2,19 @@ package com.yonagi.verse.dto.resp;
 
 import lombok.Data;
 
-import java.util.Date;
-
 /**
- * 用户信息响应
+ * 用户注册响应
  *
  * @author Yonagi
  * @version 1.0
  * @program Verse
  * @description
- * @date 2026/05/18 19:41
+ * @date 2026/07/12 14:20
  */
 @Data
-public class UserRespDTO {
+public class UserRegisterRespDTO {
 
     private Long userId;
 
     private String username;
-
-    private String email;
-
-    private String phone;
 }

@@ -38,12 +38,12 @@ public class UserDO {
     private String password;
 
     /**
-     * 邮箱
+     * 邮箱（业务层展示时脱敏处理）
      */
     private String email;
 
     /**
-     * 手机号
+     * 手机号（业务层展示时脱敏处理）
      */
     private String phone;
 
