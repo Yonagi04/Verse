@@ -9,6 +9,8 @@ import com.yonagi.verse.common.convention.result.Results;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.validation.BindingResult;
@@ -64,6 +66,24 @@ public class GlobalExceptionHandler {
 
         log.error("[{}] {} [ex] {}", request.getMethod(), request.getRequestURL().toString(), ex.toString());
         return Results.failure(ex);
+    }
+
+    /**
+     * 拦截认证异常
+     */
+    @ExceptionHandler(value = {AuthenticationException.class})
+    public Result handleAuthenticationException(HttpServletRequest request, AuthenticationException ex) {
+        log.warn("[{}] {} 认证失败: {}", request.getMethod(), getUrl(request), ex.getMessage());
+        return Results.failure(BaseErrorCode.TOKEN_INVALID.code(), "认证失败");
+    }
+
+    /**
+     * 拦截权限不足异常
+     */
+    @ExceptionHandler(value = {AccessDeniedException.class})
+    public Result handleAccessDeniedException(HttpServletRequest request, AccessDeniedException ex) {
+        log.warn("[{}] {} 权限不足", request.getMethod(), getUrl(request));
+        return Results.failure(BaseErrorCode.TOKEN_INVALID.code(), "权限不足");
     }
 
     /**

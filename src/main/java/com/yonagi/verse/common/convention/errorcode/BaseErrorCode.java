@@ -26,6 +26,17 @@ public enum BaseErrorCode implements IErrorCode {
     IDEMPOTENT_TOKEN_NULL_ERROR("A000200", "幂等Token为空"),
     IDEMPOTENT_TOKEN_DELETE_ERROR("A000201", "幂等Token已被使用或失效"),
 
+    // ========== 二级宏观错误码 Token 认证 ==========
+    TOKEN_INVALID("A000210", "Token 无效"),
+    TOKEN_EXPIRED("A000212", "Token 已过期"),
+    TOKEN_MISSING("A000213", "缺少认证 Token"),
+
+    // ========== 二级宏观错误码 用户登录 ==========
+    USER_LOGIN_ERROR("A000130", "用户登录失败"),
+    USER_NOT_EXIST_ERROR("A000131", "用户不存在"),
+    USER_PASSWORD_ERROR("A000132", "用户名或密码错误"),
+    USER_STATUS_DISABLED("A000133", "用户已被禁用"),
+
     // ========== 一级宏观错误码 系统执行出错 ==========
     SERVICE_ERROR("B000001", "系统执行出错"),
     // ========== 二级宏观错误码 系统执行超时 ==========
