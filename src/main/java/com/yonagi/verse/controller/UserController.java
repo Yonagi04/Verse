@@ -45,8 +45,9 @@ public class UserController {
     }
 
     @GetMapping("/api/v1/users/me")
-    public Result<UserRespDTO> getCurrentUser(@CurrentUser Long userId) {
-        UserRespDTO dto = userService.getCurrentUser(userId);
+    public Result<UserRespDTO> getCurrentUser(@CurrentUser Long userId,
+                                              @RequestParam(defaultValue = "true") boolean mask) {
+        UserRespDTO dto = userService.getCurrentUser(userId, mask);
         return Results.success(dto);
     }
 

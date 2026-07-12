@@ -24,7 +24,7 @@ public interface UserService extends IService<UserDO> {
 
     UserLoginRespDTO login(UserLoginReqDTO reqDTO);
 
-    UserRespDTO getCurrentUser(Long userId);
+    UserRespDTO getCurrentUser(Long userId, boolean mask);
 
     Boolean updateProfile(Long userId, UserUpdateReqDTO reqDTO);
 }

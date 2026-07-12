@@ -9,6 +9,7 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
+import com.yonagi.verse.common.util.SensitiveUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.entity.UserDO;
@@ -161,7 +162,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
-    public UserRespDTO getCurrentUser(Long userId) {
+    public UserRespDTO getCurrentUser(Long userId, boolean mask) {
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getUserId, userId);
         UserDO userDO = baseMapper.selectOne(queryWrapper);
@@ -170,7 +171,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         }
         UserRespDTO result = new UserRespDTO();
         BeanUtil.copyProperties(userDO, result);
-        // TODO 业务层对手机号和邮箱进行脱敏处理
+        if (mask) {
+            result.setPhone(SensitiveUtil.maskPhone(result.getPhone()));
+            result.setEmail(SensitiveUtil.maskEmail(result.getEmail()));
+        }
         return result;
     }
 
