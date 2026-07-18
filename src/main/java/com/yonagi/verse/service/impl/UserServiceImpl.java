@@ -66,6 +66,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         return baseMapper.selectOne(queryWrapper) != null;
     }
 
+    public Boolean hasPhone(String phone) {
+        // TODO 用布隆过滤器查手机号
+        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getPhone, phone);
+        return baseMapper.selectOne(queryWrapper) != null;
+    }
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public UserRegisterRespDTO register(UserRegisterReqDTO requestParam) {
@@ -75,6 +82,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         long emailBindCount = getEmailBindCount(requestParam.getEmail());
         if (emailBindCount >= 3) {
             throw new ClientException(UserErrorCodeEnum.EMAIL_BIND_COUNT_EXCEED);
+        }
+        if (hasPhone(requestParam.getPhone())) {
+            throw new ClientException(UserErrorCodeEnum.USER_PHONE_EXIST);
         }
 
         Long userId = SnowflakeIdUtil.nextId();
@@ -278,6 +288,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     private Long getEmailBindCount(String email) {
+        // TODO 用Redis的Set维护一个邮箱绑定的用户ID集合，直接查询 SCARD 集合的大小即可
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getEmail, email);
         return baseMapper.selectCount(queryWrapper);
