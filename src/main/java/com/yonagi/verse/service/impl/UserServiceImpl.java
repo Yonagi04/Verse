@@ -1,10 +1,12 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.crypto.digest.DigestUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.UserErrorCodeEnum;
@@ -21,16 +23,21 @@ import com.yonagi.verse.dto.req.UserLoginReqDTO;
 import com.yonagi.verse.dto.req.UserRegisterReqDTO;
 import com.yonagi.verse.dto.req.UserUpdatePasswordReqDTO;
 import com.yonagi.verse.dto.req.UserUpdateReqDTO;
+import com.yonagi.verse.dto.resp.LoginSessionVO;
 import com.yonagi.verse.dto.resp.UserLoginRespDTO;
 import com.yonagi.verse.dto.resp.UserRegisterRespDTO;
 import com.yonagi.verse.dto.resp.UserRespDTO;
 import com.yonagi.verse.service.UserService;
 import lombok.RequiredArgsConstructor;
+import com.alibaba.fastjson2.JSON;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author Yonagi
@@ -41,12 +48,14 @@ import java.util.Date;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements UserService {
 
     private final PasswordEncoder passwordEncoder;
     private final TenantMapper tenantMapper;
     private final UserTenantMapper userTenantMapper;
     private final JwtUtil jwtUtil;
+    private final StringRedisTemplate stringRedisTemplate;
 
     @Override
     public Boolean hasUsername(String username) {
@@ -114,7 +123,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public UserLoginRespDTO login(UserLoginReqDTO requestParam) {
-        // TODO 接入redis后，把登录信息存到redis
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getUsername, requestParam.getUsername());
         UserDO userDO = baseMapper.selectOne(queryWrapper);
@@ -131,6 +139,27 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         // 生成 JWT Token
         String token = jwtUtil.generateToken(userDO.getUserId(), userDO.getUsername());
         Date expiresAt = new Date(System.currentTimeMillis() + 86400000);
+
+        // 会话信息存入 Redis
+        long ttl = expiresAt.getTime() - System.currentTimeMillis();
+        LoginSessionVO session = LoginSessionVO.builder()
+                .userId(userDO.getUserId())
+                .username(userDO.getUsername())
+                .token(token)
+                .expiresAt(expiresAt)
+                .lastActiveTenantId(userDO.getLastActiveTenantId())
+                .loginTime(new Date())
+                .build();
+        stringRedisTemplate.opsForValue().set(
+                RedisKeyConstant.USER_LOGIN_KEY + userDO.getUserId(),
+                JSON.toJSONString(session),
+                ttl, TimeUnit.MILLISECONDS);
+
+        String tokenHash = DigestUtil.md5Hex(token);
+        stringRedisTemplate.opsForValue().set(
+                RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash,
+                userDO.getUserId().toString(),
+                ttl, TimeUnit.MILLISECONDS);
 
         UserLoginRespDTO resp = new UserLoginRespDTO();
         resp.setUserId(userDO.getUserId());
@@ -200,8 +229,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public Boolean logout(Long userId) {
-        // TODO 接入redis后，把登录信息从redis中删除
-        return null;
+        // 从 Redis 获取会话信息
+        String sessionJson = stringRedisTemplate.opsForValue()
+                .get(RedisKeyConstant.USER_LOGIN_KEY + userId);
+        if (sessionJson != null) {
+            LoginSessionVO session = JSON.parseObject(sessionJson, LoginSessionVO.class);
+            // 删除 Token 反向索引
+            String tokenHash = DigestUtil.md5Hex(session.getToken());
+            stringRedisTemplate.delete(RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash);
+        }
+        // 删除会话 Key
+        stringRedisTemplate.delete(RedisKeyConstant.USER_LOGIN_KEY + userId);
+        return true;
     }
 
     @Override

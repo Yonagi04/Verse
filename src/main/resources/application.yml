@@ -12,6 +12,16 @@ spring:
       idle-timeout: 30000
       maximum-pool-size: 5
       minimum-idle: 5
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
 
 server:
   port: 8080

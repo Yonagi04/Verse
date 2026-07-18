@@ -1,6 +1,8 @@
 package com.yonagi.verse.common.security;
 
 import com.alibaba.fastjson2.JSON;
+import cn.hutool.crypto.digest.DigestUtil;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
@@ -13,6 +15,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -36,6 +39,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final JwtUtil jwtUtil;
+    private final StringRedisTemplate stringRedisTemplate;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -51,6 +55,16 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
         try {
             Claims claims = jwtUtil.parseToken(token);
+
+            // 校验 Token 是否已被登出（从 Redis 反向索引中查询）
+            String tokenHash = DigestUtil.md5Hex(token);
+            String userIdFromRedis = stringRedisTemplate.opsForValue()
+                    .get(RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash);
+            if (userIdFromRedis == null) {
+                writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
+                return;
+            }
+
             String userIdStr = claims.getSubject();
             String username = claims.get("username", String.class);
 

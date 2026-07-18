@@ -15,7 +15,12 @@ public class RedisKeyConstant {
     public final static String LOCK_USER_REGISTER_KEY = "verse:lock_user-register:";
 
     /**
-     * 用户登录key
+     * 用户登录会话key（{userId} → LoginSessionVO）
      */
     public final static String USER_LOGIN_KEY = "verse:login:";
+
+    /**
+     * 用户登录Token反向索引key（{tokenHash} → userId），用于登出时快速定位
+     */
+    public final static String USER_LOGIN_TOKEN_KEY = "verse:login:token:";
 }
