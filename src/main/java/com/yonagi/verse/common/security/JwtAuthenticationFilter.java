@@ -2,10 +2,17 @@ package com.yonagi.verse.common.security;
 
 import com.alibaba.fastjson2.JSON;
 import cn.hutool.crypto.digest.DigestUtil;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
+import com.yonagi.verse.common.enums.PermissionEnum;
+import com.yonagi.verse.common.enums.RoleEnum;
+import com.yonagi.verse.dao.entity.UserDO;
+import com.yonagi.verse.dao.entity.UserTenantDO;
+import com.yonagi.verse.dao.mapper.UserMapper;
+import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
@@ -17,16 +24,21 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 
 /**
- * JWT 认证过滤器 — 从请求头提取 Token，验证并设置用户上下文
+ * JWT 认证过滤器 — 从请求头提取 Token，验证、查询权限并设置认证上下文
  *
  * @author Yonagi
  */
@@ -40,6 +52,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
+    private final UserMapper userMapper;
+    private final UserTenantMapper userTenantMapper;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -65,17 +79,35 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            String userIdStr = claims.getSubject();
+            Long userId = Long.parseLong(claims.getSubject());
             String username = claims.get("username", String.class);
 
+            // 查询用户在当前活跃租户下的角色和权限
+            Long activeTenantId = getActiveTenantId(userId);
+            RoleEnum role = getUserRole(userId, activeTenantId);
+            Set<PermissionEnum> permissions = role != null
+                    ? role.getPermissions()
+                    : Collections.emptySet();
+
+            // 构建 UserContext
             UserContext ctx = new UserContext()
-                    .setUserId(Long.parseLong(userIdStr))
-                    .setUsername(username);
+                    .setUserId(userId)
+                    .setUsername(username)
+                    .setCurrentTenantId(activeTenantId)
+                    .setRole(role != null ? role.name() : null)
+                    .setAuthorities(permissions.stream().map(PermissionEnum::getCode).toList());
             UserContextHolder.set(ctx);
 
-            // 设置 Spring Security 认证上下文，否则后续 SecurityFilterChain 会因无认证信息而返回 401
+            // 构建 Spring Security Authentication（让 @PreAuthorize 生效）
+            List<GrantedAuthority> authorities = new ArrayList<>();
+            permissions.forEach(p ->
+                    authorities.add(new SimpleGrantedAuthority(p.getCode())));
+            if (role != null) {
+                authorities.add(new SimpleGrantedAuthority("ROLE_" + role.name()));
+            }
+
             UsernamePasswordAuthenticationToken authentication =
-                    new UsernamePasswordAuthenticationToken(ctx, null, Collections.emptyList());
+                    new UsernamePasswordAuthenticationToken(ctx, null, authorities);
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
             filterChain.doFilter(request, response);
@@ -88,6 +120,43 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         } finally {
             UserContextHolder.clear();
             SecurityContextHolder.clearContext();
+        }
+    }
+
+    /**
+     * 获取用户的当前活跃租户 ID
+     */
+    private Long getActiveTenantId(Long userId) {
+        UserDO userDO = userMapper.selectOne(
+                Wrappers.lambdaQuery(UserDO.class)
+                        .eq(UserDO::getUserId, userId)
+                        .eq(UserDO::getDelFlag, 0));
+        if (userDO != null && userDO.getLastActiveTenantId() != null) {
+            return userDO.getLastActiveTenantId();
+        }
+        return null;
+    }
+
+    /**
+     * 获取用户在指定租户下的角色
+     */
+    private RoleEnum getUserRole(Long userId, Long tenantId) {
+        if (tenantId == null) {
+            return null;
+        }
+        UserTenantDO membership = userTenantMapper.selectOne(
+                Wrappers.lambdaQuery(UserTenantDO.class)
+                        .eq(UserTenantDO::getUserId, userId)
+                        .eq(UserTenantDO::getTenantId, tenantId)
+                        .isNull(UserTenantDO::getLeftAt));
+        if (membership == null) {
+            return null;
+        }
+        try {
+            return RoleEnum.valueOf(membership.getRole());
+        } catch (IllegalArgumentException e) {
+            log.warn("用户 {} 在租户 {} 中的角色未知: {}", userId, tenantId, membership.getRole());
+            return null;
         }
     }
 

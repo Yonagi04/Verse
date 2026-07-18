@@ -2,6 +2,7 @@ package com.yonagi.verse.controller;
 
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
+import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.UserLoginReqDTO;
 import com.yonagi.verse.dto.req.UserRegisterReqDTO;
 import com.yonagi.verse.dto.req.UserUpdatePasswordReqDTO;
@@ -45,25 +46,25 @@ public class UserController {
     }
 
     @GetMapping("/api/v1/users/me")
-    public Result<UserRespDTO> getCurrentUser(@RequestParam Long userId,
+    public Result<UserRespDTO> getCurrentUser(@CurrentUser Long userId,
                                               @RequestParam(defaultValue = "true") boolean mask) {
         UserRespDTO dto = userService.getCurrentUser(userId, mask);
         return Results.success(dto);
     }
 
     @PutMapping("/api/v1/users/me")
-    public Result<Boolean> updateProfile(@RequestParam Long userId,
+    public Result<Boolean> updateProfile(@CurrentUser Long userId,
                                          @RequestBody UserUpdateReqDTO requestParam) {
         return Results.success(userService.updateProfile(userId, requestParam));
     }
 
     @GetMapping("/api/v1/users/logout")
-    public Result<Boolean> logout(@RequestParam Long userId) {
+    public Result<Boolean> logout(@CurrentUser Long userId) {
         return Results.success(userService.logout(userId));
     }
 
     @PostMapping("/api/v1/users/updatePassword")
-    public Result<Boolean> updatePassword(@RequestParam Long userId,
+    public Result<Boolean> updatePassword(@CurrentUser Long userId,
                                           @RequestBody UserUpdatePasswordReqDTO requestParam) {
         return Results.success(userService.updatePassword(userId, requestParam));
     }

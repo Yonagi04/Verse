@@ -31,3 +31,5 @@ verse:
     jwt:
       secret: ${JWT_SECRET:your-256-bit-secret-key-change-in-production}
       expiration: 86400000
+    # JWT 认证白名单（不走 JWT 鉴权，如 LLM 调用接口使用 API Key 独立认证）
+    ignore-paths: /api/v1/user/hasUsername,/api/v1/users/register,/api/v1/users/login,/api/v1/llm/**
