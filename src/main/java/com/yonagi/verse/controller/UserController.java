@@ -3,13 +3,11 @@ package com.yonagi.verse.controller;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.CurrentUser;
-import com.yonagi.verse.dto.req.UserLoginReqDTO;
-import com.yonagi.verse.dto.req.UserRegisterReqDTO;
-import com.yonagi.verse.dto.req.UserUpdatePasswordReqDTO;
-import com.yonagi.verse.dto.req.UserUpdateReqDTO;
+import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.UserLoginRespDTO;
 import com.yonagi.verse.dto.resp.UserRegisterRespDTO;
 import com.yonagi.verse.dto.resp.UserRespDTO;
+import com.yonagi.verse.dto.resp.UserVerifyPhoneCodeRespDTO;
 import com.yonagi.verse.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -52,7 +50,7 @@ public class UserController {
         return Results.success(dto);
     }
 
-    @PutMapping("/api/v1/users/me")
+    @PostMapping("/api/v1/users/me")
     public Result<Boolean> updateProfile(@CurrentUser Long userId,
                                          @RequestBody UserUpdateReqDTO requestParam) {
         return Results.success(userService.updateProfile(userId, requestParam));
@@ -67,5 +65,20 @@ public class UserController {
     public Result<Boolean> updatePassword(@CurrentUser Long userId,
                                           @RequestBody UserUpdatePasswordReqDTO requestParam) {
         return Results.success(userService.updatePassword(userId, requestParam));
+    }
+
+    @PostMapping("/api/v1/users/password/reset/sendCode")
+    public Result<Boolean> sendingPhoneCode(@RequestBody UserSendingPhoneCodeReqDTO requestParam) {
+        return Results.success(userService.sendingPhoneCode(requestParam));
+    }
+
+    @PostMapping("/api/v1/users/password/reset/verifyCode")
+    public Result<UserVerifyPhoneCodeRespDTO> verifyCode(@RequestBody UserVerifyPhoneCodeReqDTO requestParam) {
+        return Results.success(userService.verifyCode(requestParam));
+    }
+
+    @PostMapping("/api/v1/users/password/reset")
+    public Result<Boolean> resetPassword(@RequestBody UserResetPasswordReqDTO requestParam) {
+        return Results.success(userService.resetPassword(requestParam));
     }
 }

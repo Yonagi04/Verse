@@ -2,13 +2,11 @@ package com.yonagi.verse.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.UserDO;
-import com.yonagi.verse.dto.req.UserLoginReqDTO;
-import com.yonagi.verse.dto.req.UserRegisterReqDTO;
-import com.yonagi.verse.dto.req.UserUpdatePasswordReqDTO;
-import com.yonagi.verse.dto.req.UserUpdateReqDTO;
+import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.UserLoginRespDTO;
 import com.yonagi.verse.dto.resp.UserRegisterRespDTO;
 import com.yonagi.verse.dto.resp.UserRespDTO;
+import com.yonagi.verse.dto.resp.UserVerifyPhoneCodeRespDTO;
 
 /**
  * @author Yonagi
@@ -32,4 +30,10 @@ public interface UserService extends IService<UserDO> {
     Boolean logout(Long userId);
 
     Boolean updatePassword(Long userId, UserUpdatePasswordReqDTO requestParam);
+
+    Boolean sendingPhoneCode(UserSendingPhoneCodeReqDTO requestParam);
+
+    UserVerifyPhoneCodeRespDTO verifyCode(UserVerifyPhoneCodeReqDTO requestParam);
+
+    Boolean resetPassword(UserResetPasswordReqDTO requestParam);
 }

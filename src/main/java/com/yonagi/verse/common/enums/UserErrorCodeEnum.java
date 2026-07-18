@@ -20,7 +20,11 @@ public enum UserErrorCodeEnum implements IErrorCode {
     PASSWORD_ERROR("B000206", "用户名或密码错误"),
     PASSWORD_MATCHED("B000207", "新密码与旧密码一致，请重新输入"),
     USER_HAS_BEEN_LOGIN("B000208", "用户已登录，请勿重复登录"),
-    USER_PHONE_EXIST("B000209", "手机号已存在");
+    USER_PHONE_EXIST("B000209", "手机号已存在"),
+    USER_PHONE_NOT_EXIST("B000210", "手机号不存在"),
+    USER_PHONE_CODE_SEND_FREQUENT("B000211", "验证码发送过于频繁，请60秒后再试"),
+    USER_PHONE_CODE_ERROR("B000212", "验证码错误"),
+    USER_RESET_PASSWORD_FAIL("B000213", "密码重置失败，请重新尝试");
 
     private final String code;
 

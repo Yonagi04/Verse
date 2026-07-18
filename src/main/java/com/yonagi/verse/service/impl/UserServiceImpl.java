@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.lang.UUID;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -20,15 +21,10 @@ import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
-import com.yonagi.verse.dto.req.UserLoginReqDTO;
-import com.yonagi.verse.dto.req.UserRegisterReqDTO;
-import com.yonagi.verse.dto.req.UserUpdatePasswordReqDTO;
-import com.yonagi.verse.dto.req.UserUpdateReqDTO;
-import com.yonagi.verse.dto.resp.LoginSessionVO;
-import com.yonagi.verse.dto.resp.UserLoginRespDTO;
-import com.yonagi.verse.dto.resp.UserRegisterRespDTO;
-import com.yonagi.verse.dto.resp.UserRespDTO;
+import com.yonagi.verse.dto.req.*;
+import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.UserService;
+import jakarta.validation.constraints.Digits;
 import lombok.RequiredArgsConstructor;
 import com.alibaba.fastjson2.JSON;
 import lombok.extern.slf4j.Slf4j;
@@ -37,7 +33,9 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.Time;
 import java.util.Date;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -63,13 +61,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         // TODO 接入redis后用布隆过滤器查username
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getUsername, username);
-        return baseMapper.selectOne(queryWrapper) != null;
-    }
-
-    public Boolean hasPhone(String phone) {
-        // TODO 用布隆过滤器查手机号
-        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getPhone, phone);
         return baseMapper.selectOne(queryWrapper) != null;
     }
 
@@ -287,10 +278,81 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         return update > 0;
     }
 
+    @Override
+    public Boolean sendingPhoneCode(UserSendingPhoneCodeReqDTO requestParam) {
+        if (!hasPhone(requestParam.getPhone())) {
+            throw new ClientException(UserErrorCodeEnum.USER_PHONE_NOT_EXIST);
+        }
+        // 校验是否发送过于频繁（60 秒间隔，按手机号区分用户）
+        String rateKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + "rate:" + requestParam.getPhone();
+        Boolean isAbsent = stringRedisTemplate.opsForValue().setIfAbsent(rateKey, "1", 60, TimeUnit.SECONDS);
+        if (Boolean.FALSE.equals(isAbsent)) {
+            throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_SEND_FREQUENT);
+        }
+
+        String code = String.format("%06d", ThreadLocalRandom.current().nextInt(1000000));
+        // 保存验证码到 Redis，5 分钟有效
+        String codeKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + requestParam.getPhone();
+        stringRedisTemplate.opsForValue().set(codeKey, code, 5, TimeUnit.MINUTES);
+        return true;
+    }
+
+    @Override
+    public UserVerifyPhoneCodeRespDTO verifyCode(UserVerifyPhoneCodeReqDTO requestParam) {
+        String phone = requestParam.getPhone();
+        String codeKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + phone;
+        String storedCode = stringRedisTemplate.opsForValue().get(codeKey);
+        if (storedCode == null || !storedCode.equals(requestParam.getCode())) {
+            throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_ERROR);
+        }
+        // 验证成功后删除验证码
+        stringRedisTemplate.delete(codeKey);
+
+        String token = jwtUtil.generateResetPasswordToken(phone, requestParam.getCode());
+        String tokenHash = DigestUtil.md5Hex(token);
+        stringRedisTemplate.opsForValue().set(RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + phone,
+                tokenHash, 10, TimeUnit.MINUTES);
+        UserVerifyPhoneCodeRespDTO resp = new UserVerifyPhoneCodeRespDTO();
+        resp.setToken(token);
+        return resp;
+    }
+
+    @Override
+    @Transactional
+    public Boolean resetPassword(UserResetPasswordReqDTO requestParam) {
+        String tokenHash = DigestUtil.md5Hex(requestParam.getToken());
+        String phoneKey = RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + requestParam.getPhone();
+        String storedTokenHash = stringRedisTemplate.opsForValue().get(phoneKey);
+        if (storedTokenHash == null || !storedTokenHash.equals(tokenHash)) {
+            throw new ClientException(UserErrorCodeEnum.USER_RESET_PASSWORD_FAIL);
+        }
+
+        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getPhone, requestParam.getPhone());
+        UserDO userDO = baseMapper.selectOne(queryWrapper);
+        if (userDO == null) {
+            throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
+        }
+        UserUpdatePasswordReqDTO dto = new UserUpdatePasswordReqDTO();
+        dto.setPassword(requestParam.getPassword());
+        updatePassword(userDO.getUserId(), dto);
+
+        // 密码更新成功后才删除 token，防止重复使用
+        stringRedisTemplate.delete(phoneKey);
+        return true;
+    }
+
     private Long getEmailBindCount(String email) {
         // TODO 用Redis的Set维护一个邮箱绑定的用户ID集合，直接查询 SCARD 集合的大小即可
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getEmail, email);
         return baseMapper.selectCount(queryWrapper);
+    }
+
+    public Boolean hasPhone(String phone) {
+        // TODO 用布隆过滤器查手机号
+        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getPhone, phone);
+        return baseMapper.selectOne(queryWrapper) != null;
     }
 }

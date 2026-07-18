@@ -51,6 +51,19 @@ public class JwtUtil {
                 .compact();
     }
 
+    public String generateResetPasswordToken(String phone, String code) {
+        Date now = new Date();
+        Date expiryDate = new Date(now.getTime() + expiration);
+
+        return Jwts.builder()
+                .subject(phone)
+                .claim("code", code)
+                .issuedAt(now)
+                .expiration(expiryDate)
+                .signWith(secretKey)
+                .compact();
+    }
+
     /**
      * 解析 Token，返回 Claims
      *
