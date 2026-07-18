@@ -17,4 +17,6 @@ public class UserRegisterRespDTO {
     private Long userId;
 
     private String username;
+
+    private String nickname;
 }

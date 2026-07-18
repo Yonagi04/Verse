@@ -23,6 +23,8 @@ public class UserRegisterReqDTO {
     @Pattern(regexp = "^[a-zA-Z0-9_]+$", message = "用户名仅允许字母、数字、下划线")
     private String username;
 
+    private String nickname;
+
     @NotBlank(message = "密码不能为空")
     @Size(min = 8, max = 32, message = "密码长度需在8~32字符之间")
     private String password;

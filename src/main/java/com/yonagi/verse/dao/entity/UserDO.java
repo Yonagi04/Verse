@@ -28,9 +28,14 @@ public class UserDO {
     private Long userId;
 
     /**
-     * 用户名
+     * 登录用户名，注册之后就不可修改，也必须是唯一的，只能是字母、数字、下划线的组合
      */
     private String username;
+
+    /**
+     * 昵称，类似于姓名，可以修改，可以是汉字，字母，数字和符号
+     */
+    private String nickname;
 
     /**
      * 密码（BCrypt加密）

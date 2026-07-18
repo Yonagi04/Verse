@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -81,6 +82,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         UserDO userDO = new UserDO();
         BeanUtil.copyProperties(requestParam, userDO);
+        // 昵称默认使用用户名
+        if (userDO.getNickname() == null || StrUtil.isBlank(userDO.getNickname())) {
+            userDO.setNickname(requestParam.getUsername());
+        }
         userDO.setUserId(userId);
         userDO.setPassword(encodedPassword);
         userDO.setStatus(1);
@@ -118,6 +123,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         UserRegisterRespDTO resp = new UserRegisterRespDTO();
         resp.setUserId(userId);
         resp.setUsername(requestParam.getUsername());
+        resp.setNickname(userDO.getNickname());
         return resp;
     }
 
@@ -164,6 +170,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         UserLoginRespDTO resp = new UserLoginRespDTO();
         resp.setUserId(userDO.getUserId());
         resp.setUsername(userDO.getUsername());
+        resp.setNickname(userDO.getNickname());
         resp.setToken(token);
         resp.setExpiresAt(expiresAt);
 
@@ -212,9 +219,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Transactional(rollbackFor = Exception.class)
     public Boolean updateProfile(Long userId, UserUpdateReqDTO requestParam) {
         // 校验
-        if (hasUsername(requestParam.getUsername())) {
-            throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
-        }
         Long emailBindCount = getEmailBindCount(requestParam.getEmail());
         if (emailBindCount >= 3) {
             throw new ClientException(UserErrorCodeEnum.EMAIL_BIND_COUNT_EXCEED);
@@ -223,6 +227,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         // 更新
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId);
+        UserDO user = BeanUtil.toBean(requestParam, UserDO.class);
+        if (StrUtil.isBlank(user.getNickname())) {
+            user.setNickname(null);
+        }
         int update = baseMapper.update(BeanUtil.toBean(requestParam, UserDO.class), updateWrapper);
         return update > 0;
     }

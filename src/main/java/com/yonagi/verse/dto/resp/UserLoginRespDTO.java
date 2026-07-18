@@ -18,6 +18,8 @@ public class UserLoginRespDTO {
 
     private String username;
 
+    private String nickname;
+
     private String token;
 
     private Date expiresAt;

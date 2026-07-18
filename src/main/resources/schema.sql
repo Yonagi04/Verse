@@ -8,7 +8,8 @@ USE verse;
 CREATE TABLE IF NOT EXISTS `t_user` (
     `id`                    BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `user_id`               BIGINT       NOT NULL COMMENT '用户唯一标识（业务ID）',
-    `username`              VARCHAR(50)  NOT NULL COMMENT '用户名',
+    `username`              VARCHAR(50)  NOT NULL COMMENT '登录用户名，注册之后就不可修改，只能是字母、数字的组合',
+    `nickname`              VARCHAR(50)  NOT NULL COMMENT '昵称，类似于姓名，可以修改，可以是汉字，字母，数字和符号',
     `password`              VARCHAR(255) NOT NULL COMMENT '密码（BCrypt加密）',
     `email`                 VARCHAR(128) NOT NULL COMMENT '邮箱',
     `phone`                 VARCHAR(20)  DEFAULT NULL COMMENT '手机号',
