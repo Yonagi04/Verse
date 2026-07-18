@@ -18,7 +18,8 @@ public enum UserErrorCodeEnum implements IErrorCode {
     USER_SAVED_ERROR("B000204", "用户记录保存失败"),
     USER_STATUS_DISABLED("B000205", "用户不可用，请联系管理员"),
     PASSWORD_ERROR("B000206", "用户名或密码错误"),
-    PASSWORD_MATCHED("B000207", "新密码与旧密码一致，请重新输入");
+    PASSWORD_MATCHED("B000207", "新密码与旧密码一致，请重新输入"),
+    USER_HAS_BEEN_LOGIN("B000208", "用户已登录，请勿重复登录");
 
     private final String code;
 

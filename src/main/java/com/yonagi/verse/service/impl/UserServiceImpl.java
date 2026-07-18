@@ -135,6 +135,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
+        // 从 Redis 获取会话信息，如果存在则说明用户已登录
+        String sessionJson = stringRedisTemplate.opsForValue()
+                .get(RedisKeyConstant.USER_LOGIN_KEY + userDO.getUserId());
+        if (sessionJson != null) {
+            throw new ClientException(UserErrorCodeEnum.USER_HAS_BEEN_LOGIN);
+        }
         if (!passwordEncoder.matches(requestParam.getPassword(), userDO.getPassword())) {
             throw new ClientException(UserErrorCodeEnum.PASSWORD_ERROR);
         }
