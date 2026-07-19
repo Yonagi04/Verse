@@ -4,10 +4,7 @@ import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.*;
-import com.yonagi.verse.dto.resp.UserLoginRespDTO;
-import com.yonagi.verse.dto.resp.UserRegisterRespDTO;
-import com.yonagi.verse.dto.resp.UserRespDTO;
-import com.yonagi.verse.dto.resp.UserVerifyPhoneCodeRespDTO;
+import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -48,6 +45,11 @@ public class UserController {
                                               @RequestParam(defaultValue = "true") boolean mask) {
         UserRespDTO dto = userService.getCurrentUser(userId, mask);
         return Results.success(dto);
+    }
+
+    @GetMapping("/api/v1/user/getUserInfo")
+    public Result<UserInfoRespDTO> getUserInfo(@RequestParam Long userId) {
+        return Results.success(userService.getUserInfo(userId));
     }
 
     @PostMapping("/api/v1/users/me")

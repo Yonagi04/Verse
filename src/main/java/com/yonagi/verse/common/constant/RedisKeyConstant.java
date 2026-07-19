@@ -43,4 +43,9 @@ public class RedisKeyConstant {
      * 用户信息缓存key（{userId} → UserRespDTO JSON），用于getCurrentUser缓存
      */
     public final static String USER_PROFILE_KEY = "verse:user:profile:";
+
+    /**
+     * 用户信息缓存key（{userId} → UserInfoRespDTO JSON），用于getUserInfo缓存
+     */
+    public final static String USER_ANOTHER_PROFILE_KEY = "verse:user:another-profile:";
 }

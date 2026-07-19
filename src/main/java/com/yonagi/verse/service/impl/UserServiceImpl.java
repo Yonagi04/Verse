@@ -286,6 +286,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
+    public UserInfoRespDTO getUserInfo(Long userId) {
+        String cacheKey = RedisKeyConstant.USER_ANOTHER_PROFILE_KEY + userId;
+        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cachedJson != null) {
+            return JSON.parseObject(cachedJson, UserInfoRespDTO.class);
+        }
+
+        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getUserId, userId);
+        UserDO userDO = baseMapper.selectOne(queryWrapper);
+        if (userDO == null) {
+            throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
+        }
+        UserInfoRespDTO result = new UserInfoRespDTO();
+        BeanUtil.copyProperties(userDO, result);
+        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(result), 1, TimeUnit.HOURS);
+        return result;
+    }
+
+    @Override
     @Transactional(rollbackFor = Exception.class)
     public Boolean updateProfile(Long userId, UserUpdateReqDTO requestParam) {
         // 查询当前用户记录，用于判断邮箱/手机号是否变更
@@ -322,6 +342,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         // DB 更新成功后，删除用户信息缓存
         stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_ANOTHER_PROFILE_KEY + userId);
 
         // 邮箱变更时，维护 Redis Set：旧邮箱移除绑定，新邮箱添加绑定
         if (emailChanged) {
