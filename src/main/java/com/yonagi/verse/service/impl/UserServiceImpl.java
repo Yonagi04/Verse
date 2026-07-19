@@ -28,6 +28,11 @@ import jakarta.validation.constraints.Digits;
 import lombok.RequiredArgsConstructor;
 import com.alibaba.fastjson2.JSON;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBloomFilter;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -55,17 +60,20 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final UserTenantMapper userTenantMapper;
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
+    private final RBloomFilter<String> usernameBloomFilter;
+    private final RBloomFilter<String> phoneBloomFilter;
+    private final RedissonClient redissonClient;
+
+    @Lazy
+    @Autowired
+    private UserServiceImpl self;
 
     @Override
     public Boolean hasUsername(String username) {
-        // TODO 接入redis后用布隆过滤器查username
-        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getUsername, username);
-        return baseMapper.selectOne(queryWrapper) != null;
+        return usernameBloomFilter.contains(username);
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public UserRegisterRespDTO register(UserRegisterReqDTO requestParam) {
         if (hasUsername(requestParam.getUsername())) {
             throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
@@ -78,6 +86,43 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             throw new ClientException(UserErrorCodeEnum.USER_PHONE_EXIST);
         }
 
+        RLock userRegisterLock = redissonClient.getLock(RedisKeyConstant.LOCK_USER_REGISTER_KEY + requestParam.getUsername());
+
+        try {
+            if (userRegisterLock.tryLock(3, 30, TimeUnit.SECONDS)) {
+                try {
+                    // double-check：防止锁外校验与锁内操作之间的竞态窗口
+                    if (hasUsername(requestParam.getUsername())
+                            || baseMapper.selectCount(Wrappers.lambdaQuery(UserDO.class)
+                                    .eq(UserDO::getUsername, requestParam.getUsername())) > 0) {
+                        throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
+                    }
+
+                    // 通过代理调用以触发 @Transactional
+                    UserDO userDO = self.realRegister(requestParam);
+
+                    usernameBloomFilter.add(requestParam.getUsername());
+                    phoneBloomFilter.add(requestParam.getPhone());
+
+                    UserRegisterRespDTO resp = new UserRegisterRespDTO();
+                    resp.setUserId(userDO.getUserId());
+                    resp.setUsername(requestParam.getUsername());
+                    resp.setNickname(userDO.getNickname());
+                    return resp;
+                } finally {
+                    userRegisterLock.unlock();
+                }
+            } else {
+                throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
+        }
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    protected UserDO realRegister(UserRegisterReqDTO requestParam) {
         Long userId = SnowflakeIdUtil.nextId();
         String encodedPassword = passwordEncoder.encode(requestParam.getPassword());
 
@@ -97,6 +142,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             throw new ClientException(UserErrorCodeEnum.USER_SAVED_ERROR);
         }
 
+        // TODO 租户类的Service实现迁移到TenantServiceImpl
         Long tenantId = SnowflakeIdUtil.nextId();
         TenantDO tenantDO = new TenantDO();
         tenantDO.setTenantId(tenantId);
@@ -105,27 +151,29 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         tenantDO.setOwnerId(userId);
         tenantDO.setStatus(1);
         tenantDO.setDelFlag(0);
-        tenantMapper.insert(tenantDO);
+        int tenantInserted = tenantMapper.insert(tenantDO);
+        if (tenantInserted < 1) {
+            throw new ClientException(UserErrorCodeEnum.USER_SAVED_ERROR);
+        }
 
-        // 建立用户-租户关联（SUPER_ADMIN 角色）
+        //  TODO 租户类的Service实现迁移到TenantServiceImpl，建立用户-租户关联（SUPER_ADMIN 角色）
         UserTenantDO userTenantDO = new UserTenantDO();
         userTenantDO.setUserId(userId);
         userTenantDO.setTenantId(tenantId);
         userTenantDO.setRole(RoleEnum.SUPER_ADMIN.name());
         userTenantDO.setJoinedAt(new Date());
-        userTenantMapper.insert(userTenantDO);
+        int userTenantInserted = userTenantMapper.insert(userTenantDO);
+        if (userTenantInserted < 1) {
+            throw new ClientException(UserErrorCodeEnum.USER_SAVED_ERROR);
+        }
 
-        // 设置用户的活跃租户
+        // TODO 租户类的Service实现迁移到TenantServiceImpl，设置用户的活跃租户
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId)
                 .set(UserDO::getLastActiveTenantId, tenantId);
         baseMapper.update(null, updateWrapper);
 
-        UserRegisterRespDTO resp = new UserRegisterRespDTO();
-        resp.setUserId(userId);
-        resp.setUsername(requestParam.getUsername());
-        resp.setNickname(userDO.getNickname());
-        return resp;
+        return userDO;
     }
 
     @Override
@@ -318,7 +366,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
-    @Transactional
     public Boolean resetPassword(UserResetPasswordReqDTO requestParam) {
         String tokenHash = DigestUtil.md5Hex(requestParam.getToken());
         String phoneKey = RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + requestParam.getPhone();
@@ -335,7 +382,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         }
         UserUpdatePasswordReqDTO dto = new UserUpdatePasswordReqDTO();
         dto.setPassword(requestParam.getPassword());
-        updatePassword(userDO.getUserId(), dto);
+        self.updatePassword(userDO.getUserId(), dto);
 
         // 密码更新成功后才删除 token，防止重复使用
         stringRedisTemplate.delete(phoneKey);
@@ -350,9 +397,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     public Boolean hasPhone(String phone) {
-        // TODO 用布隆过滤器查手机号
-        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getPhone, phone);
-        return baseMapper.selectOne(queryWrapper) != null;
+        return phoneBloomFilter.contains(phone);
     }
 }
