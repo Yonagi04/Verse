@@ -13,6 +13,7 @@ public enum UserErrorCodeEnum implements IErrorCode {
 
     THREAD_INTERRUPTED("A000200", "线程中断异常"),
     USER_SAVED_ERROR("A000201", "用户记录保存失败"),
+    USER_UPDATE_ERROR("A000202", "用户记录更新失败"),
 
     USER_NOT_EXIST("B000200", "用户记录不存在"),
     USER_EXIST("B000201", "用户记录已存在"),

@@ -1,7 +1,6 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
-import cn.hutool.core.lang.UUID;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -25,7 +24,6 @@ import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.UserService;
-import jakarta.validation.constraints.Digits;
 import lombok.RequiredArgsConstructor;
 import com.alibaba.fastjson2.JSON;
 import lombok.extern.slf4j.Slf4j;
@@ -39,8 +37,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.Time;
 import java.util.Date;
+import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
@@ -104,6 +102,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
                     usernameBloomFilter.add(requestParam.getUsername());
                     phoneBloomFilter.add(requestParam.getPhone());
+                    stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + requestParam.getEmail(),
+                            userDO.getUserId().toString());
 
                     UserRegisterRespDTO resp = new UserRegisterRespDTO();
                     resp.setUserId(userDO.getUserId());
@@ -231,7 +231,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         resp.setToken(token);
         resp.setExpiresAt(expiresAt);
 
-        // 查询当前活跃租户
+        // TODO 查询当前活跃租户, 转移到租户类的Service实现中
         if (userDO.getLastActiveTenantId() != null) {
             TenantDO tenantDO = tenantMapper.selectOne(
                     Wrappers.lambdaQuery(TenantDO.class)
@@ -275,13 +275,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Boolean updateProfile(Long userId, UserUpdateReqDTO requestParam) {
-        // 校验
-        Long emailBindCount = getEmailBindCount(requestParam.getEmail());
-        if (emailBindCount >= 3) {
-            throw new ClientException(UserErrorCodeEnum.EMAIL_BIND_COUNT_EXCEED);
+        // 查询当前用户记录，用于判断邮箱/手机号是否变更
+        UserDO currentUser = baseMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getUserId, userId));
+        if (currentUser == null) {
+            throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
 
-        // 更新
+        String oldEmail = currentUser.getEmail();
+        String newEmail = requestParam.getEmail();
+        boolean emailChanged = !newEmail.equals(oldEmail);
+
+        // 邮箱变更时，校验新邮箱绑定数是否已达上限
+        if (emailChanged) {
+            Long emailBindCount = getEmailBindCount(newEmail);
+            if (emailBindCount >= 3) {
+                throw new ClientException(UserErrorCodeEnum.EMAIL_BIND_COUNT_EXCEED);
+            }
+        }
+
+        // 更新数据库
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId);
         UserDO user = BeanUtil.toBean(requestParam, UserDO.class);
@@ -289,7 +302,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             user.setNickname(null);
         }
         int update = baseMapper.update(user, updateWrapper);
-        return update > 0;
+        if (update < 0) {
+            log.error("Failed to update user profile for userId: {}, requestParam: {}", userId, requestParam);
+            throw new ServerException(UserErrorCodeEnum.USER_UPDATE_ERROR);
+        }
+
+        // 邮箱变更时，维护 Redis Set：旧邮箱移除绑定，新邮箱添加绑定
+        if (emailChanged) {
+            stringRedisTemplate.opsForSet().remove(RedisKeyConstant.USER_EMAIL_COUNT_KEY + oldEmail,
+                    userId.toString());
+            stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + newEmail,
+                    userId.toString());
+        }
+        // 手机号变更时，维护布隆过滤器（无法删除旧值，只能添加新值）
+        String oldPhone = currentUser.getPhone();
+        String newPhone = requestParam.getPhone();
+        if (!newPhone.equals(oldPhone)) {
+            phoneBloomFilter.add(newPhone);
+        }
+
+        return true;
     }
 
     @Override
@@ -392,13 +424,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     private Long getEmailBindCount(String email) {
-        // TODO 用Redis的Set维护一个邮箱绑定的用户ID集合，直接查询 SCARD 集合的大小即可
-        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getEmail, email);
-        return baseMapper.selectCount(queryWrapper);
+        // 用Redis的Set维护一个邮箱绑定的用户ID集合，直接查询集合的大小即可
+        Long userIdCount = stringRedisTemplate.opsForSet().size(RedisKeyConstant.USER_EMAIL_COUNT_KEY + email);
+        return Objects.requireNonNullElse(userIdCount, 0L);
     }
 
-    public Boolean hasPhone(String phone) {
+    private Boolean hasPhone(String phone) {
         return phoneBloomFilter.contains(phone);
     }
 }
