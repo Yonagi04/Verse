@@ -257,6 +257,17 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public UserRespDTO getCurrentUser(Long userId, boolean mask) {
+        String cacheKey = RedisKeyConstant.USER_PROFILE_KEY + userId;
+        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cachedJson != null) {
+            UserRespDTO result = JSON.parseObject(cachedJson, UserRespDTO.class);
+            if (mask) {
+                result.setPhone(SensitiveUtil.maskPhone(result.getPhone()));
+                result.setEmail(SensitiveUtil.maskEmail(result.getEmail()));
+            }
+            return result;
+        }
+
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getUserId, userId);
         UserDO userDO = baseMapper.selectOne(queryWrapper);
@@ -265,6 +276,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         }
         UserRespDTO result = new UserRespDTO();
         BeanUtil.copyProperties(userDO, result);
+        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(result), 1, TimeUnit.HOURS);
+
         if (mask) {
             result.setPhone(SensitiveUtil.maskPhone(result.getPhone()));
             result.setEmail(SensitiveUtil.maskEmail(result.getEmail()));
@@ -306,6 +319,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             log.error("Failed to update user profile for userId: {}, requestParam: {}", userId, requestParam);
             throw new ServerException(UserErrorCodeEnum.USER_UPDATE_ERROR);
         }
+
+        // DB 更新成功后，删除用户信息缓存
+        stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
 
         // 邮箱变更时，维护 Redis Set：旧邮箱移除绑定，新邮箱添加绑定
         if (emailChanged) {

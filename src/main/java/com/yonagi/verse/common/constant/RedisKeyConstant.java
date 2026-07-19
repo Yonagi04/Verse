@@ -38,4 +38,9 @@ public class RedisKeyConstant {
      * 用户绑定邮箱的SET（{email} -> userId），用于邮箱绑定场景
      */
     public final static String USER_EMAIL_COUNT_KEY = "verse:user:email-bind-count:";
+
+    /**
+     * 用户信息缓存key（{userId} → UserRespDTO JSON），用于getCurrentUser缓存
+     */
+    public final static String USER_PROFILE_KEY = "verse:user:profile:";
 }
