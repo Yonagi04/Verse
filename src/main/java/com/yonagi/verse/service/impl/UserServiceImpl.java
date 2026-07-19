@@ -13,6 +13,7 @@ import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
+import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.common.util.SensitiveUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.TenantDO;
@@ -55,6 +56,7 @@ import java.util.concurrent.TimeUnit;
 public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements UserService {
 
     private final PasswordEncoder passwordEncoder;
+    private final AesUtil aesUtil;
     private final TenantMapper tenantMapper;
     private final UserTenantMapper userTenantMapper;
     private final JwtUtil jwtUtil;
@@ -97,12 +99,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                         throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
                     }
 
+                    String phoneHash = aesUtil.hashForLookup(requestParam.getPhone());
+                    String emailHash = aesUtil.hashForLookup(requestParam.getEmail());
                     // 通过代理调用以触发 @Transactional
-                    UserDO userDO = self.realRegister(requestParam);
+                    UserDO userDO = self.realRegister(requestParam, phoneHash, emailHash);
 
                     usernameBloomFilter.add(requestParam.getUsername());
-                    phoneBloomFilter.add(requestParam.getPhone());
-                    stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + requestParam.getEmail(),
+                    phoneBloomFilter.add(phoneHash);
+                    stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + emailHash,
                             userDO.getUserId().toString());
 
                     UserRegisterRespDTO resp = new UserRegisterRespDTO();
@@ -124,18 +128,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Transactional(rollbackFor = Exception.class)
-    protected UserDO realRegister(UserRegisterReqDTO requestParam) {
+    protected UserDO realRegister(UserRegisterReqDTO requestParam, String phoneHash, String emailHash) {
         Long userId = SnowflakeIdUtil.nextId();
         String encodedPassword = passwordEncoder.encode(requestParam.getPassword());
 
+        String encryptedEmail = aesUtil.encrypt(requestParam.getEmail());
+        String encryptedPhone = aesUtil.encrypt(requestParam.getPhone());
+
         UserDO userDO = new UserDO();
-        BeanUtil.copyProperties(requestParam, userDO);
+        userDO.setUsername(requestParam.getUsername());
+        userDO.setNickname(requestParam.getNickname());
         // 昵称默认使用用户名
         if (userDO.getNickname() == null || StrUtil.isBlank(userDO.getNickname())) {
             userDO.setNickname(requestParam.getUsername());
         }
         userDO.setUserId(userId);
         userDO.setPassword(encodedPassword);
+        userDO.setEmail(encryptedEmail);
+        userDO.setEmailHash(emailHash);
+        userDO.setPhone(encryptedPhone);
+        userDO.setPhoneHash(phoneHash);
         userDO.setStatus(1);
         userDO.setDelFlag(0);
 
@@ -274,6 +286,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
+        // 解密敏感字段
+        userDO.setEmail(aesUtil.decrypt(userDO.getEmail()));
+        userDO.setPhone(aesUtil.decrypt(userDO.getPhone()));
+
         UserRespDTO result = new UserRespDTO();
         BeanUtil.copyProperties(userDO, result);
         stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(result), 1, TimeUnit.HOURS);
@@ -315,9 +331,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
 
-        String oldEmail = currentUser.getEmail();
+        // 解密当前值用于比对
+        String oldEmail = aesUtil.decrypt(currentUser.getEmail());
+        String oldEmailHash = currentUser.getEmailHash();
+        String oldPhone = aesUtil.decrypt(currentUser.getPhone());
         String newEmail = requestParam.getEmail();
+        String newPhone = requestParam.getPhone();
         boolean emailChanged = !newEmail.equals(oldEmail);
+        boolean phoneChanged = !newPhone.equals(oldPhone);
 
         // 邮箱变更时，校验新邮箱绑定数是否已达上限
         if (emailChanged) {
@@ -330,11 +351,32 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         // 更新数据库
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId);
-        UserDO user = BeanUtil.toBean(requestParam, UserDO.class);
-        if (StrUtil.isBlank(user.getNickname())) {
-            user.setNickname(null);
+
+        // 处理昵称
+        if (StrUtil.isNotBlank(requestParam.getNickname())) {
+            updateWrapper.set(UserDO::getNickname, requestParam.getNickname());
+        } else if (requestParam.getNickname() != null) {
+            // 显式传入空字符串视为清空昵称
+            updateWrapper.set(UserDO::getNickname, null);
         }
-        int update = baseMapper.update(user, updateWrapper);
+
+        // 处理邮箱变更
+        if (emailChanged) {
+            String encryptedEmail = aesUtil.encrypt(newEmail);
+            String newEmailHash = aesUtil.hashForLookup(newEmail);
+            updateWrapper.set(UserDO::getEmail, encryptedEmail);
+            updateWrapper.set(UserDO::getEmailHash, newEmailHash);
+        }
+
+        // 处理手机号变更
+        if (phoneChanged) {
+            String encryptedPhone = aesUtil.encrypt(newPhone);
+            String newPhoneHash = aesUtil.hashForLookup(newPhone);
+            updateWrapper.set(UserDO::getPhone, encryptedPhone);
+            updateWrapper.set(UserDO::getPhoneHash, newPhoneHash);
+        }
+
+        int update = baseMapper.update(null, updateWrapper);
         if (update < 0) {
             log.error("Failed to update user profile for userId: {}, requestParam: {}", userId, requestParam);
             throw new ServerException(UserErrorCodeEnum.USER_UPDATE_ERROR);
@@ -346,16 +388,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         // 邮箱变更时，维护 Redis Set：旧邮箱移除绑定，新邮箱添加绑定
         if (emailChanged) {
-            stringRedisTemplate.opsForSet().remove(RedisKeyConstant.USER_EMAIL_COUNT_KEY + oldEmail,
+            String newEmailHash = aesUtil.hashForLookup(newEmail);
+            stringRedisTemplate.opsForSet().remove(RedisKeyConstant.USER_EMAIL_COUNT_KEY + oldEmailHash,
                     userId.toString());
-            stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + newEmail,
+            stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + newEmailHash,
                     userId.toString());
         }
         // 手机号变更时，维护布隆过滤器（无法删除旧值，只能添加新值）
-        String oldPhone = currentUser.getPhone();
-        String newPhone = requestParam.getPhone();
-        if (!newPhone.equals(oldPhone)) {
-            phoneBloomFilter.add(newPhone);
+        if (phoneChanged) {
+            String newPhoneHash = aesUtil.hashForLookup(newPhone);
+            phoneBloomFilter.add(newPhoneHash);
         }
 
         return true;
@@ -402,8 +444,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (!hasPhone(requestParam.getPhone())) {
             throw new ClientException(UserErrorCodeEnum.USER_PHONE_NOT_EXIST);
         }
+        String phoneHash = aesUtil.hashForLookup(requestParam.getPhone());
         // 校验是否发送过于频繁（60 秒间隔，按手机号区分用户）
-        String rateKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + "rate:" + requestParam.getPhone();
+        String rateKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + "rate:" + phoneHash;
         Boolean isAbsent = stringRedisTemplate.opsForValue().setIfAbsent(rateKey, "1", 60, TimeUnit.SECONDS);
         if (Boolean.FALSE.equals(isAbsent)) {
             throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_SEND_FREQUENT);
@@ -411,15 +454,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         String code = String.format("%06d", ThreadLocalRandom.current().nextInt(1000000));
         // 保存验证码到 Redis，5 分钟有效
-        String codeKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + requestParam.getPhone();
+        String codeKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + phoneHash;
         stringRedisTemplate.opsForValue().set(codeKey, code, 5, TimeUnit.MINUTES);
         return true;
     }
 
     @Override
     public UserVerifyPhoneCodeRespDTO verifyCode(UserVerifyPhoneCodeReqDTO requestParam) {
-        String phone = requestParam.getPhone();
-        String codeKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + phone;
+        String phoneHash = aesUtil.hashForLookup(requestParam.getPhone());
+        String codeKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + phoneHash;
         String storedCode = stringRedisTemplate.opsForValue().get(codeKey);
         if (storedCode == null || !storedCode.equals(requestParam.getCode())) {
             throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_ERROR);
@@ -427,9 +470,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         // 验证成功后删除验证码
         stringRedisTemplate.delete(codeKey);
 
-        String token = jwtUtil.generateResetPasswordToken(phone, requestParam.getCode());
+        String token = jwtUtil.generateResetPasswordToken(requestParam.getPhone(), requestParam.getCode());
         String tokenHash = DigestUtil.md5Hex(token);
-        stringRedisTemplate.opsForValue().set(RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + phone,
+        stringRedisTemplate.opsForValue().set(RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + phoneHash,
                 tokenHash, 10, TimeUnit.MINUTES);
         UserVerifyPhoneCodeRespDTO resp = new UserVerifyPhoneCodeRespDTO();
         resp.setToken(token);
@@ -438,15 +481,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public Boolean resetPassword(UserResetPasswordReqDTO requestParam) {
+        String phoneHash = aesUtil.hashForLookup(requestParam.getPhone());
         String tokenHash = DigestUtil.md5Hex(requestParam.getToken());
-        String phoneKey = RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + requestParam.getPhone();
+        String phoneKey = RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + phoneHash;
         String storedTokenHash = stringRedisTemplate.opsForValue().get(phoneKey);
         if (storedTokenHash == null || !storedTokenHash.equals(tokenHash)) {
             throw new ClientException(UserErrorCodeEnum.USER_RESET_PASSWORD_FAIL);
         }
 
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getPhone, requestParam.getPhone());
+                .eq(UserDO::getPhoneHash, phoneHash);
         UserDO userDO = baseMapper.selectOne(queryWrapper);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
@@ -461,12 +505,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     private Long getEmailBindCount(String email) {
-        // 用Redis的Set维护一个邮箱绑定的用户ID集合，直接查询集合的大小即可
-        Long userIdCount = stringRedisTemplate.opsForSet().size(RedisKeyConstant.USER_EMAIL_COUNT_KEY + email);
+        // 用Redis的Set维护一个邮箱绑定的用户ID集合（Key使用邮箱哈希），直接查询集合的大小即可
+        String emailHash = aesUtil.hashForLookup(email);
+        Long userIdCount = stringRedisTemplate.opsForSet().size(RedisKeyConstant.USER_EMAIL_COUNT_KEY + emailHash);
         return Objects.requireNonNullElse(userIdCount, 0L);
     }
 
     private Boolean hasPhone(String phone) {
-        return phoneBloomFilter.contains(phone);
+        String phoneHash = aesUtil.hashForLookup(phone);
+        return phoneBloomFilter.contains(phoneHash);
     }
 }

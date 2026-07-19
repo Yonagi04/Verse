@@ -17,7 +17,7 @@ import java.util.List;
 
 /**
  * 存量数据初始化器
- * 应用启动时自动将数据库中已有的 username/phone 写入布隆过滤器，并将 email→userId 映射写入 Redis Set
+ * 应用启动时自动将数据库中已有的 username/phoneHash 写入布隆过滤器，并将 emailHash→userId 映射写入 Redis Set
  *
  * @author Yonagi
  * @version 1.0
@@ -29,7 +29,7 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 @Order(1)
-public class BloomFilterInitializer implements CommandLineRunner {
+public class RedisInitializer implements CommandLineRunner {
 
     private static final String BLOOM_INIT_FLAG_KEY = "bloom_filter:initialized";
     private static final String EMAIL_SET_INIT_FLAG_KEY = "email_set:initialized";
@@ -73,14 +73,14 @@ public class BloomFilterInitializer implements CommandLineRunner {
                     if (user.getUsername() != null) {
                         usernameBloomFilter.add(user.getUsername());
                     }
-                    if (user.getPhone() != null) {
-                        phoneBloomFilter.add(user.getPhone());
+                    if (user.getPhoneHash() != null) {
+                        phoneBloomFilter.add(user.getPhoneHash());
                     }
                 }
 
-                if (!emailSetInitialized && user.getEmail() != null) {
+                if (!emailSetInitialized && user.getEmailHash() != null) {
                     stringRedisTemplate.opsForSet().add(
-                            RedisKeyConstant.USER_EMAIL_COUNT_KEY + user.getEmail(),
+                            RedisKeyConstant.USER_EMAIL_COUNT_KEY + user.getEmailHash(),
                             user.getUserId().toString());
                 }
             }

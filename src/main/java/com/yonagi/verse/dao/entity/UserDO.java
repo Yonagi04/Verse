@@ -43,14 +43,24 @@ public class UserDO {
     private String password;
 
     /**
-     * 邮箱（业务层展示时脱敏处理）
+     * 邮箱（AES-256-GCM加密存储）
      */
     private String email;
 
     /**
-     * 手机号（业务层展示时脱敏处理）
+     * 邮箱哈希（SHA-256，用于等值查询）
+     */
+    private String emailHash;
+
+    /**
+     * 手机号（AES-256-GCM加密存储）
      */
     private String phone;
+
+    /**
+     * 手机号哈希（SHA-256，用于等值查询）
+     */
+    private String phoneHash;
 
     /**
      * 状态：0=禁用, 1=正常

@@ -11,8 +11,10 @@ CREATE TABLE IF NOT EXISTS `t_user` (
     `username`              VARCHAR(50)  NOT NULL COMMENT '登录用户名，注册之后就不可修改，只能是字母、数字的组合',
     `nickname`              VARCHAR(50)  NOT NULL COMMENT '昵称，类似于姓名，可以修改，可以是汉字，字母，数字和符号',
     `password`              VARCHAR(255) NOT NULL COMMENT '密码（BCrypt加密）',
-    `email`                 VARCHAR(128) NOT NULL COMMENT '邮箱',
-    `phone`                 VARCHAR(20)  DEFAULT NULL COMMENT '手机号',
+    `email`                 VARCHAR(256) NOT NULL COMMENT '邮箱（AES-256-GCM加密）',
+    `email_hash`            VARCHAR(64)  NOT NULL COMMENT '邮箱哈希（SHA-256，用于查询）',
+    `phone`                 VARCHAR(256) DEFAULT NULL COMMENT '手机号（AES-256-GCM加密）',
+    `phone_hash`            VARCHAR(64)  DEFAULT NULL COMMENT '手机号哈希（SHA-256，用于查询）',
     `status`                TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=禁用, 1=正常',
     `last_active_tenant_id` BIGINT       DEFAULT NULL COMMENT '当前活跃租户ID',
     `create_time`           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
@@ -21,7 +23,8 @@ CREATE TABLE IF NOT EXISTS `t_user` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_user_id` (`user_id`),
     UNIQUE KEY `uk_username` (`username`),
-    UNIQUE KEY `uk_phone` (`phone`)
+    UNIQUE KEY `uk_phone_hash` (`phone_hash`),
+    KEY `idx_email_hash` (`email_hash`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 
 -- ============================================

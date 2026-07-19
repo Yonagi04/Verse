@@ -27,7 +27,10 @@ public enum UserErrorCodeEnum implements IErrorCode {
     USER_PHONE_NOT_EXIST("B000210", "手机号不存在"),
     USER_PHONE_CODE_SEND_FREQUENT("B000211", "验证码发送过于频繁，请60秒后再试"),
     USER_PHONE_CODE_ERROR("B000212", "验证码错误"),
-    USER_RESET_PASSWORD_FAIL("B000213", "密码重置失败，请重新尝试");
+    USER_RESET_PASSWORD_FAIL("B000213", "密码重置失败，请重新尝试"),
+    USER_ENCRYPT_ERROR("B000214", "数据加密失败"),
+    USER_DECRYPT_ERROR("B000215", "数据解密失败"),
+    USER_HASH_ERROR("B000216", "数据哈希失败");
 
     private final String code;
 

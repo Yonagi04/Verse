@@ -31,5 +31,9 @@ verse:
     jwt:
       secret: ${JWT_SECRET:your-256-bit-secret-key-change-in-production}
       expiration: 86400000
+    encryption:
+      # AES 密钥，这里是开发环境的示例，实际使用中请更换为安全的随机密钥
+      aes-key: ${AES_KEY:8EbY4aJDfFyuf2Vg1on5tQQvZZst+uy0p3evu04CvJc=}
+      hash-pepper: ${HASH_PEPPER:kCtFFuFhJn+V8SGqCiXlJg==}
     # JWT 认证白名单（不走 JWT 鉴权，如 LLM 调用接口使用 API Key 独立认证）
     ignore-paths: /api/v1/user/hasUsername,/api/v1/users/register,/api/v1/users/login,/api/v1/users/password/**,/api/v1/llm/**
