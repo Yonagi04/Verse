@@ -10,6 +10,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
@@ -117,7 +118,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
+            log.error("Register lock interrupted for username: {}", requestParam.getUsername(), e);
+            throw new ServerException(UserErrorCodeEnum.THREAD_INTERRUPTED);
         }
     }
 
@@ -139,7 +141,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         int inserted = baseMapper.insert(userDO);
         if (inserted < 1) {
-            throw new ClientException(UserErrorCodeEnum.USER_SAVED_ERROR);
+            throw new ServerException(UserErrorCodeEnum.USER_SAVED_ERROR);
         }
 
         // TODO 租户类的Service实现迁移到TenantServiceImpl
@@ -153,7 +155,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         tenantDO.setDelFlag(0);
         int tenantInserted = tenantMapper.insert(tenantDO);
         if (tenantInserted < 1) {
-            throw new ClientException(UserErrorCodeEnum.USER_SAVED_ERROR);
+            throw new ServerException(UserErrorCodeEnum.USER_SAVED_ERROR);
         }
 
         //  TODO 租户类的Service实现迁移到TenantServiceImpl，建立用户-租户关联（SUPER_ADMIN 角色）
@@ -164,7 +166,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         userTenantDO.setJoinedAt(new Date());
         int userTenantInserted = userTenantMapper.insert(userTenantDO);
         if (userTenantInserted < 1) {
-            throw new ClientException(UserErrorCodeEnum.USER_SAVED_ERROR);
+            throw new ServerException(UserErrorCodeEnum.USER_SAVED_ERROR);
         }
 
         // TODO 租户类的Service实现迁移到TenantServiceImpl，设置用户的活跃租户
@@ -286,7 +288,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (StrUtil.isBlank(user.getNickname())) {
             user.setNickname(null);
         }
-        int update = baseMapper.update(BeanUtil.toBean(requestParam, UserDO.class), updateWrapper);
+        int update = baseMapper.update(user, updateWrapper);
         return update > 0;
     }
 
