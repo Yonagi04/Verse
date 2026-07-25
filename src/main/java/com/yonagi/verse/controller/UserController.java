@@ -54,7 +54,7 @@ public class UserController {
 
     @PostMapping("/api/v1/users/me")
     public Result<Boolean> updateProfile(@CurrentUser Long userId,
-                                         @RequestBody UserUpdateReqDTO requestParam) {
+                                         @Valid @RequestBody UserUpdateReqDTO requestParam) {
         return Results.success(userService.updateProfile(userId, requestParam));
     }
 
@@ -65,22 +65,22 @@ public class UserController {
 
     @PostMapping("/api/v1/users/updatePassword")
     public Result<Boolean> updatePassword(@CurrentUser Long userId,
-                                          @RequestBody UserUpdatePasswordReqDTO requestParam) {
+                                          @Valid @RequestBody UserUpdatePasswordReqDTO requestParam) {
         return Results.success(userService.updatePassword(userId, requestParam));
     }
 
     @PostMapping("/api/v1/users/password/reset/sendCode")
-    public Result<Boolean> sendingPhoneCode(@RequestBody UserSendingPhoneCodeReqDTO requestParam) {
+    public Result<Boolean> sendingPhoneCode(@Valid @RequestBody UserSendingPhoneCodeReqDTO requestParam) {
         return Results.success(userService.sendingPhoneCode(requestParam));
     }
 
     @PostMapping("/api/v1/users/password/reset/verifyCode")
-    public Result<UserVerifyPhoneCodeRespDTO> verifyCode(@RequestBody UserVerifyPhoneCodeReqDTO requestParam) {
+    public Result<UserVerifyPhoneCodeRespDTO> verifyCode(@Valid @RequestBody UserVerifyPhoneCodeReqDTO requestParam) {
         return Results.success(userService.verifyCode(requestParam));
     }
 
     @PostMapping("/api/v1/users/password/reset")
-    public Result<Boolean> resetPassword(@RequestBody UserResetPasswordReqDTO requestParam) {
+    public Result<Boolean> resetPassword(@Valid @RequestBody UserResetPasswordReqDTO requestParam) {
         return Results.success(userService.resetPassword(requestParam));
     }
 }
