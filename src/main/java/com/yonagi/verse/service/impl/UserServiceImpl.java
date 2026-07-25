@@ -24,6 +24,7 @@ import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
+import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.UserService;
 import lombok.RequiredArgsConstructor;
 import com.alibaba.fastjson2.JSON;
@@ -59,6 +60,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final AesUtil aesUtil;
     private final TenantMapper tenantMapper;
     private final UserTenantMapper userTenantMapper;
+    private final TenantService tenantService;
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> usernameBloomFilter;
@@ -110,9 +112,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                             userDO.getUserId().toString());
 
                     UserRegisterRespDTO resp = new UserRegisterRespDTO();
-                    resp.setUserId(userDO.getUserId());
-                    resp.setUsername(requestParam.getUsername());
-                    resp.setNickname(userDO.getNickname());
+                    BeanUtil.copyProperties(userDO, resp);
                     return resp;
                 } finally {
                     userRegisterLock.unlock();
@@ -156,36 +156,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             throw new ServerException(UserErrorCodeEnum.USER_SAVED_ERROR);
         }
 
-        // TODO 租户类的Service实现迁移到TenantServiceImpl
-        Long tenantId = SnowflakeIdUtil.nextId();
-        TenantDO tenantDO = new TenantDO();
-        tenantDO.setTenantId(tenantId);
-        tenantDO.setName(requestParam.getUsername() + "的个人空间");
-        tenantDO.setType("PERSONAL");
-        tenantDO.setOwnerId(userId);
-        tenantDO.setStatus(1);
-        tenantDO.setDelFlag(0);
-        int tenantInserted = tenantMapper.insert(tenantDO);
-        if (tenantInserted < 1) {
-            throw new ServerException(UserErrorCodeEnum.USER_SAVED_ERROR);
-        }
+        Long tenantId = tenantService.createPersonalTenant(userId,
+                requestParam.getUsername() + "的个人空间");
 
-        //  TODO 租户类的Service实现迁移到TenantServiceImpl，建立用户-租户关联（SUPER_ADMIN 角色）
-        UserTenantDO userTenantDO = new UserTenantDO();
-        userTenantDO.setUserId(userId);
-        userTenantDO.setTenantId(tenantId);
-        userTenantDO.setRole(RoleEnum.SUPER_ADMIN.name());
-        userTenantDO.setJoinedAt(new Date());
-        int userTenantInserted = userTenantMapper.insert(userTenantDO);
-        if (userTenantInserted < 1) {
-            throw new ServerException(UserErrorCodeEnum.USER_SAVED_ERROR);
-        }
-
-        // TODO 租户类的Service实现迁移到TenantServiceImpl，设置用户的活跃租户
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId)
                 .set(UserDO::getLastActiveTenantId, tenantId);
-        baseMapper.update(null, updateWrapper);
+        baseMapper.update(updateWrapper);
 
         return userDO;
     }
@@ -237,9 +214,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 ttl, TimeUnit.MILLISECONDS);
 
         UserLoginRespDTO resp = new UserLoginRespDTO();
-        resp.setUserId(userDO.getUserId());
-        resp.setUsername(userDO.getUsername());
-        resp.setNickname(userDO.getNickname());
+        BeanUtil.copyProperties(userDO, resp);
         resp.setToken(token);
         resp.setExpiresAt(expiresAt);
 
