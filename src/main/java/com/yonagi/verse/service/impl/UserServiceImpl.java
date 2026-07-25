@@ -144,7 +144,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         userDO.setPhone(encryptedPhone);
         userDO.setPhoneHash(phoneHash);
         userDO.setStatus(1);
-        userDO.setDelFlag(0);
 
         int inserted = baseMapper.insert(userDO);
         if (inserted < 1) {
