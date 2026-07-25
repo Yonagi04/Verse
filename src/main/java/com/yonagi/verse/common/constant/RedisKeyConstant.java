@@ -35,7 +35,12 @@ public class RedisKeyConstant {
     public final static String USER_RESET_PHONE_TOKEN_KEY = "verse:user:reset-password:token:";
 
     /**
-     * 用户绑定邮箱的SET（{email} -> userId），用于邮箱绑定场景
+     * 用户绑定手机号的SET（{phoneHash} -> userId），用于手机号去重场景
+     */
+    public final static String USER_PHONE_KEY = "verse:user:phone:";
+
+    /**
+     * 用户绑定邮箱的SET（{emailHash} -> userId），用于邮箱绑定场景
      */
     public final static String USER_EMAIL_COUNT_KEY = "verse:user:email-bind-count:";
 
@@ -48,4 +53,9 @@ public class RedisKeyConstant {
      * 用户信息缓存key（{userId} → UserInfoRespDTO JSON），用于getUserInfo缓存
      */
     public final static String USER_ANOTHER_PROFILE_KEY = "verse:user:another-profile:";
+
+    /**
+     * 用户注销账号验证码key（{userId} -> code），用于注销账号场景
+     */
+    public final static String USER_CLOSE_ACCOUNT_SENDING_CODE_KEY = "verse:user:close-account:sending-code:";
 }

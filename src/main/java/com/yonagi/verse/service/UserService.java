@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.UserDO;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
+import jakarta.validation.Valid;
 
 /**
  * @author Yonagi
@@ -35,4 +36,10 @@ public interface UserService extends IService<UserDO> {
     Boolean resetPassword(UserResetPasswordReqDTO requestParam);
 
     UserInfoRespDTO getUserInfo(Long userId);
+
+    PrepareCloseAccountRespDTO prepareCloseAccount(Long userId);
+
+    Boolean closeAccountSendCode(Long userId);
+
+    Boolean confirmCloseAccount(Long userId, @Valid ConfirmCloseAccountReqDTO requestParam);
 }

@@ -11,6 +11,7 @@ import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.UserErrorCodeEnum;
+import com.yonagi.verse.common.enums.UserStatusEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.common.util.SensitiveUtil;
@@ -35,7 +36,10 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.Date;
+import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -52,6 +56,18 @@ import java.util.concurrent.TimeUnit;
 @Slf4j
 public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements UserService {
 
+    private static final String CLOSE_ACCOUNT_WARNING_DESCRIPTION = "注销后将永久删除您的账号及相关数据，该操作不可恢复。";
+    private static final List<String> CLOSE_ACCOUNT_WARNING_TIPS = List.of(
+            "账号将无法登录 Verse",
+            "您将退出所有租户",
+            "个人版租户将被删除",
+            "您创建的 API Key 将全部失效",
+            "您注册的 LLM Service 将停止提供服务",
+            "历史 Token 统计数据将被清除"
+    );
+    private static final String CLOSED_ACCOUNT_LOGIN_WARNING = "您的账号已于 %s 申请并完成了注销，感谢您使用 Verse，祝您生活愉快！";
+    private static final DateTimeFormatter CANCEL_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy年MM月dd日 HH:mm:ss");
+
     private final PasswordEncoder passwordEncoder;
     private final AesUtil aesUtil;
     private final TenantService tenantService;
@@ -59,7 +75,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> usernameBloomFilter;
-    private final RBloomFilter<String> phoneBloomFilter;
     private final RedissonClient redissonClient;
 
     @Lazy
@@ -102,7 +117,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                     UserDO userDO = self.realRegister(requestParam, phoneHash, emailHash);
 
                     usernameBloomFilter.add(requestParam.getUsername());
-                    phoneBloomFilter.add(phoneHash);
+                    stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_PHONE_KEY + phoneHash,
+                            userDO.getUserId().toString());
                     stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + emailHash,
                             userDO.getUserId().toString());
 
@@ -177,6 +193,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             log.debug("User logged in via phone fallback, userId: {}", phoneQueryUserDO.getUserId());
             userDO = phoneQueryUserDO;
         }
+        if (userDO.getStatus() == null || userDO.getStatus().equals(UserStatusEnum.USER_STATUS_DISABLED.getStatusCode())) {
+            throw new ClientException(UserErrorCodeEnum.USER_ACCOUNT_BANNED);
+        } else if (userDO.getStatus().equals(UserStatusEnum.USER_STATUS_CLOSED.getStatusCode())) {
+            String cancelTime = userDO.getCancelTime() != null
+                    ? CANCEL_TIME_FORMATTER.format(userDO.getCancelTime().toInstant().atZone(ZoneId.systemDefault()))
+                    : "较早前";
+            String message = String.format(CLOSED_ACCOUNT_LOGIN_WARNING, cancelTime);
+            throw new ClientException(message, UserErrorCodeEnum.USER_ACCOUNT_CLOSED);
+        }
         // 从 Redis 获取会话信息，如果存在则说明用户已登录
         String sessionJson = stringRedisTemplate.opsForValue()
                 .get(RedisKeyConstant.USER_LOGIN_KEY + userDO.getUserId());
@@ -248,9 +273,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             return result;
         }
 
-        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getUserId, userId);
-        UserDO userDO = baseMapper.selectOne(queryWrapper);
+        UserDO userDO = queryActiveUserFromUserId(userId);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
@@ -277,9 +300,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             return JSON.parseObject(cachedJson, UserInfoRespDTO.class);
         }
 
-        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getUserId, userId);
-        UserDO userDO = baseMapper.selectOne(queryWrapper);
+        UserDO userDO = queryActiveUserFromUserId(userId);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
@@ -293,8 +314,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Transactional(rollbackFor = Exception.class)
     public Boolean updateProfile(Long userId, UserUpdateReqDTO requestParam) {
         // 查询当前用户记录，用于判断邮箱/手机号是否变更
-        UserDO currentUser = baseMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getUserId, userId));
+        UserDO currentUser = queryActiveUserFromUserId(userId);
         if (currentUser == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
@@ -315,8 +335,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 throw new ClientException(UserErrorCodeEnum.EMAIL_BIND_COUNT_EXCEED);
             }
         }
-
-        // 更新数据库
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId);
 
@@ -362,10 +380,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + newEmailHash,
                     userId.toString());
         }
-        // 手机号变更时，维护布隆过滤器（无法删除旧值，只能添加新值）
+        // 手机号变更时，维护 Redis Set：旧手机号移除，新手机号添加
         if (phoneChanged) {
             String newPhoneHash = aesUtil.hashForLookup(newPhone);
-            phoneBloomFilter.add(newPhoneHash);
+            String oldPhoneHash = aesUtil.hashForLookup(oldPhone);
+            stringRedisTemplate.opsForSet().remove(RedisKeyConstant.USER_PHONE_KEY + oldPhoneHash,
+                    userId.toString());
+            stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_PHONE_KEY + newPhoneHash,
+                    userId.toString());
         }
 
         return true;
@@ -390,9 +412,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Boolean updatePassword(Long userId, UserUpdatePasswordReqDTO requestParam) {
-        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getUserId, userId);
-        UserDO userDO = baseMapper.selectOne(queryWrapper);
+        UserDO userDO = queryActiveUserFromUserId(userId);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
@@ -475,6 +495,91 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         return true;
     }
 
+    @Override
+    public PrepareCloseAccountRespDTO prepareCloseAccount(Long userId) {
+        UserDO userDO = queryActiveUserFromUserId(userId);
+        if (userDO == null) {
+            throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
+        }
+        PrepareCloseAccountRespDTO resp = new PrepareCloseAccountRespDTO();
+        resp.setWarningDescription(CLOSE_ACCOUNT_WARNING_DESCRIPTION);
+        resp.setWarningTips(CLOSE_ACCOUNT_WARNING_TIPS);
+        return resp;
+    }
+
+    @Override
+    public Boolean closeAccountSendCode(Long userId) {
+        UserDO userDO = queryActiveUserFromUserId(userId);
+        if (userDO == null) {
+            throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
+        }
+        // 检查是否发送过于频繁（60 秒间隔，按用户 ID 区分）
+        String rateKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + "rate:" + userId;
+        Boolean isAbsent = stringRedisTemplate.opsForValue().setIfAbsent(rateKey, "1", 60, TimeUnit.SECONDS);
+        if (Boolean.FALSE.equals(isAbsent)) {
+            throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_SEND_FREQUENT);
+        }
+
+        // 生成验证码并保存到 Redis，5 分钟有效
+        String code = String.format("%06d", ThreadLocalRandom.current().nextInt(1000000));
+        String codeKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + userId;
+        stringRedisTemplate.opsForValue().set(codeKey, code, 5, TimeUnit.MINUTES);
+        // 返回true
+        return Boolean.TRUE;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean confirmCloseAccount(Long userId, ConfirmCloseAccountReqDTO requestParam) {
+        UserDO userDO = queryActiveUserFromUserId(userId);
+        if (userDO == null) {
+            throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
+        }
+
+        // 验证验证码是否正确
+        String codeKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + userId;
+        String storedCode = stringRedisTemplate.opsForValue().get(codeKey);
+        if (storedCode == null || !storedCode.equals(requestParam.getCode())) {
+            throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_ERROR);
+        }
+        stringRedisTemplate.delete(codeKey);
+
+        // 注销账号，设置状态为2，del flag为1
+        // phone_hash 和 email_hash 添加后缀以释放原始值供新用户使用（数据库有唯一约束）
+        String closedSuffix = ":" + userId;
+        LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
+                .eq(UserDO::getUserId, userId)
+                .set(UserDO::getStatus, UserStatusEnum.USER_STATUS_CLOSED.getStatusCode())
+                .set(UserDO::getPhoneHash, userDO.getPhoneHash() + closedSuffix)
+                .set(UserDO::getEmailHash, userDO.getEmailHash() + closedSuffix)
+                .set(UserDO::getDelFlag, 1);
+        int update = baseMapper.update(updateWrapper);
+        if (update < 1) {
+            log.error("Failed to close account for userId: {}", userId);
+            throw new ServerException(UserErrorCodeEnum.USER_CLOSE_ACCOUNT_ERROR);
+        }
+
+        // 删除用户缓存
+        stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_ANOTHER_PROFILE_KEY + userId);
+        // 释放手机号绑定
+        String phoneHash = userDO.getPhoneHash();
+        if (phoneHash != null) {
+            stringRedisTemplate.opsForSet().remove(RedisKeyConstant.USER_PHONE_KEY + phoneHash,
+                    userId.toString());
+        }
+        // 释放邮箱绑定
+        String emailHash = userDO.getEmailHash();
+        if (emailHash != null) {
+            stringRedisTemplate.opsForSet().remove(RedisKeyConstant.USER_EMAIL_COUNT_KEY + emailHash,
+                    userId.toString());
+        }
+        // 删除用户登录会话
+        self.logout(userId);
+
+        return Boolean.TRUE;
+    }
+
     private Long getEmailBindCount(String email) {
         // 用Redis的Set维护一个邮箱绑定的用户ID集合（Key使用邮箱哈希），直接查询集合的大小即可
         String emailHash = aesUtil.hashForLookup(email);
@@ -484,6 +589,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     private Boolean hasPhone(String phone) {
         String phoneHash = aesUtil.hashForLookup(phone);
-        return phoneBloomFilter.contains(phoneHash);
+        Long size = stringRedisTemplate.opsForSet().size(RedisKeyConstant.USER_PHONE_KEY + phoneHash);
+        return size != null && size > 0;
+    }
+
+    private UserDO queryActiveUserFromUserId(Long userId) {
+        LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getUserId, userId)
+                .eq(UserDO::getDelFlag, 0)
+                .eq(UserDO::getStatus, UserStatusEnum.USER_STATUS_ACTIVE.getStatusCode());
+        return baseMapper.selectOne(queryWrapper);
     }
 }

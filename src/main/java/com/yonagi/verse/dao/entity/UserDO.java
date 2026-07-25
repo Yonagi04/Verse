@@ -64,7 +64,7 @@ public class UserDO extends BaseDO {
     private String phoneHash;
 
     /**
-     * 状态：0=禁用, 1=正常
+     * 状态：0=禁用, 1=正常, 2=注销
      */
     private Integer status;
 
@@ -72,4 +72,9 @@ public class UserDO extends BaseDO {
      * 当前活跃租户ID
      */
     private Long lastActiveTenantId;
+
+    /**
+     * 账号注销时间
+     */
+    private Date cancelTime;
 }

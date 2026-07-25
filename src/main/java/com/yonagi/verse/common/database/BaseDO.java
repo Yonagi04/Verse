@@ -29,7 +29,7 @@ public class BaseDO {
     private Date updateTime;
 
     /**
-     * 逻辑删除
+     * 逻辑删除，对于 UserDO 而言，0表示正常参与业务逻辑查询，1表示只参与身份验证的查询，业务不参与（因为删除了）
      */
     @TableField(fill = FieldFill.INSERT)
     private Integer delFlag;

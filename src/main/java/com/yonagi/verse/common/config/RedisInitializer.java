@@ -33,10 +33,10 @@ public class RedisInitializer implements CommandLineRunner {
 
     private static final String BLOOM_INIT_FLAG_KEY = "bloom_filter:initialized";
     private static final String EMAIL_SET_INIT_FLAG_KEY = "email_set:initialized";
+    private static final String PHONE_SET_INIT_FLAG_KEY = "phone_set:initialized";
 
     private final UserMapper userMapper;
     private final RBloomFilter<String> usernameBloomFilter;
-    private final RBloomFilter<String> phoneBloomFilter;
     private final RedissonClient redissonClient;
     private final StringRedisTemplate stringRedisTemplate;
 
@@ -44,8 +44,9 @@ public class RedisInitializer implements CommandLineRunner {
     public void run(String... args) {
         boolean bloomInitialized = redissonClient.getBucket(BLOOM_INIT_FLAG_KEY).isExists();
         boolean emailSetInitialized = redissonClient.getBucket(EMAIL_SET_INIT_FLAG_KEY).isExists();
+        boolean phoneSetInitialized = redissonClient.getBucket(PHONE_SET_INIT_FLAG_KEY).isExists();
 
-        if (bloomInitialized && emailSetInitialized) {
+        if (bloomInitialized && emailSetInitialized && phoneSetInitialized) {
             log.info("存量数据已完成初始化，跳过同步");
             return;
         }
@@ -73,9 +74,12 @@ public class RedisInitializer implements CommandLineRunner {
                     if (user.getUsername() != null) {
                         usernameBloomFilter.add(user.getUsername());
                     }
-                    if (user.getPhoneHash() != null) {
-                        phoneBloomFilter.add(user.getPhoneHash());
-                    }
+                }
+
+                if (!phoneSetInitialized && user.getPhoneHash() != null) {
+                    stringRedisTemplate.opsForSet().add(
+                            RedisKeyConstant.USER_PHONE_KEY + user.getPhoneHash(),
+                            user.getUserId().toString());
                 }
 
                 if (!emailSetInitialized && user.getEmailHash() != null) {
@@ -99,9 +103,12 @@ public class RedisInitializer implements CommandLineRunner {
         if (!emailSetInitialized) {
             redissonClient.getBucket(EMAIL_SET_INIT_FLAG_KEY).set("1");
         }
+        if (!phoneSetInitialized) {
+            redissonClient.getBucket(PHONE_SET_INIT_FLAG_KEY).set("1");
+        }
 
-        log.info("存量数据同步完成，共同步 {} 条，布隆过滤器={}, 邮箱SET={}, 耗时 {}ms",
-                totalSynced, !bloomInitialized, !emailSetInitialized,
+        log.info("存量数据同步完成，共同步 {} 条，布隆过滤器={}, 邮箱SET={}, 手机号SET={}, 耗时 {}ms",
+                totalSynced, !bloomInitialized, !emailSetInitialized, !phoneSetInitialized,
                 System.currentTimeMillis() - startTime);
     }
 }

@@ -26,12 +26,4 @@ public class RBloomFilterConfiguration {
         return usernameBloomFilter;
     }
 
-    @Bean
-    public RBloomFilter<String> phoneBloomFilter(RedissonClient redissonClient) {
-        RBloomFilter<String> phoneBloomFilter = redissonClient.getBloomFilter("phoneBloomFilter");
-        if (!phoneBloomFilter.tryInit(1000000L, 0.001)) {
-            log.warn("phoneBloomFilter already exists, existing parameters will be used");
-        }
-        return phoneBloomFilter;
-    }
 }

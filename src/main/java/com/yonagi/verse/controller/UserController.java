@@ -83,4 +83,20 @@ public class UserController {
     public Result<Boolean> resetPassword(@Valid @RequestBody UserResetPasswordReqDTO requestParam) {
         return Results.success(userService.resetPassword(requestParam));
     }
+
+    @PostMapping("/api/v1/users/account/cancel/prepare")
+    public Result<PrepareCloseAccountRespDTO> prepareCloseAccount(@CurrentUser Long userId) {
+        return Results.success(userService.prepareCloseAccount(userId));
+    }
+
+    @PostMapping("/api/v1/users/account/cancel/send-code")
+    public Result<Boolean> closeAccountSendCode(@CurrentUser Long userId) {
+        return Results.success(userService.closeAccountSendCode(userId));
+    }
+
+    @PostMapping("/api/v1/users/account/cancel/confirm")
+    public Result<Boolean> confirmCloseAccount(@CurrentUser Long userId,
+                                               @Valid @RequestBody ConfirmCloseAccountReqDTO requestParam) {
+        return Results.success(userService.confirmCloseAccount(userId, requestParam));
+    }
 }
