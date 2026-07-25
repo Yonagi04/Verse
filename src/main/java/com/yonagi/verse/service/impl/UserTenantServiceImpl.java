@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -45,5 +46,24 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
             throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_CREATE_FAILED);
         }
         return Boolean.TRUE;
+    }
+
+    @Override
+    public String getRoleByUserIdAndTenantId(Long userId, Long tenantId) {
+        if (userId == null) {
+            throw new ClientException(UserTenantErrorCodeEnum.USER_ID_IS_NULL);
+        }
+        if (tenantId == null) {
+            throw new ClientException(UserTenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        UserTenantDO userTenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .isNull(UserTenantDO::getLeftAt));
+        if (userTenantDO == null) {
+            log.warn("User-Tenant association not found for userId: {}, tenantId: {}", userId, tenantId);
+            throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_RELATION_NOT_EXIST);
+        }
+        return userTenantDO.getRole();
     }
 }

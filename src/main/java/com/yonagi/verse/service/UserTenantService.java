@@ -13,4 +13,6 @@ import com.yonagi.verse.dao.entity.UserTenantDO;
 public interface UserTenantService extends IService<UserTenantDO> {
 
     Boolean createUserTenant(Long userId, Long tenantId);
+
+    String getRoleByUserIdAndTenantId(Long userId, Long tenantId);
 }

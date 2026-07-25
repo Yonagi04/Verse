@@ -10,22 +10,18 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
-import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.common.util.SensitiveUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
-import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.entity.UserDO;
-import com.yonagi.verse.dao.entity.UserTenantDO;
-import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
-import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.UserService;
+import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import com.alibaba.fastjson2.JSON;
 import lombok.extern.slf4j.Slf4j;
@@ -58,9 +54,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     private final PasswordEncoder passwordEncoder;
     private final AesUtil aesUtil;
-    private final TenantMapper tenantMapper;
-    private final UserTenantMapper userTenantMapper;
     private final TenantService tenantService;
+    private final UserTenantService userTenantService;
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> usernameBloomFilter;
@@ -218,23 +213,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         resp.setToken(token);
         resp.setExpiresAt(expiresAt);
 
-        // TODO 查询当前活跃租户, 转移到租户类的Service实现中
         if (userDO.getLastActiveTenantId() != null) {
-            TenantDO tenantDO = tenantMapper.selectOne(
-                    Wrappers.lambdaQuery(TenantDO.class)
-                            .eq(TenantDO::getTenantId, userDO.getLastActiveTenantId()));
-            if (tenantDO != null) {
-                UserTenantDO userTenantDO = userTenantMapper.selectOne(
-                        Wrappers.lambdaQuery(UserTenantDO.class)
-                                .eq(UserTenantDO::getUserId, userDO.getUserId())
-                                .eq(UserTenantDO::getTenantId, userDO.getLastActiveTenantId())
-                                .isNull(UserTenantDO::getLeftAt));
-                String role = userTenantDO != null ? userTenantDO.getRole() : null;
-
+            TenantInfoRespDTO tenantInfoResp = tenantService.getTenantInfo(userDO.getLastActiveTenantId());
+            if (tenantInfoResp != null) {
+                String role = userTenantService.getRoleByUserIdAndTenantId(userDO.getUserId(), tenantInfoResp.getTenantId());
                 resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()
-                        .setTenantId(tenantDO.getTenantId())
-                        .setName(tenantDO.getName())
-                        .setType(tenantDO.getType())
+                        .setTenantId(tenantInfoResp.getTenantId())
+                        .setName(tenantInfoResp.getName())
+                        .setType(tenantInfoResp.getType())
                         .setRole(role));
             }
         }

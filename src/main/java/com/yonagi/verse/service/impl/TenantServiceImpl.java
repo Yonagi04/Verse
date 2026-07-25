@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import cn.hutool.core.bean.BeanUtil;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -13,11 +14,11 @@ import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.req.TenantCreateReqDTO;
 import com.yonagi.verse.dto.resp.TenantInfoListRespDTO;
+import com.yonagi.verse.dto.resp.TenantInfoRespDTO;
 import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.redisson.api.RBloomFilter;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -82,5 +83,21 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         userTenantService.createUserTenant(userId, tenantId);
 
         return tenantId;
+    }
+
+    @Override
+    public TenantInfoRespDTO getTenantInfo(Long tenantId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        TenantDO tenantDO = baseMapper.selectOne(
+                Wrappers.lambdaQuery(TenantDO.class)
+                        .eq(TenantDO::getTenantId, tenantId));
+        if (tenantDO == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        }
+        TenantInfoRespDTO resp = new TenantInfoRespDTO();
+        BeanUtil.copyProperties(tenantDO, resp);
+        return resp;
     }
 }

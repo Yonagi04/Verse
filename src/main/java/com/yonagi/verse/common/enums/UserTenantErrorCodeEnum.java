@@ -12,6 +12,7 @@ import com.yonagi.verse.common.convention.errorcode.IErrorCode;
 public enum UserTenantErrorCodeEnum implements IErrorCode {
 
     USER_TENANT_CREATE_FAILED("A000400", "用户租户联系创建失败"),
+    USER_TENANT_RELATION_NOT_EXIST("A000401", "用户租户关系不存在"),
 
     USER_ID_IS_NULL("B000400", "用户ID不能为空"),
     TENANT_ID_IS_NULL("B000401", "租户ID不能为空");

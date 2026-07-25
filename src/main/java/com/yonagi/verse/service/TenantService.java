@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dto.req.TenantCreateReqDTO;
 import com.yonagi.verse.dto.resp.TenantInfoListRespDTO;
+import com.yonagi.verse.dto.resp.TenantInfoRespDTO;
 
 import java.util.List;
 
@@ -15,9 +16,12 @@ import java.util.List;
  * @date 2026/07/19 20:51
  */
 public interface TenantService extends IService<TenantDO> {
+
     List<TenantInfoListRespDTO> listTenants(Long userId);
 
     Boolean createTenant(Long userId, TenantCreateReqDTO requestParam);
 
     Long createPersonalTenant(Long userId, String tenantName);
+
+    TenantInfoRespDTO getTenantInfo(Long tenantId);
 }
