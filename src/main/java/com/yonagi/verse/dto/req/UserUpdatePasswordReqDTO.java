@@ -17,4 +17,8 @@ public class UserUpdatePasswordReqDTO {
     @NotBlank(message = "密码不能为空")
     @Size(min = 8, max = 32, message = "密码长度需在8~32字符之间")
     private String password;
+
+    @NotBlank(message = "旧密码不能为空")
+    @Size(min = 8, max = 32, message = "旧密码长度需在8~32字符之间")
+    private String oldPassword;
 }

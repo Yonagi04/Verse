@@ -396,6 +396,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
+        if (!passwordEncoder.matches(requestParam.getOldPassword(), userDO.getPassword())) {
+            throw new ClientException(UserErrorCodeEnum.PASSWORD_ERROR_FOR_RESET);
+        }
         if (passwordEncoder.matches(requestParam.getPassword(), userDO.getPassword())) {
             throw new ClientException(UserErrorCodeEnum.PASSWORD_MATCHED);
         }

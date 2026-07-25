@@ -30,7 +30,8 @@ public enum UserErrorCodeEnum implements IErrorCode {
     USER_RESET_PASSWORD_FAIL("B000213", "密码重置失败，请重新尝试"),
     USER_ENCRYPT_ERROR("B000214", "数据加密失败"),
     USER_DECRYPT_ERROR("B000215", "数据解密失败"),
-    USER_HASH_ERROR("B000216", "数据哈希失败");
+    USER_HASH_ERROR("B000216", "数据哈希失败"),
+    PASSWORD_ERROR_FOR_RESET("B000217", "密码错误，请重新输入"),;
 
     private final String code;
 
