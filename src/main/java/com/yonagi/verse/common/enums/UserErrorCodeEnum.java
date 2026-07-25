@@ -15,8 +15,8 @@ public enum UserErrorCodeEnum implements IErrorCode {
     USER_SAVED_ERROR("A000201", "用户记录保存失败"),
     USER_UPDATE_ERROR("A000202", "用户记录更新失败"),
 
-    USER_NOT_EXIST("B000200", "用户记录不存在"),
-    USER_EXIST("B000201", "用户记录已存在"),
+    USER_NOT_EXIST("B000200", "用户不存在"),
+    USER_EXIST("B000201", "用户已存在"),
     USERNAME_EXIST("B000202", "用户名已存在"),
     EMAIL_BIND_COUNT_EXCEED("B000203", "邮箱绑定数量超过限制，单个邮箱最多只可绑定3个用户"),
     USER_STATUS_DISABLED("B000205", "用户不可用，请联系管理员"),

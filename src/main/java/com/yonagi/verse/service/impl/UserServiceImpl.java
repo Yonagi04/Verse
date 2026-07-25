@@ -167,7 +167,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 .eq(UserDO::getUsername, requestParam.getUsername());
         UserDO userDO = baseMapper.selectOne(queryWrapper);
         if (userDO == null) {
-            throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
+            String hashedInput = aesUtil.hashForLookup(requestParam.getUsername());
+            LambdaQueryWrapper<UserDO> phoneQueryWrapper = Wrappers.lambdaQuery(UserDO.class)
+                    .eq(UserDO::getPhoneHash, hashedInput);
+            UserDO phoneQueryUserDO = baseMapper.selectOne(phoneQueryWrapper);
+            if (phoneQueryUserDO == null) {
+                throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
+            }
+            log.debug("User logged in via phone fallback, userId: {}", phoneQueryUserDO.getUserId());
+            userDO = phoneQueryUserDO;
         }
         // 从 Redis 获取会话信息，如果存在则说明用户已登录
         String sessionJson = stringRedisTemplate.opsForValue()
