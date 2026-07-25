@@ -1,6 +1,7 @@
 package com.yonagi.verse.dao.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
+import com.yonagi.verse.common.database.BaseDO;
 import lombok.Data;
 
 import java.util.Date;
@@ -13,7 +14,7 @@ import java.util.Date;
  */
 @Data
 @TableName("t_llm_service")
-public class LlmServiceDO {
+public class LlmServiceDO extends BaseDO {
 
     /**
      * 自增主键
@@ -64,19 +65,4 @@ public class LlmServiceDO {
      * 创建者用户ID
      */
     private Long createdBy;
-
-    /**
-     * 创建时间
-     */
-    private Date createTime;
-
-    /**
-     * 更新时间
-     */
-    private Date updateTime;
-
-    /**
-     * 逻辑删除
-     */
-    private Integer delFlag;
 }
