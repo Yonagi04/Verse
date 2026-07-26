@@ -3,11 +3,10 @@ package com.yonagi.verse.controller;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.CurrentUser;
-import com.yonagi.verse.dto.req.TenantCreateReqDTO;
-import com.yonagi.verse.dto.req.TenantInviteReqDTO;
-import com.yonagi.verse.dto.req.TenantJoinReqDTO;
+import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.TenantInfoListRespDTO;
 import com.yonagi.verse.dto.resp.TenantInviteRespDTO;
+import com.yonagi.verse.dto.resp.TenantSwitchRespDTO;
 import com.yonagi.verse.service.TenantService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +39,14 @@ public class TenantController {
         return Results.success(tenantService.createTenant(userId, requestParam));
     }
 
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN')")
+    @PostMapping("/api/v1/tenants/{tenantId}/update")
+    public Result<Boolean> updateTenant(@CurrentUser Long userId,
+                                        @PathVariable Long tenantId,
+                                        @RequestBody @Valid TenantUpdateReqDTO requestParam) {
+        return Results.success(tenantService.updateTenant(userId, tenantId, requestParam));
+    }
+
     @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
     @PostMapping("/api/v1/tenants/{tenantId}/invites")
     public Result<TenantInviteRespDTO> inviteUser(@CurrentUser Long userId,
@@ -52,5 +59,11 @@ public class TenantController {
     public Result<Boolean> joinTenant(@CurrentUser Long userId,
                                       @RequestBody @Valid TenantJoinReqDTO requestParam) {
         return Results.success(tenantService.joinTenant(userId, requestParam));
+    }
+
+    @PostMapping("/api/v1/tenants/{tenantId}/switch")
+    public Result<TenantSwitchRespDTO> switchTenant(@CurrentUser Long userId,
+                                                    @PathVariable Long tenantId) {
+        return Results.success(tenantService.switchTenant(userId, tenantId));
     }
 }

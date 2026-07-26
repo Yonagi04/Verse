@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -19,17 +20,18 @@ import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.TenantInviteMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
-import com.yonagi.verse.dto.req.TenantCreateReqDTO;
-import com.yonagi.verse.dto.req.TenantInviteReqDTO;
-import com.yonagi.verse.dto.req.TenantJoinReqDTO;
+import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.TenantInfoListRespDTO;
 import com.yonagi.verse.dto.resp.TenantInfoRespDTO;
 import com.yonagi.verse.dto.resp.TenantInviteRespDTO;
+import com.yonagi.verse.dto.resp.TenantSwitchRespDTO;
 import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBloomFilter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -138,6 +140,39 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             throw new ClientException(TenantErrorCodeEnum.TENANT_CREATE_ERROR);
         }
         return tenantId;
+    }
+
+    @Override
+    public Boolean updateTenant(Long userId, Long tenantId, TenantUpdateReqDTO requestParam) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        // 查询用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        // 更新租户
+        LambdaUpdateWrapper<TenantDO> updateWrapper = Wrappers.lambdaUpdate(TenantDO.class)
+                .eq(TenantDO::getTenantId, tenantId)
+                .eq(TenantDO::getStatus, 1)
+                .eq(TenantDO::getDelFlag, 0)
+                .set(TenantDO::getName, requestParam.getName());
+        if (StrUtil.isNotBlank(requestParam.getDescription())) {
+            updateWrapper.set(TenantDO::getDescription, requestParam.getDescription());
+        } else if (requestParam.getDescription() != null) {
+            updateWrapper.set(TenantDO::getDescription, null);
+        }
+
+        int update = baseMapper.update(updateWrapper);
+        if (update < 1) {
+            log.error("Update tenant failed, tenantId: {}, userId: {}", tenantId, userId);
+            throw new ServerException(TenantErrorCodeEnum.TENANT_UPDATE_ERROR);
+        }
+        // 更新后删除缓存
+        String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
+        stringRedisTemplate.delete(cacheKey);
+        return Boolean.TRUE;
     }
 
     @Override
@@ -252,6 +287,37 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             throw new ClientException(TenantErrorCodeEnum.TENANT_JOIN_ERROR);
         }
         return Boolean.TRUE;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public TenantSwitchRespDTO switchTenant(Long userId, Long tenantId) {
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+
+        TenantInfoRespDTO respDTO = this.getTenantInfo(tenantId);
+        if (respDTO == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        }
+        LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
+                .eq(UserDO::getUserId, userId)
+                .eq(UserDO::getStatus, 1)
+                .eq(UserDO::getDelFlag, 0)
+                .set(UserDO::getLastActiveTenantId, tenantId);
+        int update = userMapper.update(updateWrapper);
+        if (update < 1) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_SWITCH_ERROR);
+        }
+
+        userTenantService.switchTenant(userId, tenantId);
+        TenantSwitchRespDTO resp = new TenantSwitchRespDTO();
+        resp.setName(respDTO.getName());
+        resp.setTenantId(tenantId);
+        resp.setType(respDTO.getType());
+        resp.setRole(userTenantService.getRoleByUserIdAndTenantId(userId, tenantId));
+        return resp;
     }
 
     private String generateInviteCode() {

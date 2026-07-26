@@ -28,7 +28,7 @@ src/test/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
-src/main/resources/application.dev.yaml
+src/main/resources/application-dev.yml
 
 ### IntelliJ IDEA ###
 .idea/

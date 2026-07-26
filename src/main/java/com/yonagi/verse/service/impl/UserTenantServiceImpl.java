@@ -2,12 +2,14 @@ package com.yonagi.verse.service.impl;
 
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
+import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.enums.UserTenantErrorCodeEnum;
 import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
@@ -122,5 +124,23 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
                 .eq(UserTenantDO::getTenantId, tenantId)
                 .isNull(UserTenantDO::getLeftAt);
         return baseMapper.exists(queryWrapper);
+    }
+
+    @Override
+    public Boolean switchTenant(Long userId, Long tenantId) {
+        LambdaUpdateWrapper<UserTenantDO> updateWrapper = Wrappers.lambdaUpdate(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .eq(UserTenantDO::getLeftAt, null)
+                .set(UserTenantDO::getLastAccessedAt, new Date());
+        int update = baseMapper.update(updateWrapper);
+        if (update < 1) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_SWITCH_ERROR);
+        }
+
+        // 更新完成后删除缓存
+        String userTenantCacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
+        stringRedisTemplate.delete(userTenantCacheKey);
+        return Boolean.TRUE;
     }
 }

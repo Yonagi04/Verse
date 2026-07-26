@@ -23,4 +23,6 @@ public interface UserTenantService extends IService<UserTenantDO> {
     List<UserTenantDO> getUserTenantList(Long userId, Boolean isAsc, Long limit);
 
     Boolean isUserJoinedTenant(Long userId, Long tenantId);
+
+    Boolean switchTenant(Long userId, Long tenantId);
 }

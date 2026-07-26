@@ -2,12 +2,11 @@ package com.yonagi.verse.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.TenantDO;
-import com.yonagi.verse.dto.req.TenantCreateReqDTO;
-import com.yonagi.verse.dto.req.TenantInviteReqDTO;
-import com.yonagi.verse.dto.req.TenantJoinReqDTO;
+import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.TenantInfoListRespDTO;
 import com.yonagi.verse.dto.resp.TenantInfoRespDTO;
 import com.yonagi.verse.dto.resp.TenantInviteRespDTO;
+import com.yonagi.verse.dto.resp.TenantSwitchRespDTO;
 
 import java.util.List;
 
@@ -26,9 +25,13 @@ public interface TenantService extends IService<TenantDO> {
 
     Long createPersonalTenant(Long userId, String tenantName);
 
+    Boolean updateTenant(Long userId, Long tenantId, TenantUpdateReqDTO requestParam);
+
     TenantInfoRespDTO getTenantInfo(Long tenantId);
 
     TenantInviteRespDTO inviteUser(Long userId, Long tenantId, TenantInviteReqDTO requestParam);
 
     Boolean joinTenant(Long userId, TenantJoinReqDTO requestParam);
+
+    TenantSwitchRespDTO switchTenant(Long userId, Long tenantId);
 }

@@ -12,6 +12,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_CREATE_ERROR("A000300", "租户创建失败"),
     TENANT_INVITE_CODE_CREATE_ERROR("A000301", "租户邀请码创建失败"),
     TENANT_JOIN_ERROR("A000302", "加入租户失败"),
+    TENANT_UPDATE_ERROR("A000303", "租户更新失败"),
+    TENANT_SWITCH_ERROR("A000304", "切换租户失败"),
 
     TENANT_NOT_EXIST("B000300", "租户不存在"),
     TENANT_ID_IS_NULL("B000301", "租户ID不能为空"),
