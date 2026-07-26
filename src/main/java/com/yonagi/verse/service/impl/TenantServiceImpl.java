@@ -1,10 +1,12 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
@@ -27,6 +29,8 @@ import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RBloomFilter;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +38,7 @@ import java.security.SecureRandom;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -55,6 +60,8 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private final UserTenantService userTenantService;
     private final TenantInviteMapper tenantInviteMapper;
     private final UserMapper userMapper;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final RBloomFilter<String> inviteCodeFilter;
 
     @Override
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
@@ -138,6 +145,12 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         if (tenantId == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
         }
+        String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
+        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cachedJson != null) {
+            return JSON.parseObject(cachedJson, TenantInfoRespDTO.class);
+        }
+
         TenantDO tenantDO = baseMapper.selectOne(
                 Wrappers.lambdaQuery(TenantDO.class)
                         .eq(TenantDO::getTenantId, tenantId)
@@ -148,6 +161,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         }
         TenantInfoRespDTO resp = new TenantInfoRespDTO();
         BeanUtil.copyProperties(tenantDO, resp);
+        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(resp), 30, TimeUnit.MINUTES);
         return resp;
     }
 
@@ -157,6 +171,21 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         // 权限控制由 PreAuthorize 注解来管理，服务层不关心
         // 生成一个8位大写字母+数字组合的邀请码
         String inviteCode = generateInviteCode();
+        if (inviteCodeFilter.contains(inviteCode)) {
+            // 如果发生了重复，就连续重试3次，3次都重复就直接抛异常
+            boolean successGenerate = false;
+            for (int i = 0; i < 3; i++) {
+                inviteCode = generateInviteCode();
+                if (!inviteCodeFilter.contains(inviteCode)) {
+                    successGenerate = true;
+                    break;
+                }
+            }
+            if (!successGenerate) {
+                throw new ServerException(TenantErrorCodeEnum.TENANT_INVITE_CODE_CREATE_ERROR);
+            }
+        }
+
         TenantInviteDO inviteDO = new TenantInviteDO();
         inviteDO.setCode(inviteCode);
         inviteDO.setTenantId(tenantId);
@@ -169,6 +198,9 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             log.error("Create tenant invite code error: tenant {}, user {}", tenantId, userId);
             throw new ServerException(TenantErrorCodeEnum.TENANT_INVITE_CODE_CREATE_ERROR);
         }
+        String cacheKey = RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteCode;
+        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(inviteDO), 15, TimeUnit.MINUTES);
+        inviteCodeFilter.add(inviteCode);
 
         TenantInviteRespDTO resp = new TenantInviteRespDTO();
         resp.setInviteCode(inviteCode);
@@ -185,9 +217,15 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         }
         // 租户邀请码是否过期
         String inviteCode = requestParam.getInviteCode();
-        LambdaQueryWrapper<TenantInviteDO> queryWrapper = Wrappers.lambdaQuery(TenantInviteDO.class)
-                .eq(TenantInviteDO::getCode, inviteCode);
-        TenantInviteDO inviteDO = tenantInviteMapper.selectOne(queryWrapper);
+        String cachedJson = stringRedisTemplate.opsForValue().get(RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteCode);
+        TenantInviteDO inviteDO;
+        if (cachedJson != null) {
+            inviteDO = JSON.parseObject(cachedJson, TenantInviteDO.class);
+        } else {
+            LambdaQueryWrapper<TenantInviteDO> queryWrapper = Wrappers.lambdaQuery(TenantInviteDO.class)
+                    .eq(TenantInviteDO::getCode, inviteCode);
+            inviteDO = tenantInviteMapper.selectOne(queryWrapper);
+        }
         if (inviteDO == null || inviteDO.getIsActive() == 0) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
         }

@@ -26,4 +26,12 @@ public class RBloomFilterConfiguration {
         return usernameBloomFilter;
     }
 
+    @Bean
+    public RBloomFilter<String> inviteCodeFilter(RedissonClient redissonClient) {
+        RBloomFilter<String> inviteCodeFilter = redissonClient.getBloomFilter("inviteCodeFilter");
+        if (!inviteCodeFilter.tryInit(10000000L, 0.0001)) {
+            log.warn("inviteCodeFilter already exists, existing parameters will be used");
+        }
+        return inviteCodeFilter;
+    }
 }

@@ -58,4 +58,19 @@ public class RedisKeyConstant {
      * 用户注销账号验证码key（{userId} -> code），用于注销账号场景
      */
     public final static String USER_CLOSE_ACCOUNT_SENDING_CODE_KEY = "verse:user:close-account:sending-code:";
+
+    /**
+     * 租户信息缓存key（{tenantId} -> TenantInfoResp JSON），用于缓存
+     */
+    public final static String TENANT_INFO_KEY = "verse:tenant:info:";
+
+    /**
+     * 租户邀请码缓存key（{inviteCode}->TenantInviteDO JSON），用于缓存
+     */
+    public final static String TENANT_INVITE_CODE_KEY = "verse:tenant:invite-code:";
+
+    /**
+     * 用户-租户单条关系缓存key（{userId, tenantId}->UserTenantDO JSON）
+     */
+    public final static String USER_TENANT_RELATION_KEY = "verse:user-tenant:";
 }

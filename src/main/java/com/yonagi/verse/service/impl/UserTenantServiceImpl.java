@@ -1,22 +1,25 @@
 package com.yonagi.verse.service.impl;
 
+import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
-import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.UserTenantErrorCodeEnum;
 import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.util.Date;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author Yonagi
@@ -29,6 +32,8 @@ import java.util.List;
 @RequiredArgsConstructor
 @Slf4j
 public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTenantDO> implements UserTenantService {
+
+    private final StringRedisTemplate stringRedisTemplate;
 
     @Override
     public Boolean createUserTenant(Long userId, Long tenantId, String role) {
@@ -48,6 +53,10 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
             log.error("Failed to create user-tenant association for userId: {}, tenantId: {}", userId, tenantId);
             throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_CREATE_FAILED);
         }
+
+        // 写入缓存
+        String userTenantCacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
+        stringRedisTemplate.opsForValue().set(userTenantCacheKey, JSON.toJSONString(userTenantDO), 15, TimeUnit.MINUTES);
         return Boolean.TRUE;
     }
 
@@ -59,14 +68,26 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
         if (tenantId == null) {
             throw new ClientException(UserTenantErrorCodeEnum.TENANT_ID_IS_NULL);
         }
-        UserTenantDO userTenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
-                .eq(UserTenantDO::getUserId, userId)
-                .eq(UserTenantDO::getTenantId, tenantId)
-                .isNull(UserTenantDO::getLeftAt));
+
+        String cacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
+        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        UserTenantDO userTenantDO;
+        if (cachedJson != null) {
+            userTenantDO = JSON.parseObject(cachedJson, UserTenantDO.class);
+        } else {
+            userTenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
+                    .eq(UserTenantDO::getUserId, userId)
+                    .eq(UserTenantDO::getTenantId, tenantId)
+                    .isNull(UserTenantDO::getLeftAt));
+        }
+
         if (userTenantDO == null) {
             log.warn("User-Tenant association not found for userId: {}, tenantId: {}", userId, tenantId);
             throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_RELATION_NOT_EXIST);
         }
+        // 查到了就重新写回缓存
+        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(userTenantDO), 15, TimeUnit.MINUTES);
+
         return userTenantDO.getRole();
     }
 
@@ -90,6 +111,12 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
 
     @Override
     public Boolean isUserJoinedTenant(Long userId, Long tenantId) {
+        String cacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
+        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cachedJson != null) {
+            return Boolean.TRUE;
+        }
+
         LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
                 .eq(UserTenantDO::getUserId, userId)
                 .eq(UserTenantDO::getTenantId, tenantId)
