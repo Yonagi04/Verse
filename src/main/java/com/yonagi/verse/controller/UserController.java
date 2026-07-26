@@ -84,12 +84,12 @@ public class UserController {
         return Results.success(userService.resetPassword(requestParam));
     }
 
-    @PostMapping("/api/v1/users/account/cancel/prepare")
+    @GetMapping("/api/v1/users/account/cancel/prepare")
     public Result<PrepareCloseAccountRespDTO> prepareCloseAccount(@CurrentUser Long userId) {
         return Results.success(userService.prepareCloseAccount(userId));
     }
 
-    @PostMapping("/api/v1/users/account/cancel/send-code")
+    @PostMapping("/api/v1/users/account/cancel/sendCode")
     public Result<Boolean> closeAccountSendCode(@CurrentUser Long userId) {
         return Results.success(userService.closeAccountSendCode(userId));
     }
