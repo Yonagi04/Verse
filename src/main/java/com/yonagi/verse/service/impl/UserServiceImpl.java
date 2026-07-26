@@ -65,8 +65,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             "您注册的 LLM Service 将停止提供服务",
             "历史 Token 统计数据将被清除"
     );
-    private static final String CLOSED_ACCOUNT_LOGIN_WARNING = "您的账号已于 %s 申请并完成了注销，感谢您使用 Verse，祝您生活愉快！";
-    private static final DateTimeFormatter CANCEL_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy年MM月dd日 HH:mm:ss");
+    private static final String CLOSED_ACCOUNT_LOGIN_WARNING = "您的账号已于%s申请并完成了注销，感谢您使用 Verse，祝您生活愉快！";
+    private static final DateTimeFormatter CANCEL_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy年MM月dd日");
 
     private final PasswordEncoder passwordEncoder;
     private final AesUtil aesUtil;
@@ -546,12 +546,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         // 注销账号，设置状态为2，del flag为1
         // phone_hash 和 email_hash 添加后缀以释放原始值供新用户使用（数据库有唯一约束）
+        // 更新 cancelTime 为当前时间
         String closedSuffix = ":" + userId;
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId)
                 .set(UserDO::getStatus, UserStatusEnum.USER_STATUS_CLOSED.getStatusCode())
                 .set(UserDO::getPhoneHash, userDO.getPhoneHash() + closedSuffix)
                 .set(UserDO::getEmailHash, userDO.getEmailHash() + closedSuffix)
+                .set(UserDO::getCancelTime, new Date())
                 .set(UserDO::getDelFlag, 1);
         int update = baseMapper.update(updateWrapper);
         if (update < 1) {
