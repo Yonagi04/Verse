@@ -4,14 +4,15 @@ import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.TenantCreateReqDTO;
+import com.yonagi.verse.dto.req.TenantInviteReqDTO;
+import com.yonagi.verse.dto.req.TenantJoinReqDTO;
 import com.yonagi.verse.dto.resp.TenantInfoListRespDTO;
+import com.yonagi.verse.dto.resp.TenantInviteRespDTO;
 import com.yonagi.verse.service.TenantService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
@@ -37,5 +38,19 @@ public class TenantController {
     public Result<Boolean> createTenant(@CurrentUser Long userId,
                                         @RequestBody @Valid TenantCreateReqDTO requestParam) {
         return Results.success(tenantService.createTenant(userId, requestParam));
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
+    @PostMapping("/api/v1/tenants/{tenantId}/invites")
+    public Result<TenantInviteRespDTO> inviteUser(@CurrentUser Long userId,
+                                                  @PathVariable Long tenantId,
+                                                  @RequestBody TenantInviteReqDTO requestParam) {
+        return Results.success(tenantService.inviteUser(userId, tenantId, requestParam));
+    }
+
+    @PostMapping("/api/v1/tenants/join")
+    public Result<Boolean> joinTenant(@CurrentUser Long userId,
+                                      @RequestBody @Valid TenantJoinReqDTO requestParam) {
+        return Results.success(tenantService.joinTenant(userId, requestParam));
     }
 }

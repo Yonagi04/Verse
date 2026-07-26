@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS `t_tenant_invite` (
     `tenant_id`   BIGINT      NOT NULL COMMENT '租户ID（业务ID）',
     `code`        VARCHAR(32) NOT NULL COMMENT '邀请码（UUID前8位大写）',
     `created_by`  BIGINT      NOT NULL COMMENT '创建者用户ID',
-    `expires_at`  DATETIME    NOT NULL COMMENT '过期时间',
+    `expires_at`  DATETIME    DEFAULT NULL COMMENT '过期时间',
     `is_active`   TINYINT     NOT NULL DEFAULT 1 COMMENT '是否有效：0=已失效, 1=有效',
     `create_time` DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),

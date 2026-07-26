@@ -1,6 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -14,6 +16,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Date;
+import java.util.List;
 
 /**
  * @author Yonagi
@@ -28,7 +31,7 @@ import java.util.Date;
 public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTenantDO> implements UserTenantService {
 
     @Override
-    public Boolean createUserTenant(Long userId, Long tenantId) {
+    public Boolean createUserTenant(Long userId, Long tenantId, String role) {
         if (userId == null) {
             throw new ClientException(UserTenantErrorCodeEnum.USER_ID_IS_NULL);
         }
@@ -38,7 +41,7 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
         UserTenantDO userTenantDO = new UserTenantDO();
         userTenantDO.setTenantId(tenantId);
         userTenantDO.setUserId(userId);
-        userTenantDO.setRole(RoleEnum.SUPER_ADMIN.name());
+        userTenantDO.setRole(role);
         userTenantDO.setJoinedAt(new Date());
         int userTenantInserted = baseMapper.insert(userTenantDO);
         if (userTenantInserted < 1) {
@@ -65,5 +68,32 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
             throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_RELATION_NOT_EXIST);
         }
         return userTenantDO.getRole();
+    }
+
+    @Override
+    public Long getUserJoinedTenantCount(Long userId) {
+        LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .isNull(UserTenantDO::getLeftAt);
+        return baseMapper.selectCount(queryWrapper);
+    }
+
+    @Override
+    public List<UserTenantDO> getUserTenantList(Long userId, Boolean isAsc, Long limit) {
+        LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .isNull(UserTenantDO::getLeftAt)
+                .orderBy(true, isAsc, UserTenantDO::getLastAccessedAt);
+        Page<UserTenantDO> page = new Page<>(1, limit);
+        return baseMapper.selectPage(page, queryWrapper).getRecords();
+    }
+
+    @Override
+    public Boolean isUserJoinedTenant(Long userId, Long tenantId) {
+        LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .isNull(UserTenantDO::getLeftAt);
+        return baseMapper.exists(queryWrapper);
     }
 }
