@@ -1,5 +1,7 @@
 package com.yonagi.verse.dto.resp;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 /**
@@ -12,6 +14,7 @@ import lombok.Data;
 @Data
 public class TenantSwitchRespDTO {
 
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long tenantId;
 
     private String name;

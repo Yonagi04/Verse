@@ -1,5 +1,7 @@
 package com.yonagi.verse.dto.resp;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 import lombok.experimental.Accessors;
 
@@ -14,6 +16,7 @@ import java.util.Date;
 @Accessors(chain = true)
 public class UserLoginRespDTO {
 
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long userId;
 
     private String username;
@@ -30,6 +33,7 @@ public class UserLoginRespDTO {
     @Accessors(chain = true)
     public static class TenantInfo {
 
+        @JsonSerialize(using = ToStringSerializer.class)
         private Long tenantId;
 
         private String name;
