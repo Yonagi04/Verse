@@ -73,4 +73,9 @@ public class RedisKeyConstant {
      * 用户-租户单条关系缓存key（{userId, tenantId}->UserTenantDO JSON）
      */
     public final static String USER_TENANT_RELATION_KEY = "verse:user-tenant:";
+
+    /**
+     * 租户关闭Token缓存key（{tenantId, userId}->closeToken），用于租户关闭场景
+     */
+    public final static String TENANT_CLOSE_TOKEN_KEY = "verse:tenant:close-token:";
 }

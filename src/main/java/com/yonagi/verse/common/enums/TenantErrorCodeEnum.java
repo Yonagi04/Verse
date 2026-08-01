@@ -14,6 +14,7 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_JOIN_ERROR("A000302", "加入租户失败"),
     TENANT_UPDATE_ERROR("A000303", "租户更新失败"),
     TENANT_SWITCH_ERROR("A000304", "切换租户失败"),
+    TENANT_CLOSE_ERROR("A000305", "租户关闭失败"),
 
     TENANT_NOT_EXIST("B000300", "租户不存在"),
     TENANT_ID_IS_NULL("B000301", "租户ID不能为空"),
@@ -22,7 +23,10 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_INVITE_CODE_EXPIRED("B000304", "租户邀请码过期"),
     TENANT_HAS_BEEN_JOINED("B000305", "已加入此租户"),
     TENANT_JOIN_PROHIBITED("B000306", "此租户不能加入"),
-    TENANT_NOT_JOINED("B000308", "用户未加入该租户");
+    TENANT_NOT_JOINED("B000308", "用户未加入该租户"),
+    TENANT_CAN_NOT_CLOSE("B000309", "该租户不能被关闭"),
+    TENANT_CLOSE_TOKEN_EXPIRED("B000310", "租户关闭Token过期"),
+    TENANT_NAME_ERROR("B000311", "租户名称不正确"),;
 
     private final String code;
     private final String message;

@@ -80,7 +80,8 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
             userTenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
                     .eq(UserTenantDO::getUserId, userId)
                     .eq(UserTenantDO::getTenantId, tenantId)
-                    .isNull(UserTenantDO::getLeftAt));
+                    .isNull(UserTenantDO::getLeftAt)
+                    .exists("SELECT 1 FROM t_tenant WHERE t_tenant.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0"));
         }
 
         if (userTenantDO == null) {
@@ -97,7 +98,8 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
     public Long getUserJoinedTenantCount(Long userId) {
         LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
                 .eq(UserTenantDO::getUserId, userId)
-                .isNull(UserTenantDO::getLeftAt);
+                .isNull(UserTenantDO::getLeftAt)
+                .exists("SELECT 1 FROM t_tenant WHERE t_tenant.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0");
         return baseMapper.selectCount(queryWrapper);
     }
 
@@ -106,6 +108,7 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
         LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
                 .eq(UserTenantDO::getUserId, userId)
                 .isNull(UserTenantDO::getLeftAt)
+                .exists("SELECT 1 FROM t_tenant WHERE t_tenant.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0")
                 .orderBy(true, isAsc, UserTenantDO::getLastAccessedAt);
         Page<UserTenantDO> page = new Page<>(1, limit);
         return baseMapper.selectPage(page, queryWrapper).getRecords();
@@ -122,7 +125,8 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
         LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
                 .eq(UserTenantDO::getUserId, userId)
                 .eq(UserTenantDO::getTenantId, tenantId)
-                .isNull(UserTenantDO::getLeftAt);
+                .isNull(UserTenantDO::getLeftAt)
+                .exists("SELECT 1 FROM t_tenant WHERE t_tenant.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0");
         return baseMapper.exists(queryWrapper);
     }
 

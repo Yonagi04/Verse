@@ -51,6 +51,12 @@ public class JwtUtil {
                 .compact();
     }
 
+    /**
+     * 生成重置密码的 JWT Token
+     * @param phone
+     * @param code
+     * @return
+     */
     public String generateResetPasswordToken(String phone, String code) {
         Date now = new Date();
         Date expiryDate = new Date(now.getTime() + expiration);
@@ -58,6 +64,19 @@ public class JwtUtil {
         return Jwts.builder()
                 .subject(phone)
                 .claim("code", code)
+                .issuedAt(now)
+                .expiration(expiryDate)
+                .signWith(secretKey)
+                .compact();
+    }
+
+    public String generateCloseTenantToken(Long tenantId, Long userId, Long expiration) {
+        Date now = new Date();
+        Date expiryDate = new Date(now.getTime() + expiration);
+
+        return Jwts.builder()
+                .subject(String.valueOf(tenantId))
+                .claim("userId", userId)
                 .issuedAt(now)
                 .expiration(expiryDate)
                 .signWith(secretKey)

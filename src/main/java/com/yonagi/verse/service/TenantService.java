@@ -3,10 +3,8 @@ package com.yonagi.verse.service;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dto.req.*;
-import com.yonagi.verse.dto.resp.TenantInfoListRespDTO;
-import com.yonagi.verse.dto.resp.TenantInfoRespDTO;
-import com.yonagi.verse.dto.resp.TenantInviteRespDTO;
-import com.yonagi.verse.dto.resp.TenantSwitchRespDTO;
+import com.yonagi.verse.dto.resp.*;
+import jakarta.validation.Valid;
 
 import java.util.List;
 
@@ -34,4 +32,9 @@ public interface TenantService extends IService<TenantDO> {
     Boolean joinTenant(Long userId, TenantJoinReqDTO requestParam);
 
     TenantSwitchRespDTO switchTenant(Long userId, Long tenantId);
+
+    TenantClosePrepareRespDTO prepareCloseTenant(Long userId, Long tenantId);
+
+    Boolean closeTenant(Long userId, Long tenantId, TenantCloseReqDTO requestParam);
+
 }
