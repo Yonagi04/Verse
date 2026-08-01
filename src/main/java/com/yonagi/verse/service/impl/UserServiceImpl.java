@@ -246,14 +246,43 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         resp.setExpiresAt(expiresAt);
 
         if (userDO.getLastActiveTenantId() != null) {
-            TenantInfoRespDTO tenantInfoResp = tenantService.getTenantInfo(userDO.getUserId(), userDO.getLastActiveTenantId());
-            if (tenantInfoResp != null) {
-                String role = userTenantService.getRoleByUserIdAndTenantId(userDO.getUserId(), tenantInfoResp.getTenantId());
-                resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()
-                        .setTenantId(tenantInfoResp.getTenantId())
-                        .setName(tenantInfoResp.getName())
-                        .setType(tenantInfoResp.getType())
-                        .setRole(role));
+            try {
+                TenantInfoRespDTO tenantInfoResp = tenantService.getTenantInfo(userDO.getUserId(), userDO.getLastActiveTenantId());
+                if (tenantInfoResp != null) {
+                    String role = userTenantService.getRoleByUserIdAndTenantId(userDO.getUserId(), tenantInfoResp.getTenantId());
+                    resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()
+                            .setTenantId(tenantInfoResp.getTenantId())
+                            .setName(tenantInfoResp.getName())
+                            .setType(tenantInfoResp.getType())
+                            .setRole(role));
+                }
+            } catch (ClientException e) {
+                log.warn("上次活跃租户不可用, userId: {}, lastActiveTenantId: {}, 尝试回退到个人租户",
+                        userDO.getUserId(), userDO.getLastActiveTenantId());
+                Long personalTenantId = tenantService.getPersonalTenantId(userDO.getUserId());
+                if (personalTenantId != null) {
+                    TenantInfoRespDTO tenantInfoResp = tenantService.getTenantInfo(userDO.getUserId(), personalTenantId);
+                    String role = userTenantService.getRoleByUserIdAndTenantId(userDO.getUserId(), personalTenantId);
+                    resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()
+                            .setTenantId(tenantInfoResp.getTenantId())
+                            .setName(tenantInfoResp.getName())
+                            .setType(tenantInfoResp.getType())
+                            .setRole(role));
+
+                    // 修正 last_active_tenant_id，避免后续登录重复触发容错
+                    LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
+                            .eq(UserDO::getUserId, userDO.getUserId())
+                            .eq(UserDO::getDelFlag, 0)
+                            .set(UserDO::getLastActiveTenantId, personalTenantId);
+                    baseMapper.update(null, updateWrapper);
+
+                    // 更新 Redis session 中的 lastActiveTenantId
+                    session.setLastActiveTenantId(personalTenantId);
+                    stringRedisTemplate.opsForValue().set(
+                            RedisKeyConstant.USER_LOGIN_KEY + userDO.getUserId(),
+                            JSON.toJSONString(session),
+                            ttl, TimeUnit.MILLISECONDS);
+                }
             }
         }
 

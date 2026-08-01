@@ -127,6 +127,17 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         return doCreateTenant(userId, tenantName, "PERSONAL", null);
     }
 
+    @Override
+    public Long getPersonalTenantId(Long userId) {
+        TenantDO tenantDO = baseMapper.selectOne(
+                Wrappers.lambdaQuery(TenantDO.class)
+                        .eq(TenantDO::getOwnerId, userId)
+                        .eq(TenantDO::getType, "PERSONAL")
+                        .eq(TenantDO::getStatus, 1)
+                        .eq(TenantDO::getDelFlag, 0));
+        return tenantDO != null ? tenantDO.getTenantId() : null;
+    }
+
     private Long doCreateTenant(Long userId, String name, String type, String description) {
         Long tenantId = SnowflakeIdUtil.nextId();
         TenantDO tenantDO = new TenantDO();

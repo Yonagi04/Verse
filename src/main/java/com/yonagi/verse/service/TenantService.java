@@ -26,6 +26,8 @@ public interface TenantService extends IService<TenantDO> {
 
     TenantInfoRespDTO getTenantInfo(Long userId, Long tenantId);
 
+    Long getPersonalTenantId(Long userId);
+
     TenantInviteRespDTO inviteUser(Long userId, Long tenantId, TenantInviteReqDTO requestParam);
 
     Boolean joinTenant(Long userId, TenantJoinReqDTO requestParam);
