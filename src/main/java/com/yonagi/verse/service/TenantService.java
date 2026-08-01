@@ -37,4 +37,9 @@ public interface TenantService extends IService<TenantDO> {
 
     Boolean closeTenant(Long userId, Long tenantId, TenantCloseReqDTO requestParam);
 
+    TenantMembersListRespDTO listTenantMembers(Long userId, Long tenantId, Integer pageNum, Integer pageSize);
+
+    Boolean updateMemberRole(Long userId, Long tenantId, Long memberId, TenantMemberRoleUpdateReqDTO requestParam);
+
+    Boolean removeMember(Long userId, Long tenantId, Long memberId);
 }

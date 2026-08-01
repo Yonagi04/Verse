@@ -8,14 +8,11 @@ import lombok.Data;
  * @version 1.0
  * @program Verse
  * @description
- * @date 2026/08/01 10:15
+ * @date 2026/08/01 11:26
  */
 @Data
-public class TenantCloseReqDTO {
+public class TenantMemberRoleUpdateReqDTO {
 
     @NotBlank
-    private String disableToken;
-
-    @NotBlank
-    private String confirmText;
+    private String newRole;
 }

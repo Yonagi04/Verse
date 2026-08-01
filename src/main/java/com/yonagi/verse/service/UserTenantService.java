@@ -24,5 +24,9 @@ public interface UserTenantService extends IService<UserTenantDO> {
 
     Boolean isUserJoinedTenant(Long userId, Long tenantId);
 
-    Boolean switchTenant(Long userId, Long tenantId);
+    void switchTenant(Long userId, Long tenantId);
+
+    void updateUserRole(Long userId, Long tenantId, String originRole, String targetRole);
+
+    void removeUser(Long userId, Long tenantId);
 }

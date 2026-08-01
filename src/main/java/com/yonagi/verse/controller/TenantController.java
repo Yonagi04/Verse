@@ -3,13 +3,11 @@ package com.yonagi.verse.controller;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
+import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.*;
-import com.yonagi.verse.dto.resp.TenantClosePrepareRespDTO;
-import com.yonagi.verse.dto.resp.TenantInfoListRespDTO;
-import com.yonagi.verse.dto.resp.TenantInviteRespDTO;
-import com.yonagi.verse.dto.resp.TenantSwitchRespDTO;
+import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -42,7 +40,7 @@ public class TenantController {
         return Results.success(tenantService.createTenant(userId, requestParam));
     }
 
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
     @PostMapping("/api/v1/tenants/{tenantId}/update")
     public Result<Boolean> updateTenant(@CurrentUser Long userId,
                                         @PathVariable Long tenantId,
@@ -89,5 +87,54 @@ public class TenantController {
     public Result<TenantSwitchRespDTO> switchTenant(@CurrentUser Long userId,
                                                     @PathVariable Long tenantId) {
         return Results.success(tenantService.switchTenant(userId, tenantId));
+    }
+
+    @GetMapping("/api/v1/tenants/{tenantId}/members")
+    public Result<TenantMembersListRespDTO> listTenantMembers(@CurrentUser Long userId,
+                                                              @PathVariable Long tenantId,
+                                                              @RequestParam @Valid Integer pageNum,
+                                                              @RequestParam @Valid Integer pageSize) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(tenantService.listTenantMembers(userId, tenantId, pageNum, pageSize));
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
+    @PostMapping("/api/v1/tenants/{tenantId}/members/{memberId}/role")
+    public Result<Boolean> updateMemberRole(@CurrentUser Long userId,
+                                            @PathVariable Long tenantId,
+                                            @PathVariable Long memberId,
+                                            @RequestBody @Valid TenantMemberRoleUpdateReqDTO requestParam) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        if (memberId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_ID_IS_NULL);
+        }
+        if (userId.equals(memberId)) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_UPDATE_ID_SAME);
+        }
+        if (!RoleEnum.isValidRole(requestParam.getNewRole())) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_ROLE_ERROR);
+        }
+        return Results.success(tenantService.updateMemberRole(userId, tenantId, memberId, requestParam));
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
+    @DeleteMapping("/api/v1/tenants/{tenantId}/members/{memberId}/remove")
+    public Result<Boolean> removeMember(@CurrentUser Long userId,
+                                        @PathVariable Long tenantId,
+                                        @PathVariable Long memberId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        if (memberId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_ID_IS_NULL);
+        }
+        if (userId.equals(memberId)) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_REMOVE_ID_SAME);
+        }
+        return Results.success(tenantService.removeMember(userId, tenantId, memberId));
     }
 }

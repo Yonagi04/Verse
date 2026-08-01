@@ -42,8 +42,7 @@ CREATE TABLE IF NOT EXISTS `t_tenant` (
     `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `del_flag`    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_tenant_id` (`tenant_id`),
-    UNIQUE KEY `uk_owner_personal` (`owner_id`, `type`)
+    UNIQUE KEY `uk_tenant_id` (`tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户表';
 
 -- ============================================

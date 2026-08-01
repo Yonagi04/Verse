@@ -80,4 +80,31 @@ public enum RoleEnum {
             );
         };
     }
+
+    /**
+     * 权限比较, 超级管理员>管理员>成员
+     * @param other 目标角色
+     * @return true 当前角色权限高于目标角色, false 否则
+     */
+    public boolean isNotLowerThan(RoleEnum other) {
+        if (this == SUPER_ADMIN) {
+            return true;
+        } else if (this == ADMIN) {
+            return other != SUPER_ADMIN;
+        } else {
+            return false;
+        }
+    }
+
+    /**
+     * 判断角色是否存在
+     */
+    public static boolean isValidRole(String role) {
+        for (RoleEnum r : RoleEnum.values()) {
+            if (r.name().equals(role)) {
+                return true;
+            }
+        }
+        return false;
+    }
 }

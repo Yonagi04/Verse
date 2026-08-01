@@ -4,6 +4,7 @@ import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -25,7 +26,6 @@ import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.UserTenantService;
-import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBloomFilter;
@@ -314,7 +314,8 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
                 .set(UserDO::getLastActiveTenantId, tenantId);
         int update = userMapper.update(updateWrapper);
         if (update < 1) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_SWITCH_ERROR);
+            log.error("Switch Tenant Error While Update UserDO Table: tenant {}, user {}", tenantId, userId);
+            throw new ServerException(TenantErrorCodeEnum.TENANT_SWITCH_ERROR);
         }
 
         userTenantService.switchTenant(userId, tenantId);
@@ -424,6 +425,120 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         // TODO 通知租户内所有成员，用户进入Verse前端后，通过Header右上角的通知就可以知道租户已经关闭
 
         return Boolean.TRUE;
+    }
+
+    @Override
+    public TenantMembersListRespDTO listTenantMembers(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_CAN_NOT_LIST_MEMBERS);
+        // 检查用户是否在该租户下
+        if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+
+        // 分页查询租户成员列表
+        Page<UserTenantDO> pageResult = userTenantService.page(
+                new Page<>(pageNum, pageSize),
+                Wrappers.lambdaQuery(UserTenantDO.class)
+                        .eq(UserTenantDO::getTenantId, tenantId)
+                        .isNull(UserTenantDO::getLeftAt)
+                        .orderByAsc(UserTenantDO::getJoinedAt));
+
+        // 批量查询成员的用户信息，避免 N+1
+        List<Long> userIds = pageResult.getRecords().stream()
+                .map(UserTenantDO::getUserId)
+                .distinct()
+                .toList();
+        Map<Long, UserDO> userMap = userIds.isEmpty() ? Map.of() : userMapper.selectList(
+                Wrappers.lambdaQuery(UserDO.class).in(UserDO::getUserId, userIds))
+                .stream()
+                .collect(Collectors.toMap(UserDO::getUserId, u -> u));
+
+        List<TenantMembersListRespDTO.TenantMemberInfo> respList = pageResult.getRecords().stream()
+                .map(ut -> {
+                    TenantMembersListRespDTO.TenantMemberInfo memberInfo = new TenantMembersListRespDTO.TenantMemberInfo();
+                    memberInfo.setUserId(ut.getUserId());
+                    memberInfo.setRole(ut.getRole());
+                    memberInfo.setJoinedAt(ut.getJoinedAt());
+                    UserDO userDO = userMap.get(ut.getUserId());
+                    if (userDO != null) {
+                        memberInfo.setUsername(userDO.getUsername());
+                        memberInfo.setNickname(userDO.getNickname());
+                    }
+                    return memberInfo;
+                })
+                .toList();
+
+        return new TenantMembersListRespDTO(respList, pageResult.getTotal(), pageResult.getPages(), pageNum, pageSize);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean updateMemberRole(Long userId, Long tenantId, Long memberId, TenantMemberRoleUpdateReqDTO requestParam) {
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
+        // 检查用户是否在该租户下
+        Boolean userJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!userJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        // 检查成员是否在该租户下
+        Boolean memberJoinedTenant = userTenantService.isUserJoinedTenant(memberId, tenantId);
+        if (!memberJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_NOT_JOINED);
+        }
+        // 更新成员角色
+        // 原则1：更新的最终角色不能高于操作人的角色，例如操作人是ADMIN，不能把成员更新为SUPER_ADMIN
+        // 原则2：不能更新比自己角色高或者相等的成员，例如操作人是ADMIN，不能更新SUPER_ADMIN和ADMIN的角色
+        String operatorRole = userTenantService.getRoleByUserIdAndTenantId(userId, tenantId);
+        String memberRole = userTenantService.getRoleByUserIdAndTenantId(memberId, tenantId);
+        if (RoleEnum.valueOf(memberRole).isNotLowerThan(RoleEnum.valueOf(operatorRole))) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
+        }
+        String targetRole = requestParam.getNewRole();
+        if (RoleEnum.valueOf(targetRole).isNotLowerThan(RoleEnum.valueOf(operatorRole))) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
+        }
+        userTenantService.updateUserRole(memberId, tenantId, memberRole, targetRole);
+
+        return Boolean.TRUE;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean removeMember(Long userId, Long tenantId, Long memberId) {
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
+        // 检查用户是否在该租户下
+        Boolean userJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!userJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        // 检查成员是否在该租户下
+        Boolean memberJoinedTenant = userTenantService.isUserJoinedTenant(memberId, tenantId);
+        if (!memberJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_NOT_JOINED);
+        }
+        // 原则：不能移除比自己角色高或者相等的成员，例如操作人是ADMIN，不能移除SUPER_ADMIN和ADMIN的成员
+        String operatorRole = userTenantService.getRoleByUserIdAndTenantId(userId, tenantId);
+        String memberRole = userTenantService.getRoleByUserIdAndTenantId(memberId, tenantId);
+        if (RoleEnum.valueOf(memberRole).isNotLowerThan(RoleEnum.valueOf(operatorRole))) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
+        }
+        userTenantService.removeUser(memberId, tenantId);
+
+        return Boolean.TRUE;
+    }
+
+    private TenantDO validateTenantTeamActive(Long tenantId, TenantErrorCodeEnum notTeamError) {
+        TenantDO tenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
+                .eq(TenantDO::getTenantId, tenantId)
+                .eq(TenantDO::getStatus, 1)
+                .eq(TenantDO::getDelFlag, 0));
+        if (tenantDO == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        }
+        if (!"TEAM".equals(tenantDO.getType())) {
+            throw new ClientException(notTeamError);
+        }
+        return tenantDO;
     }
 
     private String generateInviteCode() {

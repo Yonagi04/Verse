@@ -131,20 +131,55 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
     }
 
     @Override
-    public Boolean switchTenant(Long userId, Long tenantId) {
+    public void switchTenant(Long userId, Long tenantId) {
         LambdaUpdateWrapper<UserTenantDO> updateWrapper = Wrappers.lambdaUpdate(UserTenantDO.class)
                 .eq(UserTenantDO::getUserId, userId)
                 .eq(UserTenantDO::getTenantId, tenantId)
-                .eq(UserTenantDO::getLeftAt, null)
+                .isNull(UserTenantDO::getLeftAt)
                 .set(UserTenantDO::getLastAccessedAt, new Date());
         int update = baseMapper.update(updateWrapper);
         if (update < 1) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_SWITCH_ERROR);
+            log.error("Failed to switch tenant for userId: {}, tenantId: {} in User Tenant Table", userId, tenantId);
+            throw new ServerException(TenantErrorCodeEnum.TENANT_SWITCH_ERROR);
         }
 
         // 更新完成后删除缓存
         String userTenantCacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
         stringRedisTemplate.delete(userTenantCacheKey);
-        return Boolean.TRUE;
+    }
+
+    @Override
+    public void updateUserRole(Long userId, Long tenantId, String originRole, String targetRole) {
+        LambdaUpdateWrapper<UserTenantDO> updateWrapper = Wrappers.lambdaUpdate(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .eq(UserTenantDO::getRole, originRole)
+                .isNull(UserTenantDO::getLeftAt)
+                .set(UserTenantDO::getRole, targetRole);
+        int update = baseMapper.update(updateWrapper);
+        if (update < 1) {
+            throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_ROLE_UPDATE_FAILED);
+        }
+
+        // 更新完成后删除缓存
+        String userTenantCacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
+        stringRedisTemplate.delete(userTenantCacheKey);
+    }
+
+    @Override
+    public void removeUser(Long userId, Long tenantId) {
+        LambdaUpdateWrapper<UserTenantDO> updateWrapper = Wrappers.lambdaUpdate(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .isNull(UserTenantDO::getLeftAt)
+                .set(UserTenantDO::getLeftAt, new Date());
+        int update = baseMapper.update(updateWrapper);
+        if (update < 1) {
+            throw new ServerException(UserTenantErrorCodeEnum.USER_REMOVE_FAILED);
+        }
+
+        // 删除缓存
+        String cacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
+        stringRedisTemplate.delete(cacheKey);
     }
 }
