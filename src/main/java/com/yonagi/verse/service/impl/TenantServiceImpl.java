@@ -13,6 +13,7 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
+import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.TenantDO;
@@ -182,9 +183,11 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     }
 
     @Override
-    public TenantInfoRespDTO getTenantInfo(Long tenantId) {
+    public TenantInfoRespDTO getTenantInfo(Long userId, Long tenantId) {
         if (tenantId == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        } else if (userId == null) {
+            throw new ClientException(TenantErrorCodeEnum.USER_ID_IS_NULL);
         }
         String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
         String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
@@ -303,7 +306,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
 
-        TenantInfoRespDTO respDTO = this.getTenantInfo(tenantId);
+        TenantInfoRespDTO respDTO = this.getTenantInfo(userId, tenantId);
         if (respDTO == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
         }

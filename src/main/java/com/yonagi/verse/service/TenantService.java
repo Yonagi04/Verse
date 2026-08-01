@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
-import jakarta.validation.Valid;
 
 import java.util.List;
 
@@ -25,7 +24,7 @@ public interface TenantService extends IService<TenantDO> {
 
     Boolean updateTenant(Long userId, Long tenantId, TenantUpdateReqDTO requestParam);
 
-    TenantInfoRespDTO getTenantInfo(Long tenantId);
+    TenantInfoRespDTO getTenantInfo(Long userId, Long tenantId);
 
     TenantInviteRespDTO inviteUser(Long userId, Long tenantId, TenantInviteReqDTO requestParam);
 

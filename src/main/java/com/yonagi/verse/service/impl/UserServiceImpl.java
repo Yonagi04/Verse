@@ -246,7 +246,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         resp.setExpiresAt(expiresAt);
 
         if (userDO.getLastActiveTenantId() != null) {
-            TenantInfoRespDTO tenantInfoResp = tenantService.getTenantInfo(userDO.getLastActiveTenantId());
+            TenantInfoRespDTO tenantInfoResp = tenantService.getTenantInfo(userDO.getUserId(), userDO.getLastActiveTenantId());
             if (tenantInfoResp != null) {
                 String role = userTenantService.getRoleByUserIdAndTenantId(userDO.getUserId(), tenantInfoResp.getTenantId());
                 resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()

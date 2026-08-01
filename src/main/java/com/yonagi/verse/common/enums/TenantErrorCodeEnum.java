@@ -34,7 +34,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_MEMBER_NOT_JOINED("B000315", "该成员未加入租户"),
     TENANT_MEMBER_REMOVE_ID_SAME("B000316", "不能移除自己"),
     TENANT_MEMBER_CAN_NOT_REMOVE("B000317", "该成员不能被移除"),
-    TENANT_MEMBER_ROLE_ERROR("B000318", "角色不正确"),;
+    TENANT_MEMBER_ROLE_ERROR("B000318", "角色不正确"),
+    USER_ID_IS_NULL("B000319", "用户ID不能为空");
 
     private final String code;
     private final String message;

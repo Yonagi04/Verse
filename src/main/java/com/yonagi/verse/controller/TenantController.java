@@ -48,6 +48,15 @@ public class TenantController {
         return Results.success(tenantService.updateTenant(userId, tenantId, requestParam));
     }
 
+    @GetMapping("/api/v1/tenants/{tenantId}/info")
+    public Result<TenantInfoRespDTO> getTenantInfo(@CurrentUser Long userId,
+                                  @PathVariable Long tenantId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(tenantService.getTenantInfo(userId, tenantId));
+    }
+
     @PreAuthorize("hasAnyRole('SUPER_ADMIN')")
     @PostMapping("/api/v1/tenants/{tenantId}/disable/prepare")
     public Result<TenantClosePrepareRespDTO> prePareCloseTenant(@CurrentUser Long userId,
