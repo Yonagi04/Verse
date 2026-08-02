@@ -30,6 +30,7 @@ import com.yonagi.verse.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBloomFilter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -87,6 +88,9 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> inviteCodeFilter;
     private final JwtUtil jwtUtil;
+
+    @Value("${verse.tenant.max-invite-code-per-day:10}")
+    private Integer maxInviteCodePerDay;
 
     @Override
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
@@ -239,6 +243,15 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     @Override
     @Transactional(rollbackFor = Exception.class)
     public TenantInviteRespDTO inviteUser(Long userId, Long tenantId, TenantInviteReqDTO requestParam) {
+        // 查询今天已经生成的邀请码数量，以自然日统计
+        LambdaQueryWrapper<TenantInviteDO> queryWrapper = Wrappers.lambdaQuery(TenantInviteDO.class)
+                .eq(TenantInviteDO::getTenantId, tenantId)
+                .ge(TenantInviteDO::getCreateTime, getStartOfToday());
+        Long count = tenantInviteMapper.selectCount(queryWrapper);
+        if (count >= maxInviteCodePerDay) {
+            throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_GENE_PER_DAY_LIMIT);
+        }
+
         // 权限控制由 PreAuthorize 注解来管理，服务层不关心
         // 生成一个8位大写字母+数字组合的邀请码
         String inviteCode = generateInviteCode();
@@ -641,5 +654,10 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             sb.append(CHARS.charAt(RANDOM.nextInt(CHARS.length())));
         }
         return sb.toString();
+    }
+
+    private Date getStartOfToday() {
+        Date now = new Date();
+        return new Date(now.getYear(), now.getMonth(), now.getDate(), 0, 0, 0);
     }
 }

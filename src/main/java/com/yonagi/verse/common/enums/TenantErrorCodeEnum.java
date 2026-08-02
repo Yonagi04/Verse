@@ -37,7 +37,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_MEMBER_CAN_NOT_REMOVE("B000317", "该成员不能被移除"),
     TENANT_MEMBER_ROLE_ERROR("B000318", "角色不正确"),
     USER_ID_IS_NULL("B000319", "用户ID不能为空"),
-    PERSONAL_TENANT_CAN_NOT_LEAVE("B000320", "不能离开个人租户"),;
+    PERSONAL_TENANT_CAN_NOT_LEAVE("B000320", "不能离开个人租户"),
+    INVITE_CODE_GENE_PER_DAY_LIMIT("B000321", "已达到邀请码的单日生成上限，请明天再试或使用已有的邀请码"),;
 
     private final String code;
     private final String message;
