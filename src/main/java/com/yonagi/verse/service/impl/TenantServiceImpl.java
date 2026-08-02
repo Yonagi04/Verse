@@ -13,7 +13,6 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
-import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.TenantDO;
@@ -58,7 +57,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String CLOSE_TENANT_WARNING_DESCRIPTION = "关闭租户后将导致该租户下的所有数据无法访问且无法恢复，请谨慎操作。";
-    private static final java.util.Map<String, String> ROLE_DISPLAY_MAP = Map.of(
+    private static final Map<String, String> ROLE_DISPLAY_MAP = Map.of(
             "SUPER_ADMIN", "超级管理员",
             "ADMIN", "管理员",
             "MEMBER", "成员"
@@ -70,6 +69,15 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             "当前租户 API Key 将立即失效",
             "已创建的 LLM 服务不可访问",
             "无法查看该租户下的历史审计记录"
+    );
+
+    private static final String LEAVE_TENANT_WARNING_DESCRIPTION = "离开租户后将导致该租户下的所有数据无法访问，请谨慎操作。";
+    private static final List<String> LEAVE_TENANT_WARNING_TIPS = List.of(
+            "离开租户后将无法访问该租户下的所有数据",
+            "离开租户后将无法访问该租户下的所有 LLM 服务",
+            "离开租户后将无法访问该租户下的所有历史审计记录",
+            "离开租户后将无法访问该租户下的所有 API Key",
+            "您可以重新加入该租户，但需要管理员重新邀请您"
     );
 
     private final UserTenantService userTenantService;
@@ -314,6 +322,34 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             log.error("Join Tenant Error: tenant {}, user {}", tenantDO.getTenantId(), userId);
             throw new ClientException(TenantErrorCodeEnum.TENANT_JOIN_ERROR);
         }
+        return Boolean.TRUE;
+    }
+
+    @Override
+    public TenantLeavePrepareRespDTO prepareLeaveTenant(Long userId, Long tenantId) {
+        // 检查租户是否存在and活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.PERSONAL_TENANT_CAN_NOT_LEAVE);
+
+        // 查询用户是否在该租户下
+        Boolean isUserJoinTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isUserJoinTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        return new TenantLeavePrepareRespDTO(LEAVE_TENANT_WARNING_DESCRIPTION, LEAVE_TENANT_WARNING_TIPS);
+    }
+
+    @Override
+    public Boolean leaveTenant(Long userId, Long tenantId) {
+        // 检查租户是否存在and活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.PERSONAL_TENANT_CAN_NOT_LEAVE);
+
+        // 查询用户是否在该租户下
+        Boolean isUserJoinTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isUserJoinTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        // 删除用户-租户关系
+        userTenantService.removeUser(userId, tenantId);
         return Boolean.TRUE;
     }
 

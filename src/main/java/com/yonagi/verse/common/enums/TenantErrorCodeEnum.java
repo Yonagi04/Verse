@@ -15,6 +15,7 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_UPDATE_ERROR("A000303", "租户更新失败"),
     TENANT_SWITCH_ERROR("A000304", "切换租户失败"),
     TENANT_CLOSE_ERROR("A000305", "租户关闭失败"),
+    TENANT_LEAVE_ERROR("A000306", "离开租户失败"),
 
     TENANT_NOT_EXIST("B000300", "租户不存在"),
     TENANT_ID_IS_NULL("B000301", "租户ID不能为空"),
@@ -35,7 +36,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_MEMBER_REMOVE_ID_SAME("B000316", "不能移除自己"),
     TENANT_MEMBER_CAN_NOT_REMOVE("B000317", "该成员不能被移除"),
     TENANT_MEMBER_ROLE_ERROR("B000318", "角色不正确"),
-    USER_ID_IS_NULL("B000319", "用户ID不能为空");
+    USER_ID_IS_NULL("B000319", "用户ID不能为空"),
+    PERSONAL_TENANT_CAN_NOT_LEAVE("B000320", "不能离开个人租户"),;
 
     private final String code;
     private final String message;

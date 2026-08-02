@@ -92,6 +92,22 @@ public class TenantController {
         return Results.success(tenantService.joinTenant(userId, requestParam));
     }
 
+    @PostMapping("/api/v1/tenants/{tenantId}/leave/prepare")
+    public Result<TenantLeavePrepareRespDTO> prepareLeaveTenant(@CurrentUser Long userId, @PathVariable Long tenantId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(tenantService.prepareLeaveTenant(userId, tenantId));
+    }
+
+    @PostMapping("/api/v1/tenants/{tenantId}/leave/confirm")
+    public Result<Boolean> leaveTenant(@CurrentUser Long userId, @PathVariable Long tenantId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(tenantService.leaveTenant(userId, tenantId));
+    }
+
     @PostMapping("/api/v1/tenants/{tenantId}/switch")
     public Result<TenantSwitchRespDTO> switchTenant(@CurrentUser Long userId,
                                                     @PathVariable Long tenantId) {
