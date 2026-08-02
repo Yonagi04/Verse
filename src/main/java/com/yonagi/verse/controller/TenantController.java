@@ -162,4 +162,42 @@ public class TenantController {
         }
         return Results.success(tenantService.removeMember(userId, tenantId, memberId));
     }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
+    @GetMapping("/api/v1/tenants/{tenantId}/invites")
+    public Result<TenantInviteListRespDTO> listTenantInviteCodes(@CurrentUser Long userId,
+                                                                       @PathVariable Long tenantId,
+                                                                       @RequestParam @Valid Integer pageNum,
+                                                                       @RequestParam @Valid Integer pageSize) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(tenantService.listTenantInviteCodes(userId, tenantId, pageNum, pageSize));
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
+    @PostMapping("/api/v1/tenants/{tenantId}/invites/{inviteCodeId}/deactivate")
+    public Result<Boolean> deactivateInviteCode(@CurrentUser Long userId,
+                                              @PathVariable Long tenantId,
+                                              @PathVariable Long inviteCodeId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        } else if (inviteCodeId == null) {
+            throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_IS_NULL);
+        }
+        return Results.success(tenantService.deactivateInviteCode(userId, tenantId, inviteCodeId));
+    }
+
+    @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
+    @PostMapping("/api/v1/tenants/{tenantId}/invites/{inviteCodeId}/activate")
+    public Result<Boolean> activateInviteCode(@CurrentUser Long userId,
+                                              @PathVariable Long tenantId,
+                                              @PathVariable Long inviteCodeId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        } else if (inviteCodeId == null) {
+            throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_IS_NULL);
+        }
+        return Results.success(tenantService.activateInviteCode(userId, tenantId, inviteCodeId));
+    }
 }

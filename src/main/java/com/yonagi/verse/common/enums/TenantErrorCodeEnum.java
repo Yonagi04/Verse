@@ -16,6 +16,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_SWITCH_ERROR("A000304", "切换租户失败"),
     TENANT_CLOSE_ERROR("A000305", "租户关闭失败"),
     TENANT_LEAVE_ERROR("A000306", "离开租户失败"),
+    INVITE_CODE_DEACTIVATE_ERROR("A000307", "邀请码禁用失败"),
+    INVITE_CODE_ACTIVATE_ERROR("A000308", "邀请码启用失败"),
 
     TENANT_NOT_EXIST("B000300", "租户不存在"),
     TENANT_ID_IS_NULL("B000301", "租户ID不能为空"),
@@ -38,7 +40,12 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_MEMBER_ROLE_ERROR("B000318", "角色不正确"),
     USER_ID_IS_NULL("B000319", "用户ID不能为空"),
     PERSONAL_TENANT_CAN_NOT_LEAVE("B000320", "不能离开个人租户"),
-    INVITE_CODE_GENE_PER_DAY_LIMIT("B000321", "已达到邀请码的单日生成上限，请明天再试或使用已有的邀请码"),;
+    INVITE_CODE_GENE_PER_DAY_LIMIT("B000321", "已达到邀请码的单日生成上限，请明天再试或使用已有的邀请码"),
+    INVITE_CODE_CAN_NOT_GENE("B000322", "该租户不能生成邀请码"),
+    INVITE_CODE_IS_NULL("B000323", "邀请码不能为空"),
+    INVITE_CODE_NOT_FOUND("B000324", "邀请码不存在"),
+    INVITE_CODE_CAN_NOT_DEACTIVATE("B000325", "该邀请码不能被禁用"),
+    INVITE_CODE_CAN_NOT_ACTIVATE("B000326", "该邀请码不能被启用"),;
 
     private final String code;
     private final String message;

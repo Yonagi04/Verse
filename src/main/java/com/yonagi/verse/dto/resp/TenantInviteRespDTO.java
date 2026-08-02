@@ -16,5 +16,7 @@ public class TenantInviteRespDTO {
 
     private String inviteCode;
 
+    private String inviteUrl;
+
     private Date expiresAt;
 }

@@ -36,6 +36,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -91,6 +93,9 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
 
     @Value("${verse.tenant.max-invite-code-per-day:10}")
     private Integer maxInviteCodePerDay;
+
+    @Value("${verse.frontend-baseurl}")
+    private String frontendBaseUrl;
 
     @Override
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
@@ -252,6 +257,14 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_GENE_PER_DAY_LIMIT);
         }
 
+        // 查询当前租户是否存在且活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.INVITE_CODE_CAN_NOT_GENE);
+        // 查询用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+
         // 权限控制由 PreAuthorize 注解来管理，服务层不关心
         // 生成一个8位大写字母+数字组合的邀请码
         String inviteCode = generateInviteCode();
@@ -288,6 +301,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
 
         TenantInviteRespDTO resp = new TenantInviteRespDTO();
         resp.setInviteCode(inviteCode);
+        resp.setInviteUrl(frontendBaseUrl + "/join/" + inviteCode);
         resp.setExpiresAt(requestParam.getExpireAt());
         return resp;
     }
@@ -634,6 +648,119 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         return Boolean.TRUE;
     }
 
+    @Override
+    public TenantInviteListRespDTO listTenantInviteCodes(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
+        // 检查租户是否存在and活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        // 检查用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+
+        // 查询租户邀请码列表，按照创建时间倒序排序，分页查询
+        // 查询生效的所有邀请码，只要不过期的都能查到
+        Date now = new Date();
+        Page<TenantInviteListRespDTO.TenantInviteInfo> page = tenantInviteMapper.selectPageByTenantId(new Page<>(pageNum, pageSize), tenantId, now);
+        List<TenantInviteListRespDTO.TenantInviteInfo> records = page.getRecords();
+        if (!records.isEmpty()) {
+            // 设置inviteUrl字段
+            records.forEach(record -> {
+                String inviteUrl = frontendBaseUrl + "/join/" + record.getCode();
+                record.setInviteUrl(inviteUrl);
+            });
+        }
+        TenantInviteListRespDTO resp = new TenantInviteListRespDTO();
+        resp.setInviteCodes(records);
+        resp.setTotal(page.getTotal());
+        resp.setTotalPages(page.getPages());
+        resp.setPage(pageNum);
+        resp.setPageSize(pageSize);
+
+        return resp;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean deactivateInviteCode(Long userId, Long tenantId, Long inviteCodeId) {
+        // 检查租户是否存在and活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        // 检查用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+
+        // 查询邀请码是否存在且属于该租户，且该邀请码是活跃的
+        LambdaQueryWrapper<TenantInviteDO> queryWrapper = Wrappers.lambdaQuery(TenantInviteDO.class)
+                .eq(TenantInviteDO::getId, inviteCodeId)
+                .eq(TenantInviteDO::getTenantId, tenantId);
+        TenantInviteDO inviteDO = tenantInviteMapper.selectOne(queryWrapper);
+        if (inviteDO == null) {
+            throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_NOT_FOUND);
+        } else if (inviteDO.getIsActive() == 0) {
+            throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_CAN_NOT_DEACTIVATE);
+        } else if (inviteDO.getExpiresAt() != null && inviteDO.getExpiresAt().before(new Date())) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
+        }
+
+        // 将邀请码设置为不活跃
+        LambdaUpdateWrapper<TenantInviteDO> updateWrapper = Wrappers.lambdaUpdate(TenantInviteDO.class)
+                .eq(TenantInviteDO::getId, inviteCodeId)
+                .eq(TenantInviteDO::getTenantId, tenantId)
+                .set(TenantInviteDO::getIsActive, 0);
+        int update = tenantInviteMapper.update(updateWrapper);
+        if (update < 1) {
+            log.error("Deactivate Invite Code Error: tenant {}, inviteCodeId {}", tenantId, inviteCodeId);
+            throw new ServerException(TenantErrorCodeEnum.INVITE_CODE_DEACTIVATE_ERROR);
+        }
+        // 删除Redis缓存
+        String cacheKey = RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteDO.getCode();
+        stringRedisTemplate.delete(cacheKey);
+        return Boolean.TRUE;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean activateInviteCode(Long userId, Long tenantId, Long inviteCodeId) {
+        // 检查租户是否存在and活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        // 检查用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+
+        // 查询邀请码是否存在且属于该租户，且该邀请码是非活跃的
+        LambdaQueryWrapper<TenantInviteDO> queryWrapper = Wrappers.lambdaQuery(TenantInviteDO.class)
+                .eq(TenantInviteDO::getId, inviteCodeId)
+                .eq(TenantInviteDO::getTenantId, tenantId);
+        TenantInviteDO inviteDO = tenantInviteMapper.selectOne(queryWrapper);
+        if (inviteDO == null) {
+            throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_NOT_FOUND);
+        } else if (inviteDO.getIsActive() == 1) {
+            throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_CAN_NOT_ACTIVATE);
+        } else if (inviteDO.getExpiresAt() != null && inviteDO.getExpiresAt().before(new Date())) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
+        }
+
+        // 将邀请码设置为活跃
+        LambdaUpdateWrapper<TenantInviteDO> updateWrapper = Wrappers.lambdaUpdate(TenantInviteDO.class)
+                .eq(TenantInviteDO::getId, inviteCodeId)
+                .eq(TenantInviteDO::getTenantId, tenantId)
+                .set(TenantInviteDO::getIsActive, 1);
+        int update = tenantInviteMapper.update(updateWrapper);
+        if (update < 1) {
+            log.error("Activate Invite Code Error: tenant {}, inviteCodeId {}", tenantId, inviteCodeId);
+            throw new ServerException(TenantErrorCodeEnum.INVITE_CODE_ACTIVATE_ERROR);
+        }
+        // 重新写回到缓存
+        inviteDO.setIsActive(1);
+        String cacheKey = RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteDO.getCode();
+        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(inviteDO), 15, TimeUnit.MINUTES);
+        return Boolean.TRUE;
+    }
+
     private TenantDO validateTenantTeamActive(Long tenantId, TenantErrorCodeEnum notTeamError) {
         TenantDO tenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
                 .eq(TenantDO::getTenantId, tenantId)
@@ -657,7 +784,6 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     }
 
     private Date getStartOfToday() {
-        Date now = new Date();
-        return new Date(now.getYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+        return Date.from(LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant());
     }
 }

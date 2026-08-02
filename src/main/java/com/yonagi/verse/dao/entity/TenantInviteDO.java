@@ -46,6 +46,11 @@ public class TenantInviteDO {
     private Integer isActive;
 
     /**
+     * 通过此邀请码/链接加入的人数
+     */
+    private Integer usageCount;
+
+    /**
      * 创建时间
      */
     private Date createTime;

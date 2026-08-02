@@ -47,4 +47,10 @@ public interface TenantService extends IService<TenantDO> {
     Boolean updateMemberRole(Long userId, Long tenantId, Long memberId, TenantMemberRoleUpdateReqDTO requestParam);
 
     Boolean removeMember(Long userId, Long tenantId, Long memberId);
+
+    TenantInviteListRespDTO listTenantInviteCodes(Long userId, Long tenantId, Integer pageNum, Integer pageSize);
+
+    Boolean deactivateInviteCode(Long userId, Long tenantId, Long inviteCodeId);
+
+    Boolean activateInviteCode(Long userId, Long tenantId, Long inviteCodeId);
 }

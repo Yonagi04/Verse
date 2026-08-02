@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS `t_tenant` (
     `owner_id`    BIGINT       NOT NULL COMMENT '创建者用户ID',
     `description` VARCHAR(255) DEFAULT NULL COMMENT '租户描述',
     `status`      TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=停用, 1=正常',
+    `join_approval_mode` TINYINT NOT NULL DEFAULT 0 COMMENT '加入审批模式：0=直接加入, 1=管理员审批；TODO 2=多级审批',
     `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `del_flag`    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
@@ -71,6 +72,7 @@ CREATE TABLE IF NOT EXISTS `t_tenant_invite` (
     `created_by`  BIGINT      NOT NULL COMMENT '创建者用户ID',
     `expires_at`  DATETIME    DEFAULT NULL COMMENT '过期时间',
     `is_active`   TINYINT     NOT NULL DEFAULT 1 COMMENT '是否有效：0=已失效, 1=有效',
+    `usage_count` INT         NOT NULL DEFAULT 0 COMMENT '通过此邀请码/链接加入的人数',
     `create_time` DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_code` (`code`),
@@ -177,3 +179,22 @@ CREATE TABLE IF NOT EXISTS `t_notification_recipient` (
 -- ============================================
 -- TODO: 定时任务清理超过3个月的通知记录
 -- ============================================
+
+-- ============================================
+-- 10. 加入租户审批表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_tenant_join_request` (
+    `id`               BIGINT       NOT NULL AUTO_INCREMENT COMMENT '自增主键',
+    `request_id`       BIGINT       NOT NULL COMMENT '申请唯一标识（雪花 ID）',
+    `tenant_id`        BIGINT       NOT NULL COMMENT '目标租户 ID（业务 ID）',
+    `user_id`          BIGINT       NOT NULL COMMENT '申请人用户 ID（业务 ID）',
+    `invite_id`        BIGINT       NOT NULL COMMENT 'FK → t_tenant_invite.id',
+    `status`           VARCHAR(20)  NOT NULL DEFAULT 'PENDING' COMMENT '状态：PENDING / APPROVED / REJECTED',
+    `reviewed_by`      BIGINT       DEFAULT NULL COMMENT '审批人用户 ID',
+    `review_comment`   VARCHAR(255) DEFAULT NULL COMMENT '审批备注',
+    `requested_at`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '申请时间',
+    `reviewed_at`      DATETIME     DEFAULT NULL COMMENT '审批时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_request_id` (`request_id`),
+    KEY `idx_tenant_status` (`tenant_id`, `status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户加入审批表';

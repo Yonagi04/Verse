@@ -47,6 +47,11 @@ public class TenantDO extends BaseDO {
     private String description;
 
     /**
+     * 加入审批模式：0=直接加入, 1=管理员审批；TODO 2=多级审批
+     */
+    private Integer joinApprovalMode;
+
+    /**
      * 状态：0=停用, 1=正常
      */
     private Integer status;
