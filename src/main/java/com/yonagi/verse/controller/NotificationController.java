@@ -11,10 +11,7 @@ import com.yonagi.verse.dto.resp.NotificationUnreadCountRespDTO;
 import com.yonagi.verse.service.NotificationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 /**
  * @author Yonagi
@@ -31,8 +28,13 @@ public class NotificationController {
     private final NotificationService notificationService;
 
     @GetMapping
-    public Result<NotificationListRespDTO> getNotificationList(@CurrentUser Long userId) {
-        return Results.success(notificationService.getNotificationList(userId));
+    public Result<NotificationListRespDTO> getNotificationList(@CurrentUser Long userId,
+                                                               @RequestParam @Valid Integer pageNum,
+                                                               @RequestParam Integer pageSize) {
+        if (pageSize == null) {
+            pageSize = 10;
+        }
+        return Results.success(notificationService.getNotificationList(userId, pageNum, pageSize));
     }
 
     @GetMapping("/{notificationId}")
@@ -46,5 +48,10 @@ public class NotificationController {
     @GetMapping("/unread-count")
     public Result<NotificationUnreadCountRespDTO> getUnreadNotificationCount(@CurrentUser Long userId) {
         return Results.success(notificationService.getUnreadNotificationCount(userId));
+    }
+
+    @PostMapping("/read-all")
+    public Result<Integer> readAllUnreadNotifications(@CurrentUser Long userId) {
+        return Results.success(notificationService.readAllUnreadNotifications(userId));
     }
 }

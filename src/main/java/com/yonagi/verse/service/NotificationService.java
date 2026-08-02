@@ -17,11 +17,13 @@ import java.util.List;
  */
 public interface NotificationService extends IService<NotificationDO> {
 
-    NotificationListRespDTO getNotificationList(Long userId);
+    NotificationListRespDTO getNotificationList(Long userId, Integer pageNum, Integer pageSize);
 
     NotificationInfoRespDTO getNotification(Long userId, Long notificationId);
 
     NotificationUnreadCountRespDTO getUnreadNotificationCount(Long userId);
+
+    Integer readAllUnreadNotifications(Long userId);
 
     /**
      * 创建通知并推送给指定用户。
