@@ -139,3 +139,41 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     KEY `idx_user_tenant_time` (`user_id`, `tenant_id`, `create_time`),
     KEY `idx_tenant_time` (`tenant_id`, `create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token消耗记录表';
+
+-- ============================================
+-- 8. 通知记录表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_notification` (
+    `id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `notification_id` BIGINT       NOT NULL COMMENT '通知业务ID（雪花）',
+    `tenant_id`       BIGINT       NOT NULL COMMENT '产生通知的租户ID',
+    `type`            VARCHAR(30)  NOT NULL COMMENT '通知类型：SYSTEM / ANNOUNCEMENT',
+    `severity`        VARCHAR(10)  NOT NULL COMMENT '严重程度：INFO / WARNING / CRITICAL',
+    `title`           VARCHAR(200) NOT NULL COMMENT '通知标题',
+    `content`         TEXT         NOT NULL COMMENT '通知正文',
+    `sender_id`       BIGINT       DEFAULT NULL COMMENT '发送者用户ID（系统通知为NULL）',
+    `create_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    `del_flag`        TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除（0=正常, 1=已删除）',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_notification_id` (`notification_id`),
+    KEY `idx_tenant_time` (`tenant_id`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通知表';
+
+-- ============================================
+-- 9. 通知接收人表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_notification_recipient` (
+    `id`              BIGINT    NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `user_id`         BIGINT    NOT NULL COMMENT '接收用户ID',
+    `notification_id` BIGINT    NOT NULL COMMENT '通知业务ID',
+    `is_read`         TINYINT   NOT NULL DEFAULT 0 COMMENT '已读状态：0=未读, 1=已读',
+    `read_time`       DATETIME  DEFAULT NULL COMMENT '读取时间',
+    `create_time`     DATETIME  NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_notification` (`user_id`, `notification_id`),
+    KEY `idx_user_read_time` (`user_id`, `is_read`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通知接收人表';
+-- ============================================
+-- TODO: 定时任务清理超过3个月的通知记录
+-- ============================================

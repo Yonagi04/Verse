@@ -27,6 +27,7 @@ import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.UserTenantService;
+import com.yonagi.verse.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RBloomFilter;
@@ -57,6 +58,12 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final String CLOSE_TENANT_WARNING_DESCRIPTION = "关闭租户后将导致该租户下的所有数据无法访问且无法恢复，请谨慎操作。";
+    private static final java.util.Map<String, String> ROLE_DISPLAY_MAP = Map.of(
+            "SUPER_ADMIN", "超级管理员",
+            "ADMIN", "管理员",
+            "MEMBER", "成员"
+    );
+
     private static final List<String> CLOSE_TENANT_WARNING_TIPS = List.of(
             "所有成员将无法进入该租户",
             "该租户下的所有数据将无法访问且无法恢复",
@@ -66,6 +73,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     );
 
     private final UserTenantService userTenantService;
+    private final NotificationService notificationService;
     private final TenantInviteMapper tenantInviteMapper;
     private final UserMapper userMapper;
     private final StringRedisTemplate stringRedisTemplate;
@@ -436,7 +444,19 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         // 删除租户信息缓存
         String tenantCacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
         stringRedisTemplate.delete(tenantCacheKey);
-        // TODO 通知租户内所有成员，用户进入Verse前端后，通过Header右上角的通知就可以知道租户已经关闭
+
+        // 通知租户内所有成员
+        try {
+            List<Long> recipientIds = userTenants.stream()
+                    .map(UserTenantDO::getUserId).toList();
+            notificationService.createAndPush(
+                    tenantId, "SYSTEM", "CRITICAL",
+                    "租户已停用",
+                    "您所在的租户「" + tenantDO.getName() + "」已被管理员停用",
+                    null, recipientIds);
+        } catch (Exception e) {
+            log.error("[notification] 租户停用通知推送失败: tenantId={}", tenantId, e);
+        }
 
         return Boolean.TRUE;
     }
@@ -488,7 +508,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Boolean updateMemberRole(Long userId, Long tenantId, Long memberId, TenantMemberRoleUpdateReqDTO requestParam) {
-        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
+        TenantDO tenantDO = validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
         // 检查用户是否在该租户下
         Boolean userJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
         if (!userJoinedTenant) {
@@ -513,13 +533,26 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         }
         userTenantService.updateUserRole(memberId, tenantId, memberRole, targetRole);
 
+        // 通知被变更者
+        try {
+            String oldRoleName = ROLE_DISPLAY_MAP.getOrDefault(memberRole, memberRole);
+            String newRoleName = ROLE_DISPLAY_MAP.getOrDefault(targetRole, targetRole);
+            notificationService.createAndPush(
+                    tenantId, "SYSTEM", "INFO",
+                    "角色已变更",
+                    "您在租户「" + tenantDO.getName() + "」中的角色已被管理员从" + oldRoleName + "变更为" + newRoleName,
+                    null, List.of(memberId));
+        } catch (Exception e) {
+            log.error("[notification] 角色变更通知推送失败: tenantId={}, memberId={}", tenantId, memberId, e);
+        }
+
         return Boolean.TRUE;
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Boolean removeMember(Long userId, Long tenantId, Long memberId) {
-        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
+        TenantDO tenantDO = validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
         // 检查用户是否在该租户下
         Boolean userJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
         if (!userJoinedTenant) {
@@ -537,6 +570,17 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
         }
         userTenantService.removeUser(memberId, tenantId);
+
+        // 通知被移除者
+        try {
+            notificationService.createAndPush(
+                    tenantId, "SYSTEM", "WARNING",
+                    "已被移出租户",
+                    "您已被管理员移出租户「" + tenantDO.getName() + "」",
+                    null, List.of(memberId));
+        } catch (Exception e) {
+            log.error("[notification] 移除成员通知推送失败: tenantId={}, memberId={}", tenantId, memberId, e);
+        }
 
         return Boolean.TRUE;
     }
