@@ -29,4 +29,6 @@ public interface UserTenantService extends IService<UserTenantDO> {
     void updateUserRole(Long userId, Long tenantId, String originRole, String targetRole);
 
     void removeUser(Long userId, Long tenantId);
+
+    List<UserTenantDO> getTenantAdmins(Long tenantId);
 }

@@ -13,18 +13,18 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
+import com.yonagi.verse.common.enums.TenantJoinRequestStatusEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
-import com.yonagi.verse.dao.entity.TenantDO;
-import com.yonagi.verse.dao.entity.TenantInviteDO;
-import com.yonagi.verse.dao.entity.UserDO;
-import com.yonagi.verse.dao.entity.UserTenantDO;
+import com.yonagi.verse.dao.entity.*;
 import com.yonagi.verse.dao.mapper.TenantInviteMapper;
+import com.yonagi.verse.dao.mapper.TenantJoinRequestMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
+import com.yonagi.verse.service.UserService;
 import com.yonagi.verse.service.UserTenantService;
 import com.yonagi.verse.service.NotificationService;
 import lombok.RequiredArgsConstructor;
@@ -90,6 +90,8 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> inviteCodeFilter;
     private final JwtUtil jwtUtil;
+    private final TenantJoinRequestMapper tenantJoinRequestMapper;
+    private final UserService userService;
 
     @Value("${verse.tenant.max-invite-code-per-day:10}")
     private Integer maxInviteCodePerDay;
@@ -308,7 +310,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Boolean joinTenant(Long userId, TenantJoinReqDTO requestParam) {
+    public TenantJoinRespDTO joinTenant(Long userId, TenantJoinReqDTO requestParam) {
         Long joinedTenantCount = userTenantService.getUserJoinedTenantCount(userId);
         if (joinedTenantCount >= 10) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_COUNT_EXCEEDS);
@@ -343,13 +345,54 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         if (tenantDO == null || !"TEAM".equals(tenantDO.getType())) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_JOIN_PROHIBITED);
         }
-
-        Boolean result = userTenantService.createUserTenant(userId, tenantDO.getTenantId(), RoleEnum.MEMBER.name());
-        if (!result) {
-            log.error("Join Tenant Error: tenant {}, user {}", tenantDO.getTenantId(), userId);
-            throw new ClientException(TenantErrorCodeEnum.TENANT_JOIN_ERROR);
+        // 校验租户是否需要审批才能加入
+        if (tenantDO.getJoinApprovalMode() == 0) {
+            realJoinTenant(userId, tenantDO.getTenantId());
+            // inviteCode使用次数+1
+            inviteDO.setUsageCount(inviteDO.getUsageCount() + 1);
+            if (tenantInviteMapper.updateById(inviteDO) < 1) {
+                log.error("Update tenant invite code usage count error: tenant {}, user {}", tenantDO.getTenantId(), userId);
+            }
+            return new TenantJoinRespDTO(false);
         }
-        return Boolean.TRUE;
+        // 需要审批才能加入
+        // TODO 流程过长，做异步处理优化
+        // 查询是否已经有PENDING申请
+        TenantJoinRequestDO tenantJoinRequestDO = tenantJoinRequestMapper.selectOne(Wrappers.lambdaQuery(TenantJoinRequestDO.class)
+                .eq(TenantJoinRequestDO::getUserId, userId)
+                .eq(TenantJoinRequestDO::getTenantId, tenantDO.getTenantId()));
+        if (tenantJoinRequestDO != null && TenantJoinRequestStatusEnum.PENDING.name().equals(tenantJoinRequestDO.getStatus())) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_JOIN_REQUEST_PENDING_EXISTS);
+        }
+        // 创建一条申请
+        TenantJoinRequestDO newRequest = new TenantJoinRequestDO();
+        newRequest.setRequestId(SnowflakeIdUtil.nextId());
+        newRequest.setTenantId(tenantDO.getTenantId());
+        newRequest.setUserId(userId);
+        newRequest.setInviteId(inviteDO.getId());
+        newRequest.setStatus(TenantJoinRequestStatusEnum.PENDING.name());
+        newRequest.setRequestedAt(new Date());
+        int inserted = tenantJoinRequestMapper.insert(newRequest);
+        if (inserted < 1) {
+            log.error("Create tenant join request error: tenant {}, user {}", tenantDO.getTenantId(), userId);
+            throw new ServerException(TenantErrorCodeEnum.TENANT_JOIN_REQUEST_CREATE_ERROR);
+        }
+        stringRedisTemplate.opsForValue().set(RedisKeyConstant.TENANT_JOIN_REQUEST_KEY + newRequest.getRequestId(),
+                JSON.toJSONString(newRequest), 30, TimeUnit.MINUTES);
+
+        // 查询所有管理员，发送通知
+        List<Long> adminIdList = userTenantService.getTenantAdmins(tenantDO.getTenantId())
+                .stream().map(UserTenantDO::getUserId).toList();
+        UserInfoRespDTO userInfo = userService.getUserInfo(userId);
+        try {
+            notificationService.createAndPush(tenantDO.getTenantId(), "SYSTEM", "INFO",
+                    "租户加入申请", "用户" + userInfo.getUsername() + "申请加入租户" + tenantDO.getName(),
+                    null, adminIdList);
+        } catch (Exception e) {
+            log.error("Creating and pushing notification error for create request: {}", e.getMessage());
+        }
+
+        return new TenantJoinRespDTO(true);
     }
 
     @Override
@@ -761,6 +804,122 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         return Boolean.TRUE;
     }
 
+    @Override
+    public TenantJoinReqListRespDTO listJoinRequests(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
+        if (pageSize == null) {
+            pageSize = 10;
+        }
+        // 查询租户是否存在且活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        // 查询用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        // 查询租户加入请求列表，根据请求时间倒序分页查询
+        // TODO 按照状态进行排序
+        Page<TenantJoinReqListRespDTO.TenantJoinReqInfo> pages = tenantJoinRequestMapper.selectPageByTenantId(new Page<>(pageNum, pageSize), tenantId);
+        List<TenantJoinReqListRespDTO.TenantJoinReqInfo> records = pages.getRecords();
+        TenantJoinReqListRespDTO resp = new TenantJoinReqListRespDTO();
+        resp.setRequestList(records);
+        resp.setTotal(pages.getTotal());
+        resp.setTotalPages(pages.getPages());
+        resp.setPage(pageNum);
+        resp.setPageSize(pageSize);
+        return resp;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean approveJoinRequest(Long userId, Long tenantId, Long requestId) {
+        // TODO 流程过长，非与审批有关的操作做异步处理
+        // 查询租户是否存在且活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        // 查询用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        TenantJoinRequestDO requestDO = validateJoinRequest(userId, requestId);
+        // 修改申请状态为已批准
+        LambdaUpdateWrapper<TenantJoinRequestDO> updateWrapper = Wrappers.lambdaUpdate(TenantJoinRequestDO.class)
+                .eq(TenantJoinRequestDO::getRequestId, requestId)
+                .eq(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.PENDING.name())
+                .set(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.APPROVED.name())
+                .set(TenantJoinRequestDO::getReviewedAt, new Date())
+                .set(TenantJoinRequestDO::getReviewedBy, userId);
+        int update = tenantJoinRequestMapper.update(updateWrapper);
+        if (update < 1) {
+            log.error("Approve Join Request Error: tenant {}, requestId {}", tenantId, requestId);
+            throw new ServerException(TenantErrorCodeEnum.REQUEST_STATUS_UPDATE_ERROR);
+        }
+        // 将申请人加入租户
+        realJoinTenant(requestDO.getUserId(), tenantId);
+        // 邀请码使用次数+1
+        LambdaQueryWrapper<TenantInviteDO> inviteQueryWrapper = Wrappers.lambdaQuery(TenantInviteDO.class)
+                .eq(TenantInviteDO::getId, requestDO.getInviteId());
+        TenantInviteDO inviteDO = tenantInviteMapper.selectOne(inviteQueryWrapper);
+        if (inviteDO != null) {
+            inviteDO.setUsageCount(inviteDO.getUsageCount() + 1);
+            if (tenantInviteMapper.updateById(inviteDO) < 1) {
+                // 不抛异常以免影响主流程
+                log.error("Update Invite Code Usage Count Error: tenant {}, inviteId {}", tenantId, requestDO.getInviteId());
+            }
+        }
+        // 调用通知服务，通知申请人已被批准加入租户
+        TenantInfoRespDTO tenantInfo = getTenantInfo(userId, tenantId);
+        try {
+            notificationService.createAndPush(tenantId, "SYSTEM", "INFO",
+                    "加入租户申请已批准",
+                    "您加入租户「" + tenantInfo.getName() + "」的申请已被管理员批准",
+                    null, List.of(requestDO.getUserId()));
+        } catch (Exception e) {
+            log.error("Creating and pushing notification error for approve: {}", e.getMessage());
+        }
+        // 删除缓存
+        stringRedisTemplate.delete(RedisKeyConstant.TENANT_JOIN_REQUEST_KEY + requestId);
+
+        return Boolean.TRUE;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean rejectJoinRequest(Long userId, Long tenantId, Long requestId, TenantJoinRejectReqDTO requestParam) {
+        // 查询租户是否存在and活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        // 查询用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        TenantJoinRequestDO tenantJoinRequestDO = validateJoinRequest(userId, requestId);
+        // 修改申请状态为已拒绝
+        int update = tenantJoinRequestMapper.update(Wrappers.lambdaUpdate(TenantJoinRequestDO.class)
+                .eq(TenantJoinRequestDO::getRequestId, requestId)
+                .eq(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.PENDING.name())
+                .set(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.REJECTED.name())
+                .set(TenantJoinRequestDO::getReviewedAt, new Date())
+                .set(TenantJoinRequestDO::getReviewedBy, userId)
+                .set(TenantJoinRequestDO::getReviewComment, requestParam.getReviewComment()));
+        if (update < 1) {
+            log.error("Reject Join Request Error: tenant {}, requestId {}", tenantId, requestId);
+            throw new ServerException(TenantErrorCodeEnum.REQUEST_STATUS_UPDATE_ERROR);
+        }
+        TenantInfoRespDTO tenantInfo = getTenantInfo(userId, tenantId);
+        try {
+            notificationService.createAndPush(tenantId, "SYSTEM", "INFO",
+                    "申请被拒绝",
+                    requestParam.getReviewComment() == null ? "您加入" + tenantInfo.getName() + "的申请已被管理员拒绝" : "您加入" + tenantInfo.getName() + "的申请已被管理员拒绝，理由：" + requestParam.getReviewComment(),
+                    null, List.of(tenantJoinRequestDO.getUserId()));
+        } catch (Exception e) {
+            log.error("Creating and pushing notification error for reject: {}", e.getMessage());
+        }
+        // 删除缓存
+        stringRedisTemplate.delete(RedisKeyConstant.TENANT_JOIN_REQUEST_KEY + requestId);
+
+        return Boolean.TRUE;
+    }
+
     private TenantDO validateTenantTeamActive(Long tenantId, TenantErrorCodeEnum notTeamError) {
         TenantDO tenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
                 .eq(TenantDO::getTenantId, tenantId)
@@ -785,5 +944,38 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
 
     private Date getStartOfToday() {
         return Date.from(LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant());
+    }
+
+    private void realJoinTenant(Long userId, Long tenantId) {
+        Boolean result = userTenantService.createUserTenant(userId, tenantId, RoleEnum.MEMBER.name());
+        if (!result) {
+            log.error("Join Tenant Error: tenant {}, user {}", tenantId, userId);
+            throw new ServerException(TenantErrorCodeEnum.TENANT_JOIN_ERROR);
+        }
+    }
+
+    private TenantJoinRequestDO validateJoinRequest(Long userId, Long requestId) {
+        TenantJoinRequestDO requestDO;
+        // 查询申请单是否存在
+        String cachedJson = stringRedisTemplate.opsForValue().get(RedisKeyConstant.TENANT_JOIN_REQUEST_KEY + requestId);
+        if (cachedJson != null) {
+            requestDO = JSON.parseObject(cachedJson, TenantJoinRequestDO.class);
+        } else {
+            LambdaQueryWrapper<TenantJoinRequestDO> queryWrapper = Wrappers.lambdaQuery(TenantJoinRequestDO.class)
+                    .eq(TenantJoinRequestDO::getRequestId, requestId);
+            requestDO = tenantJoinRequestMapper.selectOne(queryWrapper);
+        }
+        if (requestDO == null) {
+            throw new ClientException(TenantErrorCodeEnum.REQUEST_NOT_FOUND);
+        }
+        // 申请人和审批人是否为同一人
+        if (requestDO.getUserId().equals(userId)) {
+            throw new ClientException(TenantErrorCodeEnum.REQUEST_APPROVE_SELF_ERROR);
+        }
+        // 申请单状态是否为待审批
+        if (!TenantJoinRequestStatusEnum.PENDING.name().equals(requestDO.getStatus())) {
+            throw new ClientException(TenantErrorCodeEnum.REQUEST_HAS_BEEN_REVIEWED);
+        }
+        return requestDO;
     }
 }

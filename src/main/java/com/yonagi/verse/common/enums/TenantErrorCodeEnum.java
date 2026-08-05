@@ -18,6 +18,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_LEAVE_ERROR("A000306", "离开租户失败"),
     INVITE_CODE_DEACTIVATE_ERROR("A000307", "邀请码禁用失败"),
     INVITE_CODE_ACTIVATE_ERROR("A000308", "邀请码启用失败"),
+    REQUEST_STATUS_UPDATE_ERROR("A000309", "申请单审批失败"),
+    TENANT_JOIN_REQUEST_CREATE_ERROR("A000310", "加入租户申请单创建失败"),
 
     TENANT_NOT_EXIST("B000300", "租户不存在"),
     TENANT_ID_IS_NULL("B000301", "租户ID不能为空"),
@@ -45,7 +47,12 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     INVITE_CODE_IS_NULL("B000323", "邀请码不能为空"),
     INVITE_CODE_NOT_FOUND("B000324", "邀请码不存在"),
     INVITE_CODE_CAN_NOT_DEACTIVATE("B000325", "该邀请码不能被禁用"),
-    INVITE_CODE_CAN_NOT_ACTIVATE("B000326", "该邀请码不能被启用"),;
+    INVITE_CODE_CAN_NOT_ACTIVATE("B000326", "该邀请码不能被启用"),
+    REQUEST_ID_IS_NULL("B000327", "申请单ID不能为空"),
+    REQUEST_NOT_FOUND("B000328", "申请单不存在"),
+    REQUEST_APPROVE_SELF_ERROR("B000329", "不能审批自己的申请单"),
+    REQUEST_HAS_BEEN_REVIEWED("B000330", "该申请单已被审批"),
+    TENANT_JOIN_REQUEST_PENDING_EXISTS("B000331", "您已提交过加入申请，请等待管理员审批"),;
 
     private final String code;
     private final String message;

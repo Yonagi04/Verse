@@ -30,7 +30,7 @@ public interface TenantService extends IService<TenantDO> {
 
     TenantInviteRespDTO inviteUser(Long userId, Long tenantId, TenantInviteReqDTO requestParam);
 
-    Boolean joinTenant(Long userId, TenantJoinReqDTO requestParam);
+    TenantJoinRespDTO joinTenant(Long userId, TenantJoinReqDTO requestParam);
 
     TenantLeavePrepareRespDTO prepareLeaveTenant(Long userId, Long tenantId);
 
@@ -53,4 +53,10 @@ public interface TenantService extends IService<TenantDO> {
     Boolean deactivateInviteCode(Long userId, Long tenantId, Long inviteCodeId);
 
     Boolean activateInviteCode(Long userId, Long tenantId, Long inviteCodeId);
+
+    TenantJoinReqListRespDTO listJoinRequests(Long userId, Long tenantId, Integer pageNum, Integer pageSize);
+
+    Boolean approveJoinRequest(Long userId, Long tenantId, Long requestId);
+
+    Boolean rejectJoinRequest(Long userId, Long tenantId, Long requestId, TenantJoinRejectReqDTO requestParam);
 }

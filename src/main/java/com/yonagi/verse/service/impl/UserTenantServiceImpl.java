@@ -182,4 +182,15 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
         String cacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
         stringRedisTemplate.delete(cacheKey);
     }
+
+    @Override
+    public List<UserTenantDO> getTenantAdmins(Long tenantId) {
+        // 查询租户管理员and超级管理员列表
+        LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .isNull(UserTenantDO::getLeftAt)
+                .in(UserTenantDO::getRole, "ADMIN", "SUPER_ADMIN")
+                .exists("SELECT 1 FROM t_tenant WHERE t_tenant.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0");
+        return baseMapper.selectList(queryWrapper);
+    }
 }
