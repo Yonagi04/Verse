@@ -59,4 +59,6 @@ public interface TenantService extends IService<TenantDO> {
     Boolean approveJoinRequest(Long userId, Long tenantId, Long requestId);
 
     Boolean rejectJoinRequest(Long userId, Long tenantId, Long requestId, TenantJoinRejectReqDTO requestParam);
+
+    Long getUnreviewedJoinReqCount(Long userId, Long tenantId);
 }

@@ -930,6 +930,21 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         return Boolean.TRUE;
     }
 
+    @Override
+    public Long getUnreviewedJoinReqCount(Long userId, Long tenantId) {
+        // 查询租户是否存在and活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        // 查询用户是否在该租户下
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        // 查询该租户下所有未审批的申请单数量
+        return tenantJoinRequestMapper.selectCount(Wrappers.lambdaQuery(TenantJoinRequestDO.class)
+                .eq(TenantJoinRequestDO::getTenantId, tenantId)
+                .eq(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.PENDING.name()));
+    }
+
     private TenantDO validateTenantTeamActive(Long tenantId, TenantErrorCodeEnum notTeamError) {
         TenantDO tenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
                 .eq(TenantDO::getTenantId, tenantId)

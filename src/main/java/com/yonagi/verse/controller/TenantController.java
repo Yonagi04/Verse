@@ -240,4 +240,14 @@ public class TenantController {
         }
         return Results.success(tenantService.rejectJoinRequest(userId, tenantId, requestId, requestParam));
     }
+
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
+    @GetMapping("/{tenantId}/join-requests/unreviewed-count")
+    public Result<Long> getUnreviewedJoinReqCount(@CurrentUser Long userId,
+                                                     @PathVariable Long tenantId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(tenantService.getUnreviewedJoinReqCount(userId, tenantId));
+    }
 }
