@@ -102,7 +102,7 @@ public class TenantController {
     }
 
     @PostMapping("/{tenantId}/leave/confirm")
-    public Result<Boolean> leaveTenant(@CurrentUser Long userId, @PathVariable Long tenantId) {
+    public Result<TenantLeaveRespDTO> leaveTenant(@CurrentUser Long userId, @PathVariable Long tenantId) {
         if (tenantId == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
         }

@@ -409,7 +409,8 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     }
 
     @Override
-    public Boolean leaveTenant(Long userId, Long tenantId) {
+    @Transactional(rollbackFor = Exception.class)
+    public TenantLeaveRespDTO leaveTenant(Long userId, Long tenantId) {
         // 检查租户是否存在and活跃
         validateTenantTeamActive(tenantId, TenantErrorCodeEnum.PERSONAL_TENANT_CAN_NOT_LEAVE);
 
@@ -418,9 +419,18 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         if (!isUserJoinTenant) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
+        // 如果该用户是超级管理员，则报错提示需要进行交接后才能离开租户
+        String role = userTenantService.getRoleByUserIdAndTenantId(userId, tenantId);
+        if (RoleEnum.SUPER_ADMIN.name().equals(role)) {
+            throw new ClientException(TenantErrorCodeEnum.SUPER_ADMIN_LEAVE_TENANT_ERROR);
+        }
         // 删除用户-租户关系
         userTenantService.removeUser(userId, tenantId);
-        return Boolean.TRUE;
+        // 查找该用户对应的个人租户，返回个人租户的租户ID
+        TenantDO tenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
+                .eq(TenantDO::getOwnerId, userId)
+                .eq(TenantDO::getType, "PERSONAL"));
+        return new TenantLeaveRespDTO(tenantDO.getTenantId());
     }
 
     @Override

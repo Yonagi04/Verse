@@ -34,7 +34,7 @@ public interface TenantService extends IService<TenantDO> {
 
     TenantLeavePrepareRespDTO prepareLeaveTenant(Long userId, Long tenantId);
 
-    Boolean leaveTenant(Long userId, Long tenantId);
+    TenantLeaveRespDTO leaveTenant(Long userId, Long tenantId);
 
     TenantSwitchRespDTO switchTenant(Long userId, Long tenantId);
 

@@ -52,7 +52,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     REQUEST_NOT_FOUND("B000328", "申请单不存在"),
     REQUEST_APPROVE_SELF_ERROR("B000329", "不能审批自己的申请单"),
     REQUEST_HAS_BEEN_REVIEWED("B000330", "该申请单已被审批"),
-    TENANT_JOIN_REQUEST_PENDING_EXISTS("B000331", "您已提交过加入申请，请等待管理员审批"),;
+    TENANT_JOIN_REQUEST_PENDING_EXISTS("B000331", "您已提交过加入申请，请等待管理员审批"),
+    SUPER_ADMIN_LEAVE_TENANT_ERROR("B000332", "超级管理员不能直接离开租户，请完成管理员交接后再离开");
 
     private final String code;
     private final String message;
