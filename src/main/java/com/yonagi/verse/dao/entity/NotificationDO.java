@@ -19,6 +19,9 @@ import lombok.NoArgsConstructor;
 @TableName("t_notification")
 public class NotificationDO extends BaseDO {
 
+    // 自增主键
+    private Long id;
+
     // 雪花业务ID
     private Long notificationId;
 
