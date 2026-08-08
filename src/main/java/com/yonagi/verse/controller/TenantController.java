@@ -93,6 +93,19 @@ public class TenantController {
         return Results.success(tenantService.joinTenant(userId, requestParam));
     }
 
+    /**
+     * 查询租户基本信息和邀请码（供前端join页面使用）
+     * @param inviteCode 邀请码
+     * @return
+     */
+    @GetMapping("/invites/{inviteCode}/info")
+    public Result<TenantJoinInfoRespDTO> getTenantAndInviteCodeInfo(@PathVariable String inviteCode) {
+        if (inviteCode == null) {
+            throw new ClientException(TenantErrorCodeEnum.INVITE_CODE_IS_NULL);
+        }
+        return Results.success(tenantService.getTenantAndInviteCodeInfo(inviteCode));
+    }
+
     @PostMapping("/{tenantId}/leave/prepare")
     public Result<TenantLeavePrepareRespDTO> prepareLeaveTenant(@CurrentUser Long userId, @PathVariable Long tenantId) {
         if (tenantId == null) {

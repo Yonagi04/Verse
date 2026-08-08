@@ -398,6 +398,37 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     }
 
     @Override
+    public TenantJoinInfoRespDTO getTenantAndInviteCodeInfo(String inviteCode) {
+        // 查询邀请码是否存在
+        TenantInviteDO inviteDO = tenantInviteMapper.selectOne(Wrappers.lambdaQuery(TenantInviteDO.class)
+                .eq(TenantInviteDO::getCode, inviteCode));
+        if (inviteDO == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
+        }
+        // 根据邀请码DO获取租户最基本信息
+        Long tenantId = inviteDO.getTenantId();
+        String name;
+
+        String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
+        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cachedJson != null) {
+            TenantInfoRespDTO respDTO = JSON.parseObject(cachedJson, TenantInfoRespDTO.class);
+            name = respDTO.getName();
+        } else {
+            TenantDO tenantDO = baseMapper.selectOne(
+                    Wrappers.lambdaQuery(TenantDO.class)
+                            .eq(TenantDO::getTenantId, tenantId)
+                            .eq(TenantDO::getStatus, 1)
+                            .eq(TenantDO::getDelFlag, 0));
+            if (tenantDO == null) {
+                throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+            }
+            name = tenantDO.getName();
+        }
+        return new TenantJoinInfoRespDTO(name, inviteCode);
+    }
+
+    @Override
     public TenantLeavePrepareRespDTO prepareLeaveTenant(Long userId, Long tenantId) {
         // 检查租户是否存在and活跃
         validateTenantTeamActive(tenantId, TenantErrorCodeEnum.PERSONAL_TENANT_CAN_NOT_LEAVE);

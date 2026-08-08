@@ -32,6 +32,8 @@ public interface TenantService extends IService<TenantDO> {
 
     TenantJoinRespDTO joinTenant(Long userId, TenantJoinReqDTO requestParam);
 
+    TenantJoinInfoRespDTO getTenantAndInviteCodeInfo(String inviteCode);
+
     TenantLeavePrepareRespDTO prepareLeaveTenant(Long userId, Long tenantId);
 
     TenantLeaveRespDTO leaveTenant(Long userId, Long tenantId);
