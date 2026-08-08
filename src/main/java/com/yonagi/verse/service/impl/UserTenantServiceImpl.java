@@ -45,6 +45,33 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
         if (tenantId == null) {
             throw new ClientException(UserTenantErrorCodeEnum.TENANT_ID_IS_NULL);
         }
+        // 查询是否已经有用户-租户联系（曾经离开过，后来重新加入），如果有就更新角色、加入日期、离开日期
+        LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .isNotNull(UserTenantDO::getLeftAt);
+        UserTenantDO lastLeftUserTenant = baseMapper.selectOne(queryWrapper);
+        if (lastLeftUserTenant != null) {
+            LambdaUpdateWrapper<UserTenantDO> updateWrapper = Wrappers.lambdaUpdate(UserTenantDO.class)
+                    .eq(UserTenantDO::getUserId, userId)
+                    .eq(UserTenantDO::getTenantId, tenantId)
+                    .set(UserTenantDO::getLeftAt, null)
+                    .set(UserTenantDO::getRole, role)
+                    .set(UserTenantDO::getJoinedAt, new Date());
+            int update = baseMapper.update(updateWrapper);
+            if (update < 1) {
+                log.error("Update exist user-tenant failed: userId {} tenantId {}", userId, tenantId);
+                throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_CREATE_FAILED);
+            }
+            // 写入缓存
+            lastLeftUserTenant.setLeftAt(null);
+            lastLeftUserTenant.setRole(role);
+            lastLeftUserTenant.setJoinedAt(new Date());
+            String userTenantCacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
+            stringRedisTemplate.opsForValue().set(userTenantCacheKey, JSON.toJSONString(lastLeftUserTenant), 15, TimeUnit.MINUTES);
+            return Boolean.TRUE;
+        }
+
         UserTenantDO userTenantDO = new UserTenantDO();
         userTenantDO.setTenantId(tenantId);
         userTenantDO.setUserId(userId);
