@@ -24,7 +24,6 @@ import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
-import com.yonagi.verse.service.UserService;
 import com.yonagi.verse.service.UserTenantService;
 import com.yonagi.verse.service.NotificationService;
 import lombok.RequiredArgsConstructor;
@@ -91,7 +90,6 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private final RBloomFilter<String> inviteCodeFilter;
     private final JwtUtil jwtUtil;
     private final TenantJoinRequestMapper tenantJoinRequestMapper;
-    private final UserService userService;
 
     @Value("${verse.tenant.max-invite-code-per-day:10}")
     private Integer maxInviteCodePerDay;
@@ -360,8 +358,9 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         // 查询是否已经有PENDING申请
         TenantJoinRequestDO tenantJoinRequestDO = tenantJoinRequestMapper.selectOne(Wrappers.lambdaQuery(TenantJoinRequestDO.class)
                 .eq(TenantJoinRequestDO::getUserId, userId)
-                .eq(TenantJoinRequestDO::getTenantId, tenantDO.getTenantId()));
-        if (tenantJoinRequestDO != null && TenantJoinRequestStatusEnum.PENDING.name().equals(tenantJoinRequestDO.getStatus())) {
+                .eq(TenantJoinRequestDO::getTenantId, tenantDO.getTenantId())
+                .eq(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.PENDING.name()));
+        if (tenantJoinRequestDO != null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_JOIN_REQUEST_PENDING_EXISTS);
         }
         // 创建一条申请
@@ -383,10 +382,13 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         // 查询所有管理员，发送通知
         List<Long> adminIdList = userTenantService.getTenantAdmins(tenantDO.getTenantId())
                 .stream().map(UserTenantDO::getUserId).toList();
-        UserInfoRespDTO userInfo = userService.getUserInfo(userId);
+        UserDO applicant = userMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getUserId, userId)
+                .eq(UserDO::getDelFlag, 0));
+        String applicantName = applicant != null ? applicant.getUsername() : String.valueOf(userId);
         try {
             notificationService.createAndPush(tenantDO.getTenantId(), "SYSTEM", "INFO",
-                    "租户加入申请", "用户" + userInfo.getUsername() + "申请加入租户" + tenantDO.getName(),
+                    "租户加入申请", "用户" + applicantName + "申请加入租户" + tenantDO.getName(),
                     null, adminIdList);
         } catch (Exception e) {
             log.error("Creating and pushing notification error for create request: {}", e.getMessage());
