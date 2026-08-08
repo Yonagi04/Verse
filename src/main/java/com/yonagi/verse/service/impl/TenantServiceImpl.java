@@ -17,10 +17,7 @@ import com.yonagi.verse.common.enums.TenantJoinRequestStatusEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.*;
-import com.yonagi.verse.dao.mapper.TenantInviteMapper;
-import com.yonagi.verse.dao.mapper.TenantJoinRequestMapper;
-import com.yonagi.verse.dao.mapper.TenantMapper;
-import com.yonagi.verse.dao.mapper.UserMapper;
+import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
@@ -37,6 +34,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -90,12 +88,16 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private final RBloomFilter<String> inviteCodeFilter;
     private final JwtUtil jwtUtil;
     private final TenantJoinRequestMapper tenantJoinRequestMapper;
+    private final NotificationMapper notificationMapper;
 
     @Value("${verse.tenant.max-invite-code-per-day:10}")
     private Integer maxInviteCodePerDay;
 
     @Value("${verse.frontend-baseurl}")
     private String frontendBaseUrl;
+
+    @Value("${verse.tenant.max-notification-send-per-day:10}")
+    private Integer maxNotificationSendPerDay;
 
     @Override
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
@@ -976,6 +978,50 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
         return tenantJoinRequestMapper.selectCount(Wrappers.lambdaQuery(TenantJoinRequestDO.class)
                 .eq(TenantJoinRequestDO::getTenantId, tenantId)
                 .eq(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.PENDING.name()));
+    }
+
+    @Override
+    public Boolean sendNotificationInTenant(Long userId, Long tenantId, TenantSendNotificationReqDTO requestParam) {
+        // 租户是否存在and是否活跃
+        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        // 用户是否还在此租户
+        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
+        if (!isJoinedTenant) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
+        // 判断今日内该租户已发送的通知数量是否超过限额
+        LambdaQueryWrapper<NotificationDO> queryWrapper = Wrappers.lambdaQuery(NotificationDO.class)
+                .eq(NotificationDO::getTenantId, tenantId)
+                .eq(NotificationDO::getType, "ANNOUNCEMENT")
+                .isNotNull(NotificationDO::getSenderId)
+                .ge(NotificationDO::getCreateTime, getStartOfToday());
+        Long count = notificationMapper.selectCount(queryWrapper);
+        if (count >= maxNotificationSendPerDay) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOTIFICATION_SEND_PER_DAY_LIMIT);
+        }
+        // 根据接收者类型，获取接收者的ID列表
+        Integer receiverType = requestParam.getReceiverType();
+        List<Long> receiverIdList = new ArrayList<>();
+        if (receiverType == 1) {
+            // 全员
+            receiverIdList = userTenantService.getTenantAllMembers(tenantId).stream().map(UserTenantDO::getUserId).toList();
+        } else if (receiverType == 2) {
+            // 只有MEMBER
+            receiverIdList = userTenantService.getTenantMembers(tenantId).stream().map(UserTenantDO::getUserId).toList();
+        } else if (receiverType == 3) {
+            // 只有管理
+            receiverIdList = userTenantService.getTenantAdmins(tenantId).stream().map(UserTenantDO::getUserId).toList();
+        }
+
+        // 调用通知服务的发送接口
+        try {
+            notificationService.createAndPush(tenantId, "ANNOUNCEMENT", requestParam.getSeverity(),
+                    requestParam.getTitle(), requestParam.getContent(), userId, receiverIdList);
+        } catch (Exception e) {
+            log.error("Sending notification in tenant error: tenant {}", tenantId);
+            throw new ServerException(TenantErrorCodeEnum.TENANT_NOTIFICATION_PUSH_ERROR);
+        }
+        return Boolean.TRUE;
     }
 
     private TenantDO validateTenantTeamActive(Long tenantId, TenantErrorCodeEnum notTeamError) {

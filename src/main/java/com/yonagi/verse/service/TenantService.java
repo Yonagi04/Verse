@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
+import jakarta.validation.Valid;
 
 import java.util.List;
 
@@ -63,4 +64,6 @@ public interface TenantService extends IService<TenantDO> {
     Boolean rejectJoinRequest(Long userId, Long tenantId, Long requestId, TenantJoinRejectReqDTO requestParam);
 
     Long getUnreviewedJoinReqCount(Long userId, Long tenantId);
+
+    Boolean sendNotificationInTenant(Long userId, Long tenantId, TenantSendNotificationReqDTO requestParam);
 }

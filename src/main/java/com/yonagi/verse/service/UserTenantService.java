@@ -31,4 +31,8 @@ public interface UserTenantService extends IService<UserTenantDO> {
     void removeUser(Long userId, Long tenantId);
 
     List<UserTenantDO> getTenantAdmins(Long tenantId);
+
+    List<UserTenantDO> getTenantAllMembers(Long tenantId);
+
+    List<UserTenantDO> getTenantMembers(Long tenantId);
 }

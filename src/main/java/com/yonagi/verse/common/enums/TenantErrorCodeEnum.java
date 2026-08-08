@@ -20,6 +20,7 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     INVITE_CODE_ACTIVATE_ERROR("A000308", "邀请码启用失败"),
     REQUEST_STATUS_UPDATE_ERROR("A000309", "申请单审批失败"),
     TENANT_JOIN_REQUEST_CREATE_ERROR("A000310", "加入租户申请单创建失败"),
+    TENANT_NOTIFICATION_PUSH_ERROR("A000311", "发送并推送租户内通知失败"),
 
     TENANT_NOT_EXIST("B000300", "租户不存在"),
     TENANT_ID_IS_NULL("B000301", "租户ID不能为空"),
@@ -53,7 +54,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     REQUEST_APPROVE_SELF_ERROR("B000329", "不能审批自己的申请单"),
     REQUEST_HAS_BEEN_REVIEWED("B000330", "该申请单已被审批"),
     TENANT_JOIN_REQUEST_PENDING_EXISTS("B000331", "您已提交过加入申请，请等待管理员审批"),
-    SUPER_ADMIN_LEAVE_TENANT_ERROR("B000332", "超级管理员不能直接离开租户，请完成管理员交接后再离开");
+    SUPER_ADMIN_LEAVE_TENANT_ERROR("B000332", "超级管理员不能直接离开租户，请完成管理员交接后再离开"),
+    TENANT_NOTIFICATION_SEND_PER_DAY_LIMIT("B000333", "已达到租户内消息的单日发送次数上限，请明天再试");
 
     private final String code;
     private final String message;

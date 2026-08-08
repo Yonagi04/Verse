@@ -9,6 +9,7 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
+import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.enums.UserTenantErrorCodeEnum;
 import com.yonagi.verse.dao.entity.UserTenantDO;
@@ -219,5 +220,24 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
                 .in(UserTenantDO::getRole, "ADMIN", "SUPER_ADMIN")
                 .exists("SELECT 1 FROM t_tenant WHERE t_tenant.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0");
         return baseMapper.selectList(queryWrapper);
+    }
+
+    @Override
+    public List<UserTenantDO> getTenantAllMembers(Long tenantId) {
+        // 查询租户所有成员
+        return baseMapper.selectList(Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .isNull(UserTenantDO::getLeftAt)
+                .exists("SELECT 1 FROM t_tenant t WHERE t.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0"));
+    }
+
+    @Override
+    public List<UserTenantDO> getTenantMembers(Long tenantId) {
+        // 查询租户下的MEMBER
+        return baseMapper.selectList(Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .isNull(UserTenantDO::getLeftAt)
+                .eq(UserTenantDO::getRole, RoleEnum.MEMBER.name())
+                .exists("SELECT 1 FROM t_tenant t WHERE t.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0"));
     }
 }

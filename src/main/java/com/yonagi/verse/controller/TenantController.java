@@ -263,4 +263,15 @@ public class TenantController {
         }
         return Results.success(tenantService.getUnreviewedJoinReqCount(userId, tenantId));
     }
+
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
+    @PostMapping("/{tenantId}/notifications/send")
+    public Result<Boolean> sendNotificationInTenant(@CurrentUser Long userId,
+                                                    @PathVariable Long tenantId,
+                                                    @RequestBody @Valid TenantSendNotificationReqDTO requestParam) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(tenantService.sendNotificationInTenant(userId, tenantId, requestParam));
+    }
 }
