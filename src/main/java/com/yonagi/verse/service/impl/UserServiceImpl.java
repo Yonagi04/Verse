@@ -20,6 +20,7 @@ import com.yonagi.verse.dao.entity.UserDO;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
+import com.yonagi.verse.service.NotificationService;
 import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.UserService;
 import com.yonagi.verse.service.UserTenantService;
@@ -67,11 +68,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     );
     private static final String CLOSED_ACCOUNT_LOGIN_WARNING = "您的账号已于%s申请并完成了注销，感谢您使用 Verse，祝您生活愉快！";
     private static final DateTimeFormatter CANCEL_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy年MM月dd日");
+    private static final String WELCOME_MESSAGE_TITLE = "欢迎使用 Verse！";
+    private static final String WELCOME_MESSAGE_CONTENT = "你好, %s！欢迎使用 Verse！";
 
     private final PasswordEncoder passwordEncoder;
     private final AesUtil aesUtil;
     private final TenantService tenantService;
     private final UserTenantService userTenantService;
+    private final NotificationService notificationService;
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> usernameBloomFilter;
@@ -173,6 +177,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 .eq(UserDO::getUserId, userId)
                 .set(UserDO::getLastActiveTenantId, tenantId);
         baseMapper.update(updateWrapper);
+
+        // 给注册完的用户推送一条系统通知
+        try {
+            notificationService.createAndPush(tenantId, "SYSTEM", "INFO",
+                    WELCOME_MESSAGE_TITLE, String.format(WELCOME_MESSAGE_CONTENT, userDO.getNickname()), null, List.of(userDO.getUserId()));
+        } catch (Exception e) {
+            log.error("Create and push notification for user register error: user {}", userDO.getUserId());
+        }
 
         return userDO;
     }
