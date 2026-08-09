@@ -199,3 +199,21 @@ CREATE TABLE IF NOT EXISTS `t_tenant_join_request` (
     UNIQUE KEY `uk_request_id` (`request_id`),
     KEY `idx_tenant_status` (`tenant_id`, `status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户加入审批表';
+
+-- ============================================
+-- 11. 登录设备表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_login_device` (
+    `id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `device_id`       VARCHAR(64)  NOT NULL COMMENT '设备唯一标识（SHA-256）',
+    `user_id`         BIGINT       NOT NULL COMMENT '用户ID',
+    `device_name`     VARCHAR(128) NOT NULL COMMENT '设备名称（如 Windows Chrome）',
+    `ip`              VARCHAR(45)  NOT NULL COMMENT '登录IP地址',
+    `region`          VARCHAR(64)  DEFAULT NULL COMMENT 'IP所属地理区域',
+    `status`          TINYINT      NOT NULL DEFAULT 1 COMMENT '0=已下线, 1=在线',
+    `first_login_at`  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '首次登录时间',
+    `last_login_at`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最近登录时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_device` (`user_id`, `device_id`),
+    KEY `idx_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='登录设备表';

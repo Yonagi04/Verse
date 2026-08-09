@@ -14,16 +14,18 @@ import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.common.enums.UserStatusEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.AesUtil;
+import com.yonagi.verse.common.util.DeviceUtil;
+import com.yonagi.verse.common.util.GeoIpUtil;
 import com.yonagi.verse.common.util.SensitiveUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
+import com.yonagi.verse.dao.entity.LoginDeviceDO;
 import com.yonagi.verse.dao.entity.UserDO;
+import com.yonagi.verse.dao.mapper.LoginDeviceMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
-import com.yonagi.verse.service.NotificationService;
-import com.yonagi.verse.service.TenantService;
-import com.yonagi.verse.service.UserService;
-import com.yonagi.verse.service.UserTenantService;
+import com.yonagi.verse.service.*;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import com.alibaba.fastjson2.JSON;
 import lombok.extern.slf4j.Slf4j;
@@ -41,6 +43,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -76,10 +79,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final TenantService tenantService;
     private final UserTenantService userTenantService;
     private final NotificationService notificationService;
+    private final LoginDeviceService loginDeviceService;
+    private final LoginDeviceMapper loginDeviceMapper;
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> usernameBloomFilter;
     private final RedissonClient redissonClient;
+    private final GeoIpUtil geoIpUtil;
 
     @Lazy
     @Autowired
@@ -190,7 +196,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
-    public UserLoginRespDTO login(UserLoginReqDTO requestParam) {
+    public UserLoginRespDTO login(UserLoginReqDTO requestParam, HttpServletRequest request) {
+        // 提前解析设备信息
+        String userAgent = request.getHeader("User-Agent");
+        String ip = DeviceUtil.getClientIp(request);
+        String deviceName = DeviceUtil.parseDeviceName(userAgent);
+        String region = geoIpUtil.lookupRegion(ip);
+        String deviceId = DeviceUtil.generateDeviceId(userAgent, ip);
+
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getUsername, requestParam.getUsername());
         UserDO userDO = baseMapper.selectOne(queryWrapper);
@@ -214,12 +227,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             String message = String.format(CLOSED_ACCOUNT_LOGIN_WARNING, cancelTime);
             throw new ClientException(message, UserErrorCodeEnum.USER_ACCOUNT_CLOSED);
         }
-        // 从 Redis 获取会话信息，如果存在则说明用户已登录
-        String sessionJson = stringRedisTemplate.opsForValue()
-                .get(RedisKeyConstant.USER_LOGIN_KEY + userDO.getUserId());
-        if (sessionJson != null) {
-            throw new ClientException(UserErrorCodeEnum.USER_HAS_BEEN_LOGIN);
-        }
         if (!passwordEncoder.matches(requestParam.getPassword(), userDO.getPassword())) {
             throw new ClientException(UserErrorCodeEnum.PASSWORD_ERROR);
         }
@@ -231,7 +238,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         String token = jwtUtil.generateToken(userDO.getUserId(), userDO.getUsername());
         Date expiresAt = new Date(System.currentTimeMillis() + 86400000);
 
-        // 会话信息存入 Redis
+        // 构建含设备字段的会话信息
         long ttl = expiresAt.getTime() - System.currentTimeMillis();
         LoginSessionVO session = LoginSessionVO.builder()
                 .userId(userDO.getUserId())
@@ -240,17 +247,26 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 .expiresAt(expiresAt)
                 .lastActiveTenantId(userDO.getLastActiveTenantId())
                 .loginTime(new Date())
+                .deviceId(deviceId)
+                .deviceName(deviceName)
+                .ip(ip)
+                .region(region)
                 .build();
-        stringRedisTemplate.opsForValue().set(
-                RedisKeyConstant.USER_LOGIN_KEY + userDO.getUserId(),
-                JSON.toJSONString(session),
-                ttl, TimeUnit.MILLISECONDS);
 
+        // 写入 Redis 多设备 Hash
+        String hashKey = RedisKeyConstant.USER_DEVICES_KEY + userDO.getUserId();
+        stringRedisTemplate.opsForHash().put(hashKey, deviceId, JSON.toJSONString(session));
+        stringRedisTemplate.expire(hashKey, ttl, TimeUnit.MILLISECONDS);
+
+        // Token 反向索引
         String tokenHash = DigestUtil.md5Hex(token);
         stringRedisTemplate.opsForValue().set(
                 RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash,
                 userDO.getUserId().toString(),
                 ttl, TimeUnit.MILLISECONDS);
+
+        // UPSERT 设备记录到 MySQL
+        upsertLoginDevice(userDO.getUserId(), deviceId, deviceName, ip, region);
 
         UserLoginRespDTO resp = new UserLoginRespDTO();
         BeanUtil.copyProperties(userDO, resp);
@@ -288,12 +304,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                             .set(UserDO::getLastActiveTenantId, personalTenantId);
                     baseMapper.update(null, updateWrapper);
 
-                    // 更新 Redis session 中的 lastActiveTenantId
+                    // 更新 Redis Hash 中的 lastActiveTenantId
                     session.setLastActiveTenantId(personalTenantId);
-                    stringRedisTemplate.opsForValue().set(
-                            RedisKeyConstant.USER_LOGIN_KEY + userDO.getUserId(),
-                            JSON.toJSONString(session),
-                            ttl, TimeUnit.MILLISECONDS);
+                    stringRedisTemplate.opsForHash().put(hashKey, deviceId, JSON.toJSONString(session));
                 }
             }
         }
@@ -435,18 +448,29 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
-    public Boolean logout(Long userId) {
-        // 从 Redis 获取会话信息
-        String sessionJson = stringRedisTemplate.opsForValue()
-                .get(RedisKeyConstant.USER_LOGIN_KEY + userId);
+    public Boolean logout(Long userId, HttpServletRequest request) {
+        String currentDeviceId = DeviceUtil.generateDeviceId(
+                request.getHeader("User-Agent"), DeviceUtil.getClientIp(request));
+
+        // 从 Redis Hash 中取出当前设备的会话
+        String hashKey = RedisKeyConstant.USER_DEVICES_KEY + userId;
+        Object sessionJson = stringRedisTemplate.opsForHash().get(hashKey, currentDeviceId);
         if (sessionJson != null) {
-            LoginSessionVO session = JSON.parseObject(sessionJson, LoginSessionVO.class);
+            LoginSessionVO session = JSON.parseObject(sessionJson.toString(), LoginSessionVO.class);
             // 删除 Token 反向索引
             String tokenHash = DigestUtil.md5Hex(session.getToken());
             stringRedisTemplate.delete(RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash);
         }
-        // 删除会话 Key
-        stringRedisTemplate.delete(RedisKeyConstant.USER_LOGIN_KEY + userId);
+        // 从 Redis Hash 中删除当前设备
+        stringRedisTemplate.opsForHash().delete(hashKey, currentDeviceId);
+
+        // 更新 MySQL 设备状态为离线
+        loginDeviceMapper.update(null,
+                Wrappers.lambdaUpdate(LoginDeviceDO.class)
+                        .eq(LoginDeviceDO::getUserId, userId)
+                        .eq(LoginDeviceDO::getDeviceId, currentDeviceId)
+                        .set(LoginDeviceDO::getStatus, 0));
+
         return true;
     }
 
@@ -617,8 +641,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             stringRedisTemplate.opsForSet().remove(RedisKeyConstant.USER_EMAIL_COUNT_KEY + emailHash,
                     userId.toString());
         }
-        // 删除用户登录会话
-        self.logout(userId);
+        // 删除用户所有设备登录会话
+        logoutAllDevices(userId);
 
         return Boolean.TRUE;
     }
@@ -642,5 +666,47 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 .eq(UserDO::getDelFlag, 0)
                 .eq(UserDO::getStatus, UserStatusEnum.USER_STATUS_ACTIVE.getStatusCode());
         return baseMapper.selectOne(queryWrapper);
+    }
+
+    private void logoutAllDevices(Long userId) {
+        String hashKey = RedisKeyConstant.USER_DEVICES_KEY + userId;
+        Map<Object, Object> sessions = stringRedisTemplate.opsForHash().entries(hashKey);
+        for (Object sessionJson : sessions.values()) {
+            LoginSessionVO session = JSON.parseObject(sessionJson.toString(), LoginSessionVO.class);
+            String tokenHash = DigestUtil.md5Hex(session.getToken());
+            stringRedisTemplate.delete(RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash);
+        }
+        stringRedisTemplate.delete(hashKey);
+        loginDeviceMapper.update(null,
+                Wrappers.lambdaUpdate(LoginDeviceDO.class)
+                        .eq(LoginDeviceDO::getUserId, userId)
+                        .set(LoginDeviceDO::getStatus, 0));
+    }
+
+    private void upsertLoginDevice(Long userId, String deviceId,
+                                    String deviceName, String ip, String region) {
+        LoginDeviceDO existing = loginDeviceMapper.selectOne(
+                Wrappers.lambdaQuery(LoginDeviceDO.class)
+                        .eq(LoginDeviceDO::getUserId, userId)
+                        .eq(LoginDeviceDO::getDeviceId, deviceId));
+        if (existing != null) {
+            loginDeviceMapper.update(null,
+                    Wrappers.lambdaUpdate(LoginDeviceDO.class)
+                            .eq(LoginDeviceDO::getId, existing.getId())
+                            .set(LoginDeviceDO::getDeviceName, deviceName)
+                            .set(LoginDeviceDO::getIp, ip)
+                            .set(LoginDeviceDO::getRegion, region)
+                            .set(LoginDeviceDO::getStatus, 1));
+        } else {
+            LoginDeviceDO device = new LoginDeviceDO();
+            device.setDeviceId(deviceId);
+            device.setUserId(userId);
+            device.setDeviceName(deviceName);
+            device.setIp(ip);
+            device.setRegion(region);
+            device.setStatus(1);
+            device.setFirstLoginAt(new Date());
+            loginDeviceMapper.insert(device);
+        }
     }
 }

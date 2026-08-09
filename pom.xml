@@ -29,6 +29,7 @@
         <hutool-all.version>5.8.20</hutool-all.version>
         <redisson.version>3.21.3</redisson.version>
         <guava.version>30.0-jre</guava.version>
+        <geoip2.version>4.2.0</geoip2.version>
     </properties>
 
     <dependencies>
@@ -125,7 +126,7 @@
             <version>${hutool-all.version}</version>
         </dependency>
 
-<dependency>
+        <dependency>
             <groupId>org.redisson</groupId>
             <artifactId>redisson-spring-boot-starter</artifactId>
             <version>${redisson.version}</version>
@@ -135,6 +136,12 @@
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
             <version>${guava.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.maxmind.geoip2</groupId>
+            <artifactId>geoip2</artifactId>
+            <version>${geoip2.version}</version>
         </dependency>
     </dependencies>
 

@@ -34,7 +34,9 @@ public enum UserErrorCodeEnum implements IErrorCode {
     USER_HASH_ERROR("B000216", "数据哈希失败"),
     PASSWORD_ERROR_FOR_RESET("B000217", "密码错误，请重新输入"),
     USER_ACCOUNT_CLOSED("B000218", "该账号已注销"),
-    USER_ACCOUNT_BANNED("B000219", "该账号已被停用，请联系管理员");
+    USER_ACCOUNT_BANNED("B000219", "该账号已被停用，请联系管理员"),
+    CANNOT_KICK_CURRENT_DEVICE("B000220", "不能踢当前登录的设备下线"),
+    DEVICE_NOT_FOUND("B000221", "设备不存在");
 
     private final String code;
 

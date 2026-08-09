@@ -83,4 +83,9 @@ public class RedisKeyConstant {
      * 租户加入请求缓存key（{requestId}->TenantJoinRequestDO JSON），用于租户加入申请场景
      */
     public final static String TENANT_JOIN_REQUEST_KEY = "verse:tenant:join-request:";
+
+    /**
+     * 用户多设备会话映射：{userId} → Hash(deviceId → LoginSessionVO)
+     */
+    public static final String USER_DEVICES_KEY = "verse:user:devices:";
 }

@@ -5,10 +5,14 @@ import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
+import com.yonagi.verse.service.LoginDeviceService;
 import com.yonagi.verse.service.UserService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 /**
  * @author Yonagi
@@ -22,6 +26,7 @@ import org.springframework.web.bind.annotation.*;
 public class UserController {
 
     private final UserService userService;
+    private final LoginDeviceService loginDeviceService;
 
     @GetMapping("/api/v1/user/hasUsername")
     public Result<Boolean> hasUsername(@RequestParam String username) {
@@ -35,8 +40,9 @@ public class UserController {
     }
 
     @PostMapping("/api/v1/users/login")
-    public Result<UserLoginRespDTO> login(@Valid @RequestBody UserLoginReqDTO requestParam) {
-        UserLoginRespDTO dto = userService.login(requestParam);
+    public Result<UserLoginRespDTO> login(@Valid @RequestBody UserLoginReqDTO requestParam,
+                                          HttpServletRequest request) {
+        UserLoginRespDTO dto = userService.login(requestParam, request);
         return Results.success(dto);
     }
 
@@ -59,8 +65,9 @@ public class UserController {
     }
 
     @GetMapping("/api/v1/users/logout")
-    public Result<Boolean> logout(@CurrentUser Long userId) {
-        return Results.success(userService.logout(userId));
+    public Result<Boolean> logout(@CurrentUser Long userId,
+                                  HttpServletRequest request) {
+        return Results.success(userService.logout(userId, request));
     }
 
     @PostMapping("/api/v1/users/updatePassword")
@@ -98,5 +105,18 @@ public class UserController {
     public Result<Boolean> confirmCloseAccount(@CurrentUser Long userId,
                                                @Valid @RequestBody ConfirmCloseAccountReqDTO requestParam) {
         return Results.success(userService.confirmCloseAccount(userId, requestParam));
+    }
+
+    @GetMapping("/api/v1/users/me/devices")
+    public Result<List<LoginDeviceRespDTO>> listDevices(@CurrentUser Long userId,
+                                                         HttpServletRequest request) {
+        return Results.success(loginDeviceService.listDevices(userId, request));
+    }
+
+    @DeleteMapping("/api/v1/users/me/devices/{deviceId}")
+    public Result<Boolean> kickDevice(@CurrentUser Long userId,
+                                      @PathVariable String deviceId,
+                                      HttpServletRequest request) {
+        return Results.success(loginDeviceService.kickDevice(userId, deviceId, request));
     }
 }

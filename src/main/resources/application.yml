@@ -41,3 +41,6 @@ verse:
   tenant:
     max-invite-code-per-day: 10
     max-notification-send-per-day: 5
+  geoip:
+    db-path: classpath:geoip/GeoLite2-City.mmdb
+    enabled: true

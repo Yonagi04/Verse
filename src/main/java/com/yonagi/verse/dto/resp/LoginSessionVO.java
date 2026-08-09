@@ -23,4 +23,9 @@ public class LoginSessionVO implements Serializable {
     private Date expiresAt;
     private Long lastActiveTenantId;
     private Date loginTime;
+
+    private String deviceId;
+    private String deviceName;
+    private String ip;
+    private String region;
 }
