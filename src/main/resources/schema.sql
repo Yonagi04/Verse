@@ -217,3 +217,19 @@ CREATE TABLE IF NOT EXISTS `t_login_device` (
     UNIQUE KEY `uk_user_device` (`user_id`, `device_id`),
     KEY `idx_user_id` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='登录设备表';
+
+-- ============================================
+-- 12. 登录历史表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_login_history` (
+    `id`           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `user_id`      BIGINT       NOT NULL COMMENT '用户ID',
+    `login_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '登录时间',
+    `device_name`  VARCHAR(128) NOT NULL COMMENT '设备名称',
+    `ip`           VARCHAR(45)  NOT NULL COMMENT '登录IP地址',
+    `region`       VARCHAR(64)  DEFAULT NULL COMMENT 'IP所属地理区域',
+    `result`       VARCHAR(10)  NOT NULL COMMENT '登录结果：SUCCESS / FAIL',
+    `fail_reason`  VARCHAR(128) DEFAULT NULL COMMENT '失败原因',
+    PRIMARY KEY (`id`),
+    KEY `idx_user_time` (`user_id`, `login_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='登录历史表';

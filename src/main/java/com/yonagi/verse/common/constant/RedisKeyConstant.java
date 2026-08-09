@@ -88,4 +88,9 @@ public class RedisKeyConstant {
      * 用户多设备会话映射：{userId} → Hash(deviceId → LoginSessionVO)
      */
     public static final String USER_DEVICES_KEY = "verse:user:devices:";
+
+    /**
+     * 用户登录历史记录：{userId} -> Page JSON
+     */
+    public static final String USER_LOGIN_HISTORY_KEY = "verse:user:login-history:";
 }

@@ -6,6 +6,7 @@ import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.LoginDeviceService;
+import com.yonagi.verse.service.LoginHistoryService;
 import com.yonagi.verse.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -23,100 +24,109 @@ import java.util.List;
  */
 @RestController
 @RequiredArgsConstructor
+@RequestMapping("/api/v1/users")
 public class UserController {
 
     private final UserService userService;
     private final LoginDeviceService loginDeviceService;
+    private final LoginHistoryService loginHistoryService;
 
-    @GetMapping("/api/v1/user/hasUsername")
+    @GetMapping("/hasUsername")
     public Result<Boolean> hasUsername(@RequestParam String username) {
         return Results.success(userService.hasUsername(username));
     }
 
-    @PostMapping("/api/v1/users/register")
+    @PostMapping("/register")
     public Result<UserRegisterRespDTO> register(@Valid @RequestBody UserRegisterReqDTO requestParam) {
         UserRegisterRespDTO dto = userService.register(requestParam);
         return Results.success(dto);
     }
 
-    @PostMapping("/api/v1/users/login")
+    @PostMapping("/login")
     public Result<UserLoginRespDTO> login(@Valid @RequestBody UserLoginReqDTO requestParam,
                                           HttpServletRequest request) {
         UserLoginRespDTO dto = userService.login(requestParam, request);
         return Results.success(dto);
     }
 
-    @GetMapping("/api/v1/users/me")
+    @GetMapping("/me")
     public Result<UserRespDTO> getCurrentUser(@CurrentUser Long userId,
                                               @RequestParam(defaultValue = "true") boolean mask) {
         UserRespDTO dto = userService.getCurrentUser(userId, mask);
         return Results.success(dto);
     }
 
-    @GetMapping("/api/v1/user/getUserInfo")
+    @GetMapping("/getUserInfo")
     public Result<UserInfoRespDTO> getUserInfo(@RequestParam Long userId) {
         return Results.success(userService.getUserInfo(userId));
     }
 
-    @PostMapping("/api/v1/users/me")
+    @PostMapping("/me")
     public Result<Boolean> updateProfile(@CurrentUser Long userId,
                                          @Valid @RequestBody UserUpdateReqDTO requestParam) {
         return Results.success(userService.updateProfile(userId, requestParam));
     }
 
-    @GetMapping("/api/v1/users/logout")
+    @GetMapping("/logout")
     public Result<Boolean> logout(@CurrentUser Long userId,
                                   HttpServletRequest request) {
         return Results.success(userService.logout(userId, request));
     }
 
-    @PostMapping("/api/v1/users/updatePassword")
+    @PostMapping("/updatePassword")
     public Result<Boolean> updatePassword(@CurrentUser Long userId,
                                           @Valid @RequestBody UserUpdatePasswordReqDTO requestParam) {
         return Results.success(userService.updatePassword(userId, requestParam));
     }
 
-    @PostMapping("/api/v1/users/password/reset/sendCode")
+    @PostMapping("/password/reset/sendCode")
     public Result<Boolean> sendingPhoneCode(@Valid @RequestBody UserSendingPhoneCodeReqDTO requestParam) {
         return Results.success(userService.sendingPhoneCode(requestParam));
     }
 
-    @PostMapping("/api/v1/users/password/reset/verifyCode")
+    @PostMapping("/password/reset/verifyCode")
     public Result<UserVerifyPhoneCodeRespDTO> verifyCode(@Valid @RequestBody UserVerifyPhoneCodeReqDTO requestParam) {
         return Results.success(userService.verifyCode(requestParam));
     }
 
-    @PostMapping("/api/v1/users/password/reset")
+    @PostMapping("/password/reset")
     public Result<Boolean> resetPassword(@Valid @RequestBody UserResetPasswordReqDTO requestParam) {
         return Results.success(userService.resetPassword(requestParam));
     }
 
-    @GetMapping("/api/v1/users/account/cancel/prepare")
+    @GetMapping("/account/cancel/prepare")
     public Result<PrepareCloseAccountRespDTO> prepareCloseAccount(@CurrentUser Long userId) {
         return Results.success(userService.prepareCloseAccount(userId));
     }
 
-    @PostMapping("/api/v1/users/account/cancel/sendCode")
+    @PostMapping("/account/cancel/sendCode")
     public Result<Boolean> closeAccountSendCode(@CurrentUser Long userId) {
         return Results.success(userService.closeAccountSendCode(userId));
     }
 
-    @PostMapping("/api/v1/users/account/cancel/confirm")
+    @PostMapping("/account/cancel/confirm")
     public Result<Boolean> confirmCloseAccount(@CurrentUser Long userId,
                                                @Valid @RequestBody ConfirmCloseAccountReqDTO requestParam) {
         return Results.success(userService.confirmCloseAccount(userId, requestParam));
     }
 
-    @GetMapping("/api/v1/users/me/devices")
+    @GetMapping("/me/devices")
     public Result<List<LoginDeviceRespDTO>> listDevices(@CurrentUser Long userId,
                                                          HttpServletRequest request) {
         return Results.success(loginDeviceService.listDevices(userId, request));
     }
 
-    @DeleteMapping("/api/v1/users/me/devices/{deviceId}")
+    @DeleteMapping("/me/devices/{deviceId}")
     public Result<Boolean> kickDevice(@CurrentUser Long userId,
                                       @PathVariable String deviceId,
                                       HttpServletRequest request) {
         return Results.success(loginDeviceService.kickDevice(userId, deviceId, request));
+    }
+
+    @GetMapping("/me/login-history")
+    public Result<LoginHistoryRespDTO> getLoginHistoryList(@CurrentUser Long userId,
+                                                         @RequestParam @Valid Integer pageNum,
+                                                         @RequestParam Integer pageSize) {
+        return Results.success(loginHistoryService.getLoginHistoryList(userId, pageNum, pageSize));
     }
 }

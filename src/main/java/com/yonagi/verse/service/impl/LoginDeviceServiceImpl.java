@@ -19,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -83,5 +84,47 @@ public class LoginDeviceServiceImpl extends ServiceImpl<LoginDeviceMapper, Login
                 .set(LoginDeviceDO::getStatus, 0));
 
         return Boolean.TRUE;
+    }
+
+    @Override
+    public void upsertLoginDevice(Long userId, String deviceId, String deviceName, String ip, String region) {
+        LoginDeviceDO existing = baseMapper.selectOne(
+                Wrappers.lambdaQuery(LoginDeviceDO.class)
+                        .eq(LoginDeviceDO::getUserId, userId)
+                        .eq(LoginDeviceDO::getDeviceId, deviceId));
+        if (existing != null) {
+            baseMapper.update(Wrappers.lambdaUpdate(LoginDeviceDO.class)
+                            .eq(LoginDeviceDO::getId, existing.getId())
+                            .set(LoginDeviceDO::getDeviceName, deviceName)
+                            .set(LoginDeviceDO::getIp, ip)
+                            .set(LoginDeviceDO::getRegion, region)
+                            .set(LoginDeviceDO::getStatus, 1));
+        } else {
+            LoginDeviceDO device = LoginDeviceDO.builder()
+                    .deviceId(deviceId)
+                    .userId(userId)
+                    .deviceName(deviceName)
+                    .ip(ip)
+                    .region(region)
+                    .status(1)
+                    .firstLoginAt(new Date())
+                    .build();
+            baseMapper.insert(device);
+        }
+    }
+
+    @Override
+    public void logoutDevice(Long userId, String deviceId) {
+        baseMapper.update(Wrappers.lambdaUpdate(LoginDeviceDO.class)
+                .eq(LoginDeviceDO::getUserId, userId)
+                .eq(LoginDeviceDO::getDeviceId, deviceId)
+                .set(LoginDeviceDO::getStatus, 0));
+    }
+
+    @Override
+    public void logoutAllDevice(Long userId) {
+        baseMapper.update(Wrappers.lambdaUpdate(LoginDeviceDO.class)
+                .eq(LoginDeviceDO::getUserId, userId)
+                .set(LoginDeviceDO::getStatus, 0));
     }
 }

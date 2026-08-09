@@ -73,6 +73,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private static final DateTimeFormatter CANCEL_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy年MM月dd日");
     private static final String WELCOME_MESSAGE_TITLE = "欢迎使用 Verse！";
     private static final String WELCOME_MESSAGE_CONTENT = "你好, %s！欢迎使用 Verse！";
+    private static final List<String> LOGIN_RESULTS = List.of("成功", "失败");
+    private static final List<String> LOGIN_FAIL_REASON = List.of("密码错误", "被封禁用户尝试登录", "已注销用户尝试登录");
 
     private final PasswordEncoder passwordEncoder;
     private final AesUtil aesUtil;
@@ -80,7 +82,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final UserTenantService userTenantService;
     private final NotificationService notificationService;
     private final LoginDeviceService loginDeviceService;
-    private final LoginDeviceMapper loginDeviceMapper;
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> usernameBloomFilter;
@@ -90,6 +91,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Lazy
     @Autowired
     private UserServiceImpl self;
+    @Autowired
+    private LoginHistoryService loginHistoryService;
 
     @Override
     public Boolean hasUsername(String username) {
@@ -219,19 +222,22 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             userDO = phoneQueryUserDO;
         }
         if (userDO.getStatus() == null || userDO.getStatus().equals(UserStatusEnum.USER_STATUS_DISABLED.getStatusCode())) {
+            loginHistoryService.recordLoginHistory(userDO.getUserId(), deviceName, ip,
+                    region, LOGIN_RESULTS.get(1), LOGIN_RESULTS.get(1));
             throw new ClientException(UserErrorCodeEnum.USER_ACCOUNT_BANNED);
         } else if (userDO.getStatus().equals(UserStatusEnum.USER_STATUS_CLOSED.getStatusCode())) {
             String cancelTime = userDO.getCancelTime() != null
                     ? CANCEL_TIME_FORMATTER.format(userDO.getCancelTime().toInstant().atZone(ZoneId.systemDefault()))
                     : "较早前";
             String message = String.format(CLOSED_ACCOUNT_LOGIN_WARNING, cancelTime);
+            loginHistoryService.recordLoginHistory(userDO.getUserId(), deviceName, ip,
+                    region, LOGIN_RESULTS.get(1), LOGIN_FAIL_REASON.get(2));
             throw new ClientException(message, UserErrorCodeEnum.USER_ACCOUNT_CLOSED);
         }
         if (!passwordEncoder.matches(requestParam.getPassword(), userDO.getPassword())) {
+            loginHistoryService.recordLoginHistory(userDO.getUserId(), deviceName, ip,
+                    region, LOGIN_RESULTS.get(1), LOGIN_FAIL_REASON.getFirst());
             throw new ClientException(UserErrorCodeEnum.PASSWORD_ERROR);
-        }
-        if (userDO.getStatus() != null && userDO.getStatus() == 0) {
-            throw new ClientException(UserErrorCodeEnum.USER_STATUS_DISABLED);
         }
 
         // 生成 JWT Token
@@ -266,7 +272,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 ttl, TimeUnit.MILLISECONDS);
 
         // UPSERT 设备记录到 MySQL
-        upsertLoginDevice(userDO.getUserId(), deviceId, deviceName, ip, region);
+        loginDeviceService.upsertLoginDevice(userDO.getUserId(), deviceId, deviceName, ip, region);
+        loginHistoryService.recordLoginHistory(userDO.getUserId(), deviceName, ip, region, LOGIN_RESULTS.getFirst(), null);
 
         UserLoginRespDTO resp = new UserLoginRespDTO();
         BeanUtil.copyProperties(userDO, resp);
@@ -465,11 +472,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         stringRedisTemplate.opsForHash().delete(hashKey, currentDeviceId);
 
         // 更新 MySQL 设备状态为离线
-        loginDeviceMapper.update(null,
-                Wrappers.lambdaUpdate(LoginDeviceDO.class)
-                        .eq(LoginDeviceDO::getUserId, userId)
-                        .eq(LoginDeviceDO::getDeviceId, currentDeviceId)
-                        .set(LoginDeviceDO::getStatus, 0));
+        loginDeviceService.logoutDevice(userId, currentDeviceId);
 
         return true;
     }
@@ -677,36 +680,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             stringRedisTemplate.delete(RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash);
         }
         stringRedisTemplate.delete(hashKey);
-        loginDeviceMapper.update(null,
-                Wrappers.lambdaUpdate(LoginDeviceDO.class)
-                        .eq(LoginDeviceDO::getUserId, userId)
-                        .set(LoginDeviceDO::getStatus, 0));
-    }
-
-    private void upsertLoginDevice(Long userId, String deviceId,
-                                    String deviceName, String ip, String region) {
-        LoginDeviceDO existing = loginDeviceMapper.selectOne(
-                Wrappers.lambdaQuery(LoginDeviceDO.class)
-                        .eq(LoginDeviceDO::getUserId, userId)
-                        .eq(LoginDeviceDO::getDeviceId, deviceId));
-        if (existing != null) {
-            loginDeviceMapper.update(null,
-                    Wrappers.lambdaUpdate(LoginDeviceDO.class)
-                            .eq(LoginDeviceDO::getId, existing.getId())
-                            .set(LoginDeviceDO::getDeviceName, deviceName)
-                            .set(LoginDeviceDO::getIp, ip)
-                            .set(LoginDeviceDO::getRegion, region)
-                            .set(LoginDeviceDO::getStatus, 1));
-        } else {
-            LoginDeviceDO device = new LoginDeviceDO();
-            device.setDeviceId(deviceId);
-            device.setUserId(userId);
-            device.setDeviceName(deviceName);
-            device.setIp(ip);
-            device.setRegion(region);
-            device.setStatus(1);
-            device.setFirstLoginAt(new Date());
-            loginDeviceMapper.insert(device);
-        }
+        loginDeviceService.logoutAllDevice(userId);
     }
 }

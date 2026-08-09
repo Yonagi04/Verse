@@ -17,4 +17,10 @@ public interface LoginDeviceService {
     List<LoginDeviceRespDTO> listDevices(Long userId, HttpServletRequest request);
 
     Boolean kickDevice(Long userId, String deviceId, HttpServletRequest request);
+
+    void upsertLoginDevice(Long userId, String deviceId, String deviceName, String ip, String region);
+
+    void logoutDevice(Long userId, String deviceId);
+
+    void logoutAllDevice(Long userId);
 }

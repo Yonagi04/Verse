@@ -11,18 +11,18 @@ import java.util.Date;
  * @version 1.0
  * @program Verse
  * @description
- * @date 2026/08/09 15:00
+ * @date 2026/08/09 18:35
  */
 @Data
 @Builder
-@TableName("t_login_device")
-public class LoginDeviceDO {
+@TableName("t_login_history")
+public class LoginHistoryDO {
 
     private Long id;
 
-    private String deviceId;
-
     private Long userId;
+
+    private Date loginTime;
 
     private String deviceName;
 
@@ -30,9 +30,7 @@ public class LoginDeviceDO {
 
     private String region;
 
-    private Integer status;
+    private String result;
 
-    private Date firstLoginAt;
-
-    private Date lastLoginAt;
+    private String failReason;
 }
