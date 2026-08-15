@@ -30,6 +30,9 @@
         <redisson.version>3.21.3</redisson.version>
         <guava.version>30.0-jre</guava.version>
         <geoip2.version>4.2.0</geoip2.version>
+        <s3.version>2.24.0</s3.version>
+        <thumbnailator.version>0.4.20</thumbnailator.version>
+        <webp-imageio.version>0.1.6</webp-imageio.version>
     </properties>
 
     <dependencies>
@@ -142,6 +145,22 @@
             <groupId>com.maxmind.geoip2</groupId>
             <artifactId>geoip2</artifactId>
             <version>${geoip2.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+            <version>${s3.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>net.coobird</groupId>
+            <artifactId>thumbnailator</artifactId>
+            <version>${thumbnailator.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.sejda.imageio</groupId>
+            <artifactId>webp-imageio</artifactId>
+            <version>${webp-imageio.version}</version>
         </dependency>
     </dependencies>
 

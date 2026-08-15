@@ -44,3 +44,10 @@ verse:
   geoip:
     db-path: classpath:geoip/GeoLite2-City.mmdb
     enabled: true
+  s3:
+    endpoint: ${S3_ENDPOINT:https://s3.amazonaws.com}
+    region: ${S3_REGION:us-east-1}
+    access-key: ${S3_ACCESS_KEY:}
+    secret-key: ${S3_SECRET_KEY:}
+    bucket: ${S3_BUCKET:verse}
+    base-url: ${S3_BASE_URL:https://s3.amazonaws.com}

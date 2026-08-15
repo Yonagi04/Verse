@@ -64,6 +64,26 @@ public class UserDO extends BaseDO {
     private String phoneHash;
 
     /**
+     * 头像在 S3 中的 objectKey
+     */
+    private String avatar;
+
+    /**
+     * 个人简介
+     */
+    private String bio;
+
+    /**
+     * 地区
+     */
+    private String region;
+
+    /**
+     * 时区
+     */
+    private String timezone;
+
+    /**
      * 状态：0=禁用, 1=正常, 2=注销
      */
     private Integer status;

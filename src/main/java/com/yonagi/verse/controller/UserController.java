@@ -5,6 +5,7 @@ import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
+import com.yonagi.verse.service.AvatarService;
 import com.yonagi.verse.service.LoginDeviceService;
 import com.yonagi.verse.service.LoginHistoryService;
 import com.yonagi.verse.service.UserService;
@@ -12,6 +13,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -128,5 +130,17 @@ public class UserController {
                                                          @RequestParam @Valid Integer pageNum,
                                                          @RequestParam Integer pageSize) {
         return Results.success(loginHistoryService.getLoginHistoryList(userId, pageNum, pageSize));
+    }
+
+    @PostMapping("/me/avatar")
+    public Result<String> uploadAvatar(@CurrentUser Long userId,
+                                       @RequestBody MultipartFile file) {
+        return Results.success(userService.uploadAvatar(userId, file));
+    }
+
+    @PostMapping("/me/privacy")
+    public Result<Boolean> updatePrivacy(@CurrentUser Long userId,
+                                         @RequestBody @Valid UserPrivacyUpdateReqDTO requestParam) {
+        return Results.success(userService.updatePrivacy(userId, requestParam));
     }
 }

@@ -23,4 +23,11 @@ public class UserUpdateReqDTO {
     @NotBlank(message = "手机号不能为空")
     @Pattern(regexp = "^1[3-9]\\d{9}$", message = "请输入正确的手机号")
     private String phone;
+
+    @Size(max = 255, message = "简介长度不能超过255个字符")
+    private String bio;
+
+    private String region;
+
+    private String timezone;
 }

@@ -28,4 +28,14 @@ public class UserRespDTO {
     private String email;
 
     private String phone;
+
+    private String avatar;
+
+    private String bio;
+
+    private String region;
+
+    private String timezone;
+
+    private UserPrivacyRespDTO privacy;
 }

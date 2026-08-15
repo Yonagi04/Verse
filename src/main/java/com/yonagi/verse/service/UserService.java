@@ -6,6 +6,7 @@ import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import org.springframework.web.multipart.MultipartFile;
 
 /**
  * @author Yonagi
@@ -43,4 +44,9 @@ public interface UserService extends IService<UserDO> {
     Boolean closeAccountSendCode(Long userId);
 
     Boolean confirmCloseAccount(Long userId, @Valid ConfirmCloseAccountReqDTO requestParam);
+
+    String uploadAvatar(Long userId, MultipartFile file);
+
+    Boolean updatePrivacy(Long userId, @Valid UserPrivacyUpdateReqDTO requestParam);
+
 }

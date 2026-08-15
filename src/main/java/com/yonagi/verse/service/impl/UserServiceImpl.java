@@ -20,8 +20,10 @@ import com.yonagi.verse.common.util.SensitiveUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.LoginDeviceDO;
 import com.yonagi.verse.dao.entity.UserDO;
+import com.yonagi.verse.dao.entity.UserPrivacyDO;
 import com.yonagi.verse.dao.mapper.LoginDeviceMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
+import com.yonagi.verse.dao.mapper.UserPrivacyMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.*;
@@ -33,11 +35,13 @@ import org.redisson.api.RBloomFilter;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -87,12 +91,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final RBloomFilter<String> usernameBloomFilter;
     private final RedissonClient redissonClient;
     private final GeoIpUtil geoIpUtil;
+    private final UserPrivacyMapper userPrivacyMapper;
 
     @Lazy
     @Autowired
     private UserServiceImpl self;
     @Autowired
     private LoginHistoryService loginHistoryService;
+    @Autowired
+    private AvatarService avatarService;
+
+    @Value("${verse.s3.base-url}")
+    private String s3BaseUrl;
+
+    @Value("${verse.s3.bucket}")
+    private String bucket;
 
     @Override
     public Boolean hasUsername(String username) {
@@ -186,6 +199,18 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 .eq(UserDO::getUserId, userId)
                 .set(UserDO::getLastActiveTenantId, tenantId);
         baseMapper.update(updateWrapper);
+        // 注册完成的用户新建隐私设置
+        UserPrivacyDO userPrivacyDO = UserPrivacyDO.builder()
+                .userId(userId)
+                .showRegion(1)
+                .showTimezone(1)
+                .showBio(1)
+                .build();
+        int insert = userPrivacyMapper.insert(userPrivacyDO);
+        if (insert < 1) {
+            // 不阻塞
+            log.error("register user {} created privacy error", userId);
+        }
 
         // 给注册完的用户推送一条系统通知
         try {
@@ -333,6 +358,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             }
             return result;
         }
+        // 查询隐私设置
+        UserPrivacyDO privacy = userPrivacyMapper.selectOne(Wrappers.lambdaQuery(UserPrivacyDO.class)
+                .eq(UserPrivacyDO::getUserId, userId));
 
         UserDO userDO = queryActiveUserFromUserId(userId);
         if (userDO == null) {
@@ -344,6 +372,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         UserRespDTO result = new UserRespDTO();
         BeanUtil.copyProperties(userDO, result);
+        result.setAvatar(userDO.getAvatar() != null ? s3BaseUrl + "/" + bucket + "/" + userDO.getAvatar() : null);
+        result.setBio(userDO.getBio());
+        result.setRegion(userDO.getRegion());
+        result.setTimezone(userDO.getTimezone());
+        result.setPrivacy(UserPrivacyRespDTO.builder()
+                .showBio(privacy != null && privacy.getShowBio() == 1)
+                .showRegion(privacy != null && privacy.getShowRegion() == 1)
+                .showTimezone(privacy != null && privacy.getShowTimezone() == 1)
+                .build());
         stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(result), 1, TimeUnit.HOURS);
 
         if (mask) {
@@ -355,7 +392,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public UserInfoRespDTO getUserInfo(Long userId) {
-        String cacheKey = RedisKeyConstant.USER_ANOTHER_PROFILE_KEY + userId;
+        String cacheKey = RedisKeyConstant.USER_PUBLIC_PROFILE_KEY + userId;
         String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
         if (cachedJson != null) {
             return JSON.parseObject(cachedJson, UserInfoRespDTO.class);
@@ -365,8 +402,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
+        UserPrivacyDO privacy = userPrivacyMapper.selectOne(Wrappers.lambdaQuery(UserPrivacyDO.class)
+                .eq(UserPrivacyDO::getUserId, userId));
+
         UserInfoRespDTO result = new UserInfoRespDTO();
         BeanUtil.copyProperties(userDO, result);
+        result.setAvatar(userDO.getAvatar() != null ? s3BaseUrl + "/" + bucket + "/" + userDO.getAvatar() : null);
+        if (privacy == null || privacy.getShowBio() == 0) {
+            result.setBio(null);
+        }
+        if (privacy == null || privacy.getShowRegion() == 0) {
+            result.setRegion(null);
+        }
+        if (privacy == null || privacy.getShowTimezone() == 0) {
+            result.setTimezone(null);
+        }
         stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(result), 1, TimeUnit.HOURS);
         return result;
     }
@@ -423,6 +473,25 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             updateWrapper.set(UserDO::getPhoneHash, newPhoneHash);
         }
 
+        // 处理简介
+        if (StrUtil.isNotBlank(requestParam.getBio())) {
+            updateWrapper.set(UserDO::getBio, requestParam.getBio());
+        } else if (requestParam.getBio() != null) {
+            updateWrapper.set(UserDO::getBio, null);
+        }
+        // 处理地区
+        if (StrUtil.isNotBlank(requestParam.getRegion())) {
+            updateWrapper.set(UserDO::getRegion, requestParam.getRegion());
+        } else if (requestParam.getRegion() != null) {
+            updateWrapper.set(UserDO::getRegion, null);
+        }
+        // 处理时区
+        if (StrUtil.isNotBlank(requestParam.getTimezone())) {
+            updateWrapper.set(UserDO::getTimezone, requestParam.getTimezone());
+        } else if (requestParam.getTimezone() != null) {
+            updateWrapper.set(UserDO::getTimezone, null);
+        }
+
         int update = baseMapper.update(null, updateWrapper);
         if (update < 0) {
             log.error("Failed to update user profile for userId: {}, requestParam: {}", userId, requestParam);
@@ -431,7 +500,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         // DB 更新成功后，删除用户信息缓存
         stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
-        stringRedisTemplate.delete(RedisKeyConstant.USER_ANOTHER_PROFILE_KEY + userId);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_PUBLIC_PROFILE_KEY + userId);
 
         // 邮箱变更时，维护 Redis Set：旧邮箱移除绑定，新邮箱添加绑定
         if (emailChanged) {
@@ -631,7 +700,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         // 删除用户缓存
         stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
-        stringRedisTemplate.delete(RedisKeyConstant.USER_ANOTHER_PROFILE_KEY + userId);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_PUBLIC_PROFILE_KEY + userId);
         // 释放手机号绑定
         String phoneHash = userDO.getPhoneHash();
         if (phoneHash != null) {
@@ -647,6 +716,41 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         // 删除用户所有设备登录会话
         logoutAllDevices(userId);
 
+        return Boolean.TRUE;
+    }
+
+    @Override
+    public String uploadAvatar(Long userId, MultipartFile file) {
+        String avatarUrl = avatarService.uploadAvatar(userId, file);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_PUBLIC_PROFILE_KEY + userId);
+        return avatarUrl;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean updatePrivacy(Long userId, UserPrivacyUpdateReqDTO requestParam) {
+        LambdaUpdateWrapper<UserPrivacyDO> updateWrapper = Wrappers.lambdaUpdate(UserPrivacyDO.class)
+                .eq(UserPrivacyDO::getUserId, userId)
+                .set(UserPrivacyDO::getShowBio, requestParam.getShowBio() ? 1 : 0)
+                .set(UserPrivacyDO::getShowTimezone, requestParam.getShowTimezone() ? 1 : 0)
+                .set(UserPrivacyDO::getShowRegion, requestParam.getShowRegion() ? 1 : 0);
+        int update = userPrivacyMapper.update(updateWrapper);
+        if (update < 0) {
+            throw new ServerException(UserErrorCodeEnum.USER_PRIVACY_UPDATE_ERROR);
+        } else if (update == 0) {
+            UserPrivacyDO userPrivacyDO = UserPrivacyDO.builder()
+                    .userId(userId)
+                    .showBio(requestParam.getShowBio() ? 1 : 0)
+                    .showTimezone(requestParam.getShowTimezone() ? 1 : 0)
+                    .showRegion(requestParam.getShowRegion() ? 1 : 0)
+                    .createTime(new Date())
+                    .build();
+            userPrivacyMapper.insert(userPrivacyDO);
+        }
+        // DB 更新成功后，删除用户信息缓存
+        stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_PUBLIC_PROFILE_KEY + userId);
         return Boolean.TRUE;
     }
 

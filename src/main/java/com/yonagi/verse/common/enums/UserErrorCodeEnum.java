@@ -15,6 +15,9 @@ public enum UserErrorCodeEnum implements IErrorCode {
     USER_SAVED_ERROR("A000201", "用户记录保存失败"),
     USER_UPDATE_ERROR("A000202", "用户记录更新失败"),
     USER_CLOSE_ACCOUNT_ERROR("A000203", "用户注销失败"),
+    AVATAR_PROCESS_ERROR("A000204", "头像图片处理失败，请重新上传头像"),
+    AVATAR_UPLOAD_ERROR("A000205", "头像图片上传失败"),
+    USER_PRIVACY_UPDATE_ERROR("A000206", "隐私设置更新失败"),
 
     USER_NOT_EXIST("B000200", "用户不存在"),
     USER_EXIST("B000201", "用户已存在"),
@@ -36,7 +39,9 @@ public enum UserErrorCodeEnum implements IErrorCode {
     USER_ACCOUNT_CLOSED("B000218", "该账号已注销"),
     USER_ACCOUNT_BANNED("B000219", "该账号已被停用，请联系管理员"),
     CANNOT_KICK_CURRENT_DEVICE("B000220", "不能踢当前登录的设备下线"),
-    DEVICE_NOT_FOUND("B000221", "设备不存在");
+    DEVICE_NOT_FOUND("B000221", "设备不存在"),
+    AVATAR_TYPE_INVALID("B000222", "头像格式不支持，仅允许PNG、JPG、WebP"),
+    AVATAR_SIZE_EXCEED("B000223", "图片大小不能超过5MB");
 
     private final String code;
 

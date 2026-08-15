@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS `t_user` (
     `phone_hash`            VARCHAR(128)  DEFAULT NULL COMMENT '手机号哈希（SHA-256，用于查询）',
     `status`                TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=禁用, 1=正常',
     `last_active_tenant_id` BIGINT       DEFAULT NULL COMMENT '当前活跃租户ID',
+    `avatar`    VARCHAR(512) DEFAULT NULL COMMENT '头像在 S3 中的 objectKey',
+    `bio`       VARCHAR(255) DEFAULT NULL COMMENT '个人简介',
+    `region`    VARCHAR(50)  DEFAULT NULL COMMENT '地区',
+    `timezone`  VARCHAR(50)  DEFAULT NULL COMMENT '时区',
     `create_time`           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time`           DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `del_flag`              TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除：0=未删除, 1=已删除',
@@ -233,3 +237,18 @@ CREATE TABLE IF NOT EXISTS `t_login_history` (
     PRIMARY KEY (`id`),
     KEY `idx_user_time` (`user_id`, `login_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='登录历史表';
+
+-- ============================================
+-- 13. 隐私设置表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_user_privacy` (
+    `id`            BIGINT  NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `user_id`       BIGINT  NOT NULL COMMENT '用户ID',
+    `show_bio`      TINYINT NOT NULL DEFAULT 1 COMMENT '公开展示简介：0=否, 1=是',
+    `show_region`   TINYINT NOT NULL DEFAULT 1 COMMENT '公开展示地区：0=否, 1=是',
+    `show_timezone` TINYINT NOT NULL DEFAULT 1 COMMENT '公开展示时区：0=否, 1=是',
+    `create_time`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    `update_time`   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户隐私设置表';

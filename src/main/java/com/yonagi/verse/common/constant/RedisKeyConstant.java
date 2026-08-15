@@ -52,7 +52,7 @@ public class RedisKeyConstant {
     /**
      * 用户信息缓存key（{userId} → UserInfoRespDTO JSON），用于getUserInfo缓存
      */
-    public final static String USER_ANOTHER_PROFILE_KEY = "verse:user:another-profile:";
+    public final static String USER_PUBLIC_PROFILE_KEY = "verse:user:public-profile:";
 
     /**
      * 用户注销账号验证码key（{userId} -> code），用于注销账号场景
