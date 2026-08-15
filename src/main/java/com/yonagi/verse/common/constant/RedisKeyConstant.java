@@ -90,7 +90,7 @@ public class RedisKeyConstant {
     public static final String USER_DEVICES_KEY = "verse:user:devices:";
 
     /**
-     * 用户登录历史记录：{userId} -> Page JSON
+     * 用户登录历史记录：{userId}:{pageNum}:{pageSize} -> LoginHistoryRespDTO JSON
      */
     public static final String USER_LOGIN_HISTORY_KEY = "verse:user:login-history:";
 }

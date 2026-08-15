@@ -20,6 +20,8 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * @author Yonagi
@@ -38,37 +40,40 @@ public class LoginHistoryServiceImpl extends ServiceImpl<LoginHistoryMapper, Log
 
     @Override
     public LoginHistoryRespDTO getLoginHistoryList(Long userId, Integer pageNum, Integer pageSize) {
+        if (pageNum == null) {
+            pageNum = 1;
+        }
         if (pageSize == null) {
             pageSize = 10;
         }
-        Page<LoginHistoryDO> pages;
-        String cacheKey = RedisKeyConstant.USER_LOGIN_HISTORY_KEY + userId;
+        String cacheKey = RedisKeyConstant.USER_LOGIN_HISTORY_KEY + userId + ":" + pageNum + ":" + pageSize;
         String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        boolean isCached = false;
-
         if (cachedJson != null) {
-            pages = JSON.parseObject(cachedJson, Page.class);
-            isCached = true;
-        } else {
-            UserDO userDO = userMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
-                    .eq(UserDO::getUserId, userId));
-            Date createTime = userDO.getCreateTime();
-            pages = baseMapper.selectPage(new Page<>(pageNum, pageSize), Wrappers.lambdaQuery(LoginHistoryDO.class)
-                    .eq(LoginHistoryDO::getUserId, userId)
-                    .ge(LoginHistoryDO::getLoginTime, createTime));
+            return JSON.parseObject(cachedJson, LoginHistoryRespDTO.class);
         }
-        List<LoginHistoryDO> records = pages.getRecords();
+
+        UserDO userDO = userMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
+                .eq(UserDO::getUserId, userId));
+        Date createTime = userDO.getCreateTime();
+        Page<LoginHistoryDO> page = baseMapper.selectPage(new Page<>(pageNum, pageSize), Wrappers.lambdaQuery(LoginHistoryDO.class)
+                .eq(LoginHistoryDO::getUserId, userId)
+                .ge(LoginHistoryDO::getLoginTime, createTime));
+
+        LoginHistoryRespDTO respDTO = buildRespDTO(page, pageNum, pageSize);
+        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(respDTO), 30, TimeUnit.MINUTES);
+        return respDTO;
+    }
+
+    private LoginHistoryRespDTO buildRespDTO(Page<LoginHistoryDO> page, Integer pageNum, Integer pageSize) {
+        List<LoginHistoryDO> records = page.getRecords();
         List<LoginHistoryRespDTO.LoginHistoryInfo> historyInfos = new ArrayList<>();
         for (LoginHistoryDO loginHistoryDO : records) {
             historyInfos.add(BeanUtil.copyProperties(loginHistoryDO, LoginHistoryRespDTO.LoginHistoryInfo.class));
         }
-        if (!isCached) {
-            stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(pages));
-        }
 
         LoginHistoryRespDTO respDTO = new LoginHistoryRespDTO();
-        respDTO.setTotal(pages.getTotal());
-        respDTO.setTotalPages(pages.getPages());
+        respDTO.setTotal(page.getTotal());
+        respDTO.setTotalPages(page.getPages());
         respDTO.setPage(pageNum);
         respDTO.setPageSize(pageSize);
         respDTO.setHistoryInfos(historyInfos);
@@ -87,6 +92,13 @@ public class LoginHistoryServiceImpl extends ServiceImpl<LoginHistoryMapper, Log
                 .loginTime(new Date())
                 .build();
         baseMapper.insert(history);
-        stringRedisTemplate.delete(RedisKeyConstant.USER_LOGIN_HISTORY_KEY + userId);
+        invalidateLoginHistoryCache(userId);
+    }
+
+    private void invalidateLoginHistoryCache(Long userId) {
+        Set<String> keys = stringRedisTemplate.keys(RedisKeyConstant.USER_LOGIN_HISTORY_KEY + userId + ":*");
+        if (keys != null && !keys.isEmpty()) {
+            stringRedisTemplate.delete(keys);
+        }
     }
 }

@@ -49,6 +49,7 @@ public class LoginDeviceServiceImpl extends ServiceImpl<LoginDeviceMapper, Login
 
         List<LoginDeviceDO> allDevices = baseMapper.selectList(Wrappers.lambdaQuery(LoginDeviceDO.class)
                 .eq(LoginDeviceDO::getUserId, userId)
+                .eq(LoginDeviceDO::getStatus, 1)
                 .orderByDesc(LoginDeviceDO::getLastLoginAt));
         return allDevices.stream().map(device -> LoginDeviceRespDTO.builder()
                 .deviceId(device.getDeviceId())
