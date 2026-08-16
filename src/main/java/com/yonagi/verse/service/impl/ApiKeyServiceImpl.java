@@ -2,6 +2,7 @@ package com.yonagi.verse.service.impl;
 
 import cn.hutool.crypto.digest.DigestUtil;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -14,6 +15,7 @@ import com.yonagi.verse.dao.mapper.ApiKeyMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dto.req.ApiKeyCreateReqDTO;
 import com.yonagi.verse.dto.resp.ApiKeyListRespDTO;
+import com.yonagi.verse.dto.resp.ApiKeyPageRespDTO;
 import com.yonagi.verse.dto.resp.ApiKeyRespDTO;
 import com.yonagi.verse.service.ApiKeyService;
 import com.yonagi.verse.service.UserTenantService;
@@ -84,25 +86,44 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
     }
 
     @Override
-    public List<ApiKeyListRespDTO> listApiKeys(Long userId, Long tenantId) {
+    public ApiKeyPageRespDTO listApiKeys(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
         validateTenantAndMembership(userId, tenantId);
-        List<ApiKeyDO> apiKeys = baseMapper.selectList(Wrappers.lambdaQuery(ApiKeyDO.class)
+        if (pageNum == null) {
+            pageNum = 1;
+        }
+        if (pageSize == null) {
+            pageSize = 10;
+        }
+        Page<ApiKeyDO> page = baseMapper.selectPage(new Page<>(pageNum, pageSize), Wrappers.lambdaQuery(ApiKeyDO.class)
                 .eq(ApiKeyDO::getUserId, userId)
                 .eq(ApiKeyDO::getTenantId, tenantId)
-                .eq(ApiKeyDO::getStatus, 1)
+                .in(ApiKeyDO::getStatus, 1, 2)
                 .orderByDesc(ApiKeyDO::getCreateTime));
-        return apiKeys.stream().map(this::toListRespDTO).toList();
+        Date now = new Date();
+        List<ApiKeyDO> apiKeyList = page.getRecords();
+        for (ApiKeyDO apiKeyDO : apiKeyList) {
+            // 仅当仍为正常状态且已过期时，标记为过期状态（status=2）
+            if (Integer.valueOf(1).equals(apiKeyDO.getStatus())
+                    && apiKeyDO.getExpiresAt() != null && apiKeyDO.getExpiresAt().before(now)) {
+                baseMapper.update(Wrappers.lambdaUpdate(ApiKeyDO.class)
+                        .eq(ApiKeyDO::getApiKeyId, apiKeyDO.getApiKeyId())
+                        .set(ApiKeyDO::getStatus, 2));
+                apiKeyDO.setStatus(2);
+            }
+        }
+        List<ApiKeyListRespDTO> records = apiKeyList.stream().map(this::toListRespDTO).toList();
+        return new ApiKeyPageRespDTO(records, page.getTotal(), page.getPages(), pageNum, pageSize);
     }
 
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public Boolean revokeApiKey(Long userId, Long tenantId, Long keyId) {
+    public Boolean revokeApiKey(Long userId, Long tenantId, Long apiKeyId) {
         validateTenantAndMembership(userId, tenantId);
         int updated = baseMapper.update(Wrappers.lambdaUpdate(ApiKeyDO.class)
-                .eq(ApiKeyDO::getApiKeyId, keyId)
+                .eq(ApiKeyDO::getApiKeyId, apiKeyId)
                 .eq(ApiKeyDO::getUserId, userId)
                 .eq(ApiKeyDO::getTenantId, tenantId)
-                .eq(ApiKeyDO::getStatus, 1)
+                .in(ApiKeyDO::getStatus, 1, 2)
                 .set(ApiKeyDO::getStatus, 0));
         if (updated < 1) {
             throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_NOT_EXIST);
