@@ -37,4 +37,9 @@ public class LoginHistoryDO {
     private String result;
 
     private String failReason;
+
+    /**
+     * 事件唯一 ID（幂等键）
+     */
+    private String eventId;
 }

@@ -90,15 +90,11 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
         realJoinTenant(requestDO.getUserId(), tenantId);
         // 邀请码使用次数+1
         inviteService.incrementUsageCount(requestDO.getInviteId());
-        // 通知申请人
-        try {
-            notificationService.createAndPush(tenantId, "SYSTEM", "INFO",
-                    "加入租户申请已批准",
-                    "您加入租户「" + tenantDO.getName() + "」的申请已被管理员批准",
-                    null, java.util.List.of(requestDO.getUserId()));
-        } catch (Exception e) {
-            log.error("Creating and pushing notification error for approve: {}", e.getMessage());
-        }
+        // 通知申请人（事务提交后异步投递）
+        notificationService.publishNotification(tenantId, "SYSTEM", "INFO",
+                "加入租户申请已批准",
+                "您加入租户「" + tenantDO.getName() + "」的申请已被管理员批准",
+                null, java.util.List.of(requestDO.getUserId()));
         // 删除缓存
         stringRedisTemplate.delete(RedisKeyConstant.TENANT_JOIN_REQUEST_KEY + requestId);
         return Boolean.TRUE;
@@ -124,14 +120,10 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
             log.error("Reject Join Request Error: tenant {}, requestId {}", tenantId, requestId);
             throw new ServerException(TenantErrorCodeEnum.REQUEST_STATUS_UPDATE_ERROR);
         }
-        try {
-            notificationService.createAndPush(tenantId, "SYSTEM", "INFO",
-                    "申请被拒绝",
-                    requestParam.getReviewComment() == null ? "您加入" + tenantDO.getName() + "的申请已被管理员拒绝" : "您加入" + tenantDO.getName() + "的申请已被管理员拒绝，理由：" + requestParam.getReviewComment(),
-                    null, java.util.List.of(tenantJoinRequestDO.getUserId()));
-        } catch (Exception e) {
-            log.error("Creating and pushing notification error for reject: {}", e.getMessage());
-        }
+        notificationService.publishNotification(tenantId, "SYSTEM", "INFO",
+                "申请被拒绝",
+                requestParam.getReviewComment() == null ? "您加入" + tenantDO.getName() + "的申请已被管理员拒绝" : "您加入" + tenantDO.getName() + "的申请已被管理员拒绝，理由：" + requestParam.getReviewComment(),
+                null, java.util.List.of(tenantJoinRequestDO.getUserId()));
         stringRedisTemplate.delete(RedisKeyConstant.TENANT_JOIN_REQUEST_KEY + requestId);
         return Boolean.TRUE;
     }
@@ -180,13 +172,9 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
                 .eq(UserDO::getUserId, userId)
                 .eq(UserDO::getDelFlag, 0));
         String applicantName = applicant != null ? applicant.getUsername() : String.valueOf(userId);
-        try {
-            notificationService.createAndPush(tenantId, "SYSTEM", "INFO",
-                    "租户加入申请", "用户" + applicantName + "申请加入租户" + tenantName,
-                    null, adminIdList);
-        } catch (Exception e) {
-            log.error("Creating and pushing notification error for create request: {}", e.getMessage());
-        }
+        notificationService.publishNotification(tenantId, "SYSTEM", "INFO",
+                "租户加入申请", "用户" + applicantName + "申请加入租户" + tenantName,
+                null, adminIdList);
     }
 
     private TenantJoinRequestDO validateJoinRequest(Long userId, Long requestId) {

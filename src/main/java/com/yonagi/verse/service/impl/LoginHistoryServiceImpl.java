@@ -20,7 +20,6 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -78,27 +77,5 @@ public class LoginHistoryServiceImpl extends ServiceImpl<LoginHistoryMapper, Log
         respDTO.setPageSize(pageSize);
         respDTO.setHistoryInfos(historyInfos);
         return respDTO;
-    }
-
-    @Override
-    public void recordLoginHistory(Long userId, String deviceName, String ip, String region, String result, String failReason) {
-        LoginHistoryDO history = LoginHistoryDO.builder()
-                .userId(userId)
-                .deviceName(deviceName)
-                .ip(ip)
-                .region(region)
-                .result(result)
-                .failReason(failReason)
-                .loginTime(new Date())
-                .build();
-        baseMapper.insert(history);
-        invalidateLoginHistoryCache(userId);
-    }
-
-    private void invalidateLoginHistoryCache(Long userId) {
-        Set<String> keys = stringRedisTemplate.keys(RedisKeyConstant.USER_LOGIN_HISTORY_KEY + userId + ":*");
-        if (keys != null && !keys.isEmpty()) {
-            stringRedisTemplate.delete(keys);
-        }
     }
 }

@@ -12,7 +12,4 @@ import com.yonagi.verse.dto.resp.LoginHistoryRespDTO;
 public interface LoginHistoryService {
 
     LoginHistoryRespDTO getLoginHistoryList(Long userId, Integer pageNum, Integer pageSize);
-
-    void recordLoginHistory(Long userId, String deviceName, String ip,
-                            String region, String result, String failReason);
 }

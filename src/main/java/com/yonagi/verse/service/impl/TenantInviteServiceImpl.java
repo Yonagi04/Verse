@@ -5,6 +5,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.yonagi.verse.async.api.DomainEventPublisher;
+import com.yonagi.verse.async.event.CounterEvent;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -50,6 +52,7 @@ public class TenantInviteServiceImpl implements TenantInviteService {
     private final UserTenantService userTenantService;
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> inviteCodeFilter;
+    private final DomainEventPublisher domainEventPublisher;
 
     @Value("${verse.tenant.max-invite-code-per-day:10}")
     private Integer maxInviteCodePerDay;
@@ -260,15 +263,11 @@ public class TenantInviteServiceImpl implements TenantInviteService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void incrementUsageCount(Long inviteId) {
-        TenantInviteDO inviteDO = tenantInviteMapper.selectById(inviteId);
-        if (inviteDO != null) {
-            inviteDO.setUsageCount(inviteDO.getUsageCount() + 1);
-            if (tenantInviteMapper.updateById(inviteDO) < 1) {
-                log.error("Update Invite Code Usage Count Error: inviteId {}", inviteId);
-            }
-        }
+        CounterEvent event = new CounterEvent();
+        event.setInviteId(inviteId);
+        event.setKey(String.valueOf(inviteId));
+        domainEventPublisher.publishInTx(event);
     }
 
     private String generateInviteCode() {

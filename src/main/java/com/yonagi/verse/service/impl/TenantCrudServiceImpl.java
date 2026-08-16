@@ -257,17 +257,13 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         String tenantCacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
         stringRedisTemplate.delete(tenantCacheKey);
 
-        try {
-            List<Long> recipientIds = userTenants.stream()
-                    .map(UserTenantDO::getUserId).toList();
-            notificationService.createAndPush(
-                    tenantId, "SYSTEM", "CRITICAL",
-                    "租户已停用",
-                    "您所在的租户「" + tenantDO.getName() + "」已被管理员停用",
-                    null, recipientIds);
-        } catch (Exception e) {
-            log.error("[notification] 租户停用通知推送失败: tenantId={}", tenantId, e);
-        }
+        List<Long> recipientIds = userTenants.stream()
+                .map(UserTenantDO::getUserId).toList();
+        notificationService.publishNotification(
+                tenantId, "SYSTEM", "CRITICAL",
+                "租户已停用",
+                "您所在的租户「" + tenantDO.getName() + "」已被管理员停用",
+                null, recipientIds);
 
         return Boolean.TRUE;
     }

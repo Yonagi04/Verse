@@ -228,6 +228,7 @@ CREATE TABLE IF NOT EXISTS `t_login_device` (
 CREATE TABLE IF NOT EXISTS `t_login_history` (
     `id`           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `user_id`      BIGINT       NOT NULL COMMENT '用户ID',
+    `event_id`     VARCHAR(64)  DEFAULT NULL COMMENT '事件唯一ID（幂等键）',
     `login_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '登录时间',
     `device_name`  VARCHAR(128) NOT NULL COMMENT '设备名称',
     `ip`           VARCHAR(45)  NOT NULL COMMENT '登录IP地址',
@@ -235,6 +236,7 @@ CREATE TABLE IF NOT EXISTS `t_login_history` (
     `result`       VARCHAR(10)  NOT NULL COMMENT '登录结果：SUCCESS / FAIL',
     `fail_reason`  VARCHAR(128) DEFAULT NULL COMMENT '失败原因',
     PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_event_id` (`event_id`),
     KEY `idx_user_time` (`user_id`, `login_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='登录历史表';
 
@@ -252,3 +254,15 @@ CREATE TABLE IF NOT EXISTS `t_user_privacy` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_user_id` (`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户隐私设置表';
+
+-- ============================================
+-- 14. 邀请码计数事件去重表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_counter_event` (
+    `id`          BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `event_id`    VARCHAR(64) NOT NULL COMMENT '事件唯一ID（雪花）',
+    `invite_id`   BIGINT      NOT NULL COMMENT '邀请码ID（业务ID）',
+    `create_time` DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '消费时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_event_id` (`event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='邀请码计数事件去重表';

@@ -6,6 +6,8 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.yonagi.verse.async.api.DomainEventPublisher;
+import com.yonagi.verse.async.event.NotificationEvent;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.NotificationErrorCodeEnum;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
@@ -41,6 +43,7 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
 
     private final NotificationRecipientMapper notificationRecipientMapper;
     private final SimpMessagingTemplate messagingTemplate;
+    private final DomainEventPublisher domainEventPublisher;
 
     @Override
     public NotificationListRespDTO getNotificationList(Long userId, Integer pageNum, Integer pageSize) {
@@ -180,6 +183,23 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
             log.error("[notification] 通知创建失败: tenantId={}, type={}, severity={}", tenantId, type, severity, e);
             // 不抛出，不阻断主业务流程
         }
+    }
+
+    @Override
+    public void publishNotification(Long tenantId, String type, String severity,
+                                    String title, String content, Long senderId,
+                                    List<Long> recipientUserIds) {
+        NotificationEvent event = new NotificationEvent();
+        event.setNotificationId(SnowflakeIdUtil.nextId());
+        event.setTenantId(tenantId);
+        event.setType(type);
+        event.setSeverity(severity);
+        event.setTitle(title);
+        event.setContent(content);
+        event.setSenderId(senderId);
+        event.setRecipientUserIds(recipientUserIds);
+        event.setKey(tenantId != null ? String.valueOf(tenantId) : event.getEventId());
+        domainEventPublisher.publishInTx(event);
     }
 
 

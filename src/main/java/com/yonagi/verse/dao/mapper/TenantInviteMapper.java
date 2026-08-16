@@ -39,4 +39,10 @@ public interface TenantInviteMapper extends BaseMapper<TenantInviteDO> {
             @Result(property = "createdByUsername", column = "username")
     })
     Page<TenantInviteListRespDTO.TenantInviteInfo> selectPageByTenantId(Page<?> objectPage, @Param("tenantId") Long tenantId, @Param("now") Date now);
+
+    /**
+     * usage_count 原子 +1，不依赖读取旧值，避免读改写竞态。
+     */
+    @Update("UPDATE t_tenant_invite SET usage_count = usage_count + 1 WHERE id = #{inviteId}")
+    int incrementUsageCount(@Param("inviteId") Long inviteId);
 }

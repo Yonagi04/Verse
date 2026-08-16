@@ -10,7 +10,8 @@ spring:
       connection-test-query: select 1
       connection-timeout: 20000
       idle-timeout: 30000
-      maximum-pool-size: 5
+      # 登录审计/计数/通知改为异步消费者落库，消费者线程也占用连接，故上调最大连接数
+      maximum-pool-size: 10
       minimum-idle: 5
   data:
     redis:
@@ -41,6 +42,12 @@ verse:
   tenant:
     max-invite-code-per-day: 10
     max-notification-send-per-day: 5
+  async:
+    # 每类副作用可独立降级为同步执行（不走 MQ，直接调用 handler），用于 MQ 故障时的回滚开关
+    login-log:
+      sync-fallback: false
+    counter:
+      sync-fallback: false
   geoip:
     db-path: classpath:geoip/GeoLite2-City.mmdb
     enabled: true
@@ -51,3 +58,16 @@ verse:
     secret-key: ${S3_SECRET_KEY:}
     bucket: ${S3_BUCKET:verse}
     base-url: ${S3_BASE_URL:https://s3.amazonaws.com}
+
+rocketmq:
+  name-server: 127.0.0.1:9876
+  producer:
+    group: verse-event-producer
+    topic: verse-event
+    send-message-timeout: 3000
+    retry-times-when-send-failed: 1
+    retry-times-when-send-async-failed: 1
+  consumer:
+    group: verse-event-consumer
+    # 消费失败重试超过阈值后自动进入死信队列 %DLQ%verse-event-consumer；
+    # 生产环境需监控死信数量与消费积压（consumer lag）

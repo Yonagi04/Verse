@@ -7,6 +7,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.yonagi.verse.async.api.DomainEventPublisher;
+import com.yonagi.verse.async.event.LoginLogEvent;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -92,12 +94,11 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final RedissonClient redissonClient;
     private final GeoIpUtil geoIpUtil;
     private final UserPrivacyMapper userPrivacyMapper;
+    private final DomainEventPublisher domainEventPublisher;
 
     @Lazy
     @Autowired
     private UserServiceImpl self;
-    @Autowired
-    private LoginHistoryService loginHistoryService;
     @Autowired
     private AvatarService avatarService;
 
@@ -212,13 +213,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             log.error("register user {} created privacy error", userId);
         }
 
-        // 给注册完的用户推送一条系统通知
-        try {
-            notificationService.createAndPush(tenantId, "SYSTEM", "INFO",
-                    WELCOME_MESSAGE_TITLE, String.format(WELCOME_MESSAGE_CONTENT, userDO.getNickname()), null, List.of(userDO.getUserId()));
-        } catch (Exception e) {
-            log.error("Create and push notification for user register error: user {}", userDO.getUserId());
-        }
+        // 给注册完的用户异步推送一条系统通知（事务提交后投递）
+        notificationService.publishNotification(tenantId, "SYSTEM", "INFO",
+                WELCOME_MESSAGE_TITLE, String.format(WELCOME_MESSAGE_CONTENT, userDO.getNickname()), null, List.of(userDO.getUserId()));
 
         return userDO;
     }
@@ -247,21 +244,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             userDO = phoneQueryUserDO;
         }
         if (userDO.getStatus() == null || userDO.getStatus().equals(UserStatusEnum.USER_STATUS_DISABLED.getStatusCode())) {
-            loginHistoryService.recordLoginHistory(userDO.getUserId(), deviceName, ip,
-                    region, LOGIN_RESULTS.get(1), LOGIN_RESULTS.get(1));
+            publishLoginLog(userDO.getUserId(), deviceId, deviceName, ip, region,
+                    LOGIN_RESULTS.get(1), LOGIN_FAIL_REASON.get(1));
             throw new ClientException(UserErrorCodeEnum.USER_ACCOUNT_BANNED);
         } else if (userDO.getStatus().equals(UserStatusEnum.USER_STATUS_CLOSED.getStatusCode())) {
             String cancelTime = userDO.getCancelTime() != null
                     ? CANCEL_TIME_FORMATTER.format(userDO.getCancelTime().toInstant().atZone(ZoneId.systemDefault()))
                     : "较早前";
             String message = String.format(CLOSED_ACCOUNT_LOGIN_WARNING, cancelTime);
-            loginHistoryService.recordLoginHistory(userDO.getUserId(), deviceName, ip,
-                    region, LOGIN_RESULTS.get(1), LOGIN_FAIL_REASON.get(2));
+            publishLoginLog(userDO.getUserId(), deviceId, deviceName, ip, region,
+                    LOGIN_RESULTS.get(1), LOGIN_FAIL_REASON.get(2));
             throw new ClientException(message, UserErrorCodeEnum.USER_ACCOUNT_CLOSED);
         }
         if (!passwordEncoder.matches(requestParam.getPassword(), userDO.getPassword())) {
-            loginHistoryService.recordLoginHistory(userDO.getUserId(), deviceName, ip,
-                    region, LOGIN_RESULTS.get(1), LOGIN_FAIL_REASON.getFirst());
+            publishLoginLog(userDO.getUserId(), deviceId, deviceName, ip, region,
+                    LOGIN_RESULTS.get(1), LOGIN_FAIL_REASON.getFirst());
             throw new ClientException(UserErrorCodeEnum.PASSWORD_ERROR);
         }
 
@@ -296,9 +293,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 userDO.getUserId().toString(),
                 ttl, TimeUnit.MILLISECONDS);
 
-        // UPSERT 设备记录到 MySQL
-        loginDeviceService.upsertLoginDevice(userDO.getUserId(), deviceId, deviceName, ip, region);
-        loginHistoryService.recordLoginHistory(userDO.getUserId(), deviceName, ip, region, LOGIN_RESULTS.getFirst(), null);
+        // 异步投递登录事件（成功→历史+设备，由消费者落库）
+        publishLoginLog(userDO.getUserId(), deviceId, deviceName, ip, region, LOGIN_RESULTS.getFirst(), null);
 
         UserLoginRespDTO resp = new UserLoginRespDTO();
         BeanUtil.copyProperties(userDO, resp);
@@ -785,5 +781,20 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         }
         stringRedisTemplate.delete(hashKey);
         loginDeviceService.logoutAllDevice(userId);
+    }
+
+    private void publishLoginLog(Long userId, String deviceId, String deviceName, String ip,
+                                 String region, String result, String failReason) {
+        LoginLogEvent event = new LoginLogEvent();
+        event.setUserId(userId);
+        event.setDeviceId(deviceId);
+        event.setDeviceName(deviceName);
+        event.setIp(ip);
+        event.setRegion(region);
+        event.setResult(result);
+        event.setFailReason(failReason);
+        event.setLoginTime(new Date());
+        event.setKey(String.valueOf(userId));
+        domainEventPublisher.publish(event);
     }
 }

@@ -149,17 +149,13 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
         }
         userTenantService.updateUserRole(memberId, tenantId, memberRole, targetRole);
 
-        try {
-            String oldRoleName = ROLE_DISPLAY_MAP.getOrDefault(memberRole, memberRole);
-            String newRoleName = ROLE_DISPLAY_MAP.getOrDefault(targetRole, targetRole);
-            notificationService.createAndPush(
-                    tenantId, "SYSTEM", "INFO",
-                    "角色已变更",
-                    "您在租户「" + tenantDO.getName() + "」中的角色已被管理员从" + oldRoleName + "变更为" + newRoleName,
-                    null, List.of(memberId));
-        } catch (Exception e) {
-            log.error("[notification] 角色变更通知推送失败: tenantId={}, memberId={}", tenantId, memberId, e);
-        }
+        String oldRoleName = ROLE_DISPLAY_MAP.getOrDefault(memberRole, memberRole);
+        String newRoleName = ROLE_DISPLAY_MAP.getOrDefault(targetRole, targetRole);
+        notificationService.publishNotification(
+                tenantId, "SYSTEM", "INFO",
+                "角色已变更",
+                "您在租户「" + tenantDO.getName() + "」中的角色已被管理员从" + oldRoleName + "变更为" + newRoleName,
+                null, List.of(memberId));
 
         return Boolean.TRUE;
     }
@@ -183,15 +179,11 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
         }
         userTenantService.removeUser(memberId, tenantId);
 
-        try {
-            notificationService.createAndPush(
-                    tenantId, "SYSTEM", "WARNING",
-                    "已被移出租户",
-                    "您已被管理员移出租户「" + tenantDO.getName() + "」",
-                    null, List.of(memberId));
-        } catch (Exception e) {
-            log.error("[notification] 移除成员通知推送失败: tenantId={}, memberId={}", tenantId, memberId, e);
-        }
+        notificationService.publishNotification(
+                tenantId, "SYSTEM", "WARNING",
+                "已被移出租户",
+                "您已被管理员移出租户「" + tenantDO.getName() + "」",
+                null, List.of(memberId));
 
         return Boolean.TRUE;
     }

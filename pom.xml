@@ -33,6 +33,7 @@
         <s3.version>2.24.0</s3.version>
         <thumbnailator.version>0.4.20</thumbnailator.version>
         <webp-imageio.version>0.1.6</webp-imageio.version>
+        <rocketmq-spring-boot.version>2.3.6</rocketmq-spring-boot.version>
     </properties>
 
     <dependencies>
@@ -161,6 +162,12 @@
             <groupId>org.sejda.imageio</groupId>
             <artifactId>webp-imageio</artifactId>
             <version>${webp-imageio.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.rocketmq</groupId>
+            <artifactId>rocketmq-spring-boot-starter</artifactId>
+            <version>${rocketmq-spring-boot.version}</version>
         </dependency>
     </dependencies>
 
