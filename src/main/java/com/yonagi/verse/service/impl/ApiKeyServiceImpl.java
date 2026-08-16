@@ -40,7 +40,7 @@ import java.util.List;
 public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> implements ApiKeyService {
 
     private static final String API_KEY_PREFIX = "sk_";
-    private static final int API_KEY_PREFIX_LENGTH = 8;
+    private static final int API_KEY_PREFIX_LENGTH = 10;
 
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;

@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS `t_api_key` (
     `user_id`       BIGINT       NOT NULL COMMENT '用户ID（业务ID）',
     `tenant_id`     BIGINT       NOT NULL COMMENT '租户ID（业务ID）',
     `api_key`       VARCHAR(64)  NOT NULL COMMENT 'API Key（SHA-256哈希存储）',
-    `key_prefix`    VARCHAR(8)   NOT NULL COMMENT 'API Key前缀（明文，用于识别）',
+    `key_prefix`    VARCHAR(16)   NOT NULL COMMENT 'API Key前缀（明文，用于识别）',
     `name`          VARCHAR(50)  DEFAULT NULL COMMENT 'Key的备注名',
     `status`        TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=已吊销, 1=正常',
     `last_used_at`  DATETIME     DEFAULT NULL COMMENT '最近使用时间',
