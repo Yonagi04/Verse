@@ -39,12 +39,12 @@ public class ApiKeyRespDTO {
     private String apiKey;
 
     /**
-     * API Key 前缀（明文，用于识别）
+     * 固定文案
      */
-    private String keyPrefix;
+    private String createKeyMessage;
 
     /**
-     * 创建时间
+     * 固定文案
      */
-    private Date createdAt;
+    private String createKeyTip;
 }

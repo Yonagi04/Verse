@@ -45,6 +45,8 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
 
     private static final String API_KEY_PREFIX = "sk_";
     private static final int API_KEY_PREFIX_LENGTH = 10;
+    private static final String CREATE_API_KEY_MESSAGE = "请将此 API key 保存在安全且易于访问的地方。出于安全原因，你将无法通过 API keys 管理界面再次查看它。如果你丟失了这个 key，将需要重新创建。";
+    private static final String CREATE_API_KEY_TIP = "提示：不要与他人共享你的 API key，或将其暴露在浏览器或其他客户端代码中。";
 
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;
@@ -82,8 +84,8 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         respDTO.setName(apiKeyDO.getName());
         respDTO.setExpiresAt(apiKeyDO.getExpiresAt());
         respDTO.setApiKey(apiKey);
-        respDTO.setKeyPrefix(apiKeyDO.getKeyPrefix());
-        respDTO.setCreatedAt(apiKeyDO.getCreateTime());
+        respDTO.setCreateKeyMessage(CREATE_API_KEY_MESSAGE);
+        respDTO.setCreateKeyTip(CREATE_API_KEY_TIP);
         return respDTO;
     }
 
