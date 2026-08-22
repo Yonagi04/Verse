@@ -22,10 +22,11 @@ public interface TenantJoinRequestMapper extends BaseMapper<TenantJoinRequestDO>
      * @param tenantId 租户ID
      * @return 分页结果
      */
-    @Select("SELECT tjr.request_id, tjr.user_id, tu.username, ti.code AS invite_code, tjr.status, tjr.reviewed_by, tjr.review_comment, tjr.requested_at, tjr.reviewed_at " +
+    @Select("SELECT tjr.request_id, tjr.user_id, tu.username, ti.code AS invite_code, tjr.status, reviewer.username AS reviewed_by, tjr.review_comment, tjr.requested_at, tjr.reviewed_at " +
             "FROM t_tenant_join_request tjr " +
             "JOIN t_user tu ON tjr.user_id = tu.user_id " +
             "LEFT JOIN t_tenant_invite ti ON tjr.invite_id = ti.id " +
+            "LEFT JOIN t_user reviewer ON tjr.reviewed_by = reviewer.user_id " +
             "WHERE tjr.tenant_id = #{tenantId} " +
             "ORDER BY tjr.requested_at DESC")
     @Results({

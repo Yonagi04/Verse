@@ -45,8 +45,7 @@ public class TenantJoinReqListRespDTO {
 
         private String status;
 
-        @JsonSerialize(using = ToStringSerializer.class)
-        private Long reviewedBy;
+        private String reviewedBy;
 
         private String reviewComment;
 
