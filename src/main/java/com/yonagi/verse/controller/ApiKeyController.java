@@ -8,6 +8,7 @@ import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.ApiKeyCreateReqDTO;
 import com.yonagi.verse.dto.req.ApiKeyRevokeReqDTO;
+import com.yonagi.verse.dto.req.ApiKeyUpdateReqDTO;
 import com.yonagi.verse.dto.resp.ApiKeyPageRespDTO;
 import com.yonagi.verse.dto.resp.ApiKeyRespDTO;
 import com.yonagi.verse.service.ApiKeyService;
@@ -65,5 +66,16 @@ public class ApiKeyController {
             throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_NOT_EXIST);
         }
         return Results.success(apiKeyService.revokeApiKey(userId, tenantId, keyId));
+    }
+
+    @PostMapping("/{tenantId}/update")
+    public Result<Boolean> updateApiKey(@CurrentUser Long userId,
+                                        @PathVariable Long tenantId,
+                                        @RequestParam Long apiKeyId,
+                                        @RequestBody @Valid ApiKeyUpdateReqDTO requestParam) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(apiKeyService.updateApiKey(userId, tenantId, apiKeyId, requestParam));
     }
 }

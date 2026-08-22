@@ -14,6 +14,7 @@ import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.mapper.ApiKeyMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dto.req.ApiKeyCreateReqDTO;
+import com.yonagi.verse.dto.req.ApiKeyUpdateReqDTO;
 import com.yonagi.verse.dto.resp.ApiKeyListRespDTO;
 import com.yonagi.verse.dto.resp.ApiKeyPageRespDTO;
 import com.yonagi.verse.dto.resp.ApiKeyRespDTO;
@@ -21,6 +22,7 @@ import com.yonagi.verse.service.ApiKeyService;
 import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.checkerframework.checker.units.qual.C;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -127,6 +129,37 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
                 .set(ApiKeyDO::getStatus, 0));
         if (updated < 1) {
             throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_NOT_EXIST);
+        }
+        return Boolean.TRUE;
+    }
+
+    @Override
+    public Boolean updateApiKey(Long userId, Long tenantId, Long apiKeyId, ApiKeyUpdateReqDTO requestParam) {
+        validateTenantAndMembership(userId, tenantId);
+        ApiKeyDO apiKey = baseMapper.selectOne(Wrappers.lambdaQuery(ApiKeyDO.class)
+                .eq(ApiKeyDO::getApiKeyId, apiKeyId));
+        if (apiKey == null) {
+            throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_NOT_EXIST);
+        } else if (apiKey.getStatus() == 0) {
+            throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_CAN_NOT_UPDATE);
+        }
+        Date oldExpiresAt = apiKey.getExpiresAt();
+        Date newExpiresAt = requestParam.getExpiresAt();
+        Date now = new Date();
+        if (newExpiresAt != null && oldExpiresAt != null && newExpiresAt.before(oldExpiresAt)) {
+            throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_EXPIRE_DATE_BEFORE_OLD_DATE);
+        } else if (newExpiresAt != null && newExpiresAt.before(now)) {
+            throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_EXPIRE_DATE_IS_INVALID);
+        }
+
+        int updated = baseMapper.update(Wrappers.lambdaUpdate(ApiKeyDO.class)
+                .eq(ApiKeyDO::getApiKeyId, apiKeyId)
+                .set(ApiKeyDO::getName, requestParam.getName())
+                .set(ApiKeyDO::getExpiresAt, newExpiresAt)
+                .set(ApiKeyDO::getStatus, 1));
+        if (updated < 1) {
+            log.error("Update API key failed, userId: {}, tenantId: {}, apiKeyId: {}", userId, tenantId, apiKeyId);
+            throw new ServerException(ApiKeyErrorCodeEnum.API_KEY_UPDATE_ERROR);
         }
         return Boolean.TRUE;
     }

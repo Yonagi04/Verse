@@ -3,8 +3,10 @@ package com.yonagi.verse.service;
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.ApiKeyDO;
 import com.yonagi.verse.dto.req.ApiKeyCreateReqDTO;
+import com.yonagi.verse.dto.req.ApiKeyUpdateReqDTO;
 import com.yonagi.verse.dto.resp.ApiKeyPageRespDTO;
 import com.yonagi.verse.dto.resp.ApiKeyRespDTO;
+import jakarta.validation.Valid;
 
 /**
  * API Key 管理服务
@@ -30,4 +32,9 @@ public interface ApiKeyService extends IService<ApiKeyDO> {
      * 吊销 API Key（软删除 status=0）
      */
     Boolean revokeApiKey(Long userId, Long tenantId, Long apiKeyId);
+
+    /**
+     * 更新 API Key
+     */
+    Boolean updateApiKey(Long userId, Long tenantId, Long apiKeyId, ApiKeyUpdateReqDTO requestParam);
 }

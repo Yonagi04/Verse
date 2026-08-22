@@ -12,12 +12,15 @@ import com.yonagi.verse.common.convention.errorcode.IErrorCode;
  */
 public enum ApiKeyErrorCodeEnum implements IErrorCode {
 
-    API_KEY_EXPIRE_DATE_IS_INVALID("A000600", "Api Key过期时间早于当前日期"),
+    API_KEY_EXPIRE_DATE_IS_INVALID("A000600", "API Key过期时间早于当前日期"),
     API_KEY_ID_IS_NULL("A000601", "API Key ID不能为空"),
+    API_KEY_CAN_NOT_UPDATE("A000602", "此API Key不支持更新"),
+    API_KEY_EXPIRE_DATE_BEFORE_OLD_DATE("A000603", "API Key的过期时间不能早于此前已设置的过期时间"),
 
     API_KEY_CREATE_FAILED("B000600", "API Key 创建失败"),
     API_KEY_NOT_EXIST("B000601", "API Key 不存在"),
     API_KEY_REVOKE_FAILED("B000602", "API Key 吊销失败"),
+    API_KEY_UPDATE_ERROR("B000603", "API Key更新失败"),
     ;
 
     private final String code;
