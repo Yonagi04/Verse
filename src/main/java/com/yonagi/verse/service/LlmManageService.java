@@ -34,4 +34,6 @@ public interface LlmManageService extends IService<LlmServiceDO> {
     LlmServiceRemovePreRespDTO prepareRemoveLlmService(Long userId, Long tenantId, Long serviceId);
 
     Boolean removeLlmService(Long userId, Long tenantId, Long serviceId, LlmServiceRemoveReqDTO requestParam);
+
+    Integer getLlmServiceCount(Long userId, Long tenantId);
 }

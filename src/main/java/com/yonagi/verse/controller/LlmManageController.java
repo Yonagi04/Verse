@@ -141,4 +141,13 @@ public class LlmManageController {
         }
         return Results.success(llmManageService.removeLlmService(userId, tenantId, serviceId, requestParam));
     }
+
+    @GetMapping("/{tenantId}/get-llm-count")
+    public Result<Integer> getLlmServiceCount(@CurrentUser Long userId,
+                                              @PathVariable Long tenantId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(llmManageService.getLlmServiceCount(userId, tenantId));
+    }
 }

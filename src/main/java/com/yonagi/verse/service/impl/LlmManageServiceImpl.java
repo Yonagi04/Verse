@@ -40,6 +40,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -434,6 +435,13 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
         stringRedisTemplate.opsForHash().delete(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName());
         return Boolean.TRUE;
+    }
+
+    @Override
+    public Integer getLlmServiceCount(Long userId, Long tenantId) {
+        validateTenantAndMembership(userId, tenantId);
+        List<LlmServiceListRespDTO.LlmServiceInfo> infos = loadServiceInfos(tenantId);
+        return infos.size();
     }
 
     private void validateTenantAndMembership(Long userId, Long tenantId) {
