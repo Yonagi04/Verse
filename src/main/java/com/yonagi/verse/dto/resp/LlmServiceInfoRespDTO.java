@@ -1,5 +1,7 @@
 package com.yonagi.verse.dto.resp;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.util.Date;
@@ -17,6 +19,7 @@ public class LlmServiceInfoRespDTO {
     /**
      * 服务唯一标识（业务ID）
      */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long serviceId;
 
     /**
