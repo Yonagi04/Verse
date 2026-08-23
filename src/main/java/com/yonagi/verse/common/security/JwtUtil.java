@@ -83,6 +83,19 @@ public class JwtUtil {
                 .compact();
     }
 
+    public String generateRemoveLlmToken(Long serviceId, Long tenantId, Long expiration) {
+        Date now = new Date();
+        Date expiryDate = new Date(now.getTime() + expiration);
+
+        return Jwts.builder()
+                .subject(String.valueOf(tenantId))
+                .claim("serviceId", serviceId)
+                .issuedAt(now)
+                .expiration(expiryDate)
+                .signWith(secretKey)
+                .compact();
+    }
+
     /**
      * 解析 Token，返回 Claims
      *

@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS `t_llm_service` (
     `del_flag`    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_service_id` (`service_id`),
+    UNIQUE KEY `uk_tenant_name_del` (`tenant_id`, `name`, `del_flag`),
     KEY `idx_tenant_id` (`tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM服务配置表';
 

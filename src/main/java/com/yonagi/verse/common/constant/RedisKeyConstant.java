@@ -93,4 +93,29 @@ public class RedisKeyConstant {
      * 用户登录历史记录：{userId}:{pageNum}:{pageSize} -> LoginHistoryRespDTO JSON
      */
     public static final String USER_LOGIN_HISTORY_KEY = "verse:user:login-history:";
+
+    /**
+     * 路由索引（Hash）：{tenantId} → Hash(name → serviceId)，O(1) 定位
+     */
+    public static final String LLM_SERVICE_ROUTE_KEY = "verse:llm-service:route:";
+
+    /**
+     * 服务详情（String JSON）：{serviceId} → LlmServiceDO（apiKey是加密的，需要自行解密）
+     */
+    public static final String LLM_SERVICE_INFO_KEY = "verse:llm-service:info:";
+
+    /**
+     * 租户启用服务列表（String JSON array）：{tenantId} → List<LlmServiceDO>（降级/列表查询）
+     */
+    public static final String LLM_SERVICE_LIST_KEY = "verse:llm-service:list:";
+
+    /**
+     * 删除llm服务的前置token key: {serviceId} -> token
+     */
+    public static final String LLM_REMOVE_TOKEN_KEY = "verse:llm-service:remove-token:";
+
+    /**
+     * 添加llm的锁，添加、更新时拿这个锁，{tenantId, name}
+     */
+    public static final String LLM_LOCK_KEY = "verse:lock_llm-service-add:";
 }

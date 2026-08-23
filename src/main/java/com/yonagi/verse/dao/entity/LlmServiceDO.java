@@ -2,7 +2,10 @@ package com.yonagi.verse.dao.entity;
 
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.yonagi.verse.common.database.BaseDO;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
 import java.util.Date;
 
@@ -14,6 +17,9 @@ import java.util.Date;
  */
 @Data
 @TableName("t_llm_service")
+@Builder
+@AllArgsConstructor
+@NoArgsConstructor
 public class LlmServiceDO extends BaseDO {
 
     /**
@@ -52,7 +58,7 @@ public class LlmServiceDO extends BaseDO {
     private String apiKey;
 
     /**
-     * 默认模型名
+     * 模型名(转发给模型厂商使用)
      */
     private String modelName;
 
