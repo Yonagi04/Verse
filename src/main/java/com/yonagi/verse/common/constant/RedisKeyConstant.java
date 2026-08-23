@@ -118,4 +118,9 @@ public class RedisKeyConstant {
      * 添加llm的锁，添加、更新时拿这个锁，{tenantId, name}
      */
     public static final String LLM_LOCK_KEY = "verse:lock_llm-service-add:";
+
+    /**
+     * API Key 认证缓存（{sha256} → ApiKeyDO JSON），用于 /api/v1/openai/** 鉴权
+     */
+    public static final String API_KEY_AUTH_KEY = "verse:api-key:auth:";
 }

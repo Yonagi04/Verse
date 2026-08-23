@@ -38,4 +38,9 @@ public class UserContext {
      * 用户在当前活跃租户下的权限 code 列表，对应 {@link com.yonagi.verse.common.enums.PermissionEnum#getCode()}
      */
     private List<String> authorities;
+
+    /**
+     * API Key 业务 ID（API Key 认证场景写入，JWT 场景为 null）
+     */
+    private Long apiKeyId;
 }
