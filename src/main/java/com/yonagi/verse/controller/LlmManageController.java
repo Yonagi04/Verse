@@ -68,7 +68,7 @@ public class LlmManageController {
     public Result<Boolean> updateLlmService(@CurrentUser Long userId,
                                             @PathVariable Long tenantId,
                                             @PathVariable Long serviceId,
-                                            @RequestBody LlmServiceUpdateReqDTO requestParam) {
+                                            @RequestBody @Valid LlmServiceUpdateReqDTO requestParam) {
         if (tenantId == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
         } else if (serviceId == null) {

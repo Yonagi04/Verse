@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import cn.hutool.core.util.StrUtil;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -169,7 +170,15 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     public Boolean updateLlmService(Long userId, Long tenantId, Long serviceId, LlmServiceUpdateReqDTO requestParam) {
         validateTenantAndMembership(userId, tenantId);
 
-        // 查询对应的服务是否存在or是否启用
+        // 部分更新：至少需要一个字段非空
+        if (StrUtil.isBlank(requestParam.getName())
+                && StrUtil.isBlank(requestParam.getApiUrl())
+                && StrUtil.isBlank(requestParam.getApiKey())
+                && StrUtil.isBlank(requestParam.getModelName())) {
+            throw new ClientException(LlmManageErrorCodeEnum.LLM_UPDATE_PARAM_EMPTY);
+        }
+
+        // 查询对应的服务是否存在 or 是否启用
         LlmServiceDO llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
                 .eq(LlmServiceDO::getServiceId, serviceId)
                 .eq(LlmServiceDO::getTenantId, tenantId)
@@ -179,54 +188,83 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         } else if (llmServiceDO.getStatus() == 0) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_CAN_NOT_UPDATE);
         }
-        // 查找是否有重复的名称
-        LlmServiceDO isExistDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
-                .eq(LlmServiceDO::getTenantId, tenantId)
-                .eq(LlmServiceDO::getName, requestParam.getName())
-                .ne(LlmServiceDO::getServiceId, serviceId)
-                .eq(LlmServiceDO::getDelFlag, 0));
-        if (isExistDO != null) {
-            throw new ClientException(LlmManageErrorCodeEnum.LLM_NAME_DUPLICATED);
+
+        String newName = StrUtil.isBlank(requestParam.getName()) ? null : requestParam.getName().trim();
+        boolean nameChanged = newName != null && !newName.equals(llmServiceDO.getName());
+
+        if (nameChanged) {
+            checkNameUniqueAndUpdate(tenantId, serviceId, newName, requestParam);
+        } else {
+            doUpdateService(tenantId, serviceId, requestParam);
         }
-        RLock lock = redissonClient.getLock(RedisKeyConstant.LLM_LOCK_KEY + tenantId + ":" + requestParam.getName());
+
+        // 失效缓存；名称变更时重建路由索引
+        stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
+        stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId);
+        stringRedisTemplate.opsForHash().delete(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName());
+        if (nameChanged) {
+            stringRedisTemplate.opsForHash().put(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, newName, String.valueOf(serviceId));
+            stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
+        }
+        return Boolean.TRUE;
+    }
+
+    /**
+     * 名称变更时的更新：加分布式锁并在锁内重查，保证并发下的名称唯一性。
+     */
+    private void checkNameUniqueAndUpdate(Long tenantId, Long serviceId, String newName, LlmServiceUpdateReqDTO requestParam) {
+        RLock lock = redissonClient.getLock(RedisKeyConstant.LLM_LOCK_KEY + tenantId + ":" + newName);
         try {
-            if (lock.tryLock(3, 30, TimeUnit.SECONDS)) {
-                try {
-                    String newEncryptApiKey = aesUtil.encrypt(requestParam.getApiKey());
-                    LambdaUpdateWrapper<LlmServiceDO> updateWrapper = Wrappers.lambdaUpdate(LlmServiceDO.class)
-                            .eq(LlmServiceDO::getServiceId, serviceId)
-                            .eq(LlmServiceDO::getTenantId, tenantId)
-                            .set(LlmServiceDO::getApiKey, newEncryptApiKey)
-                            .set(LlmServiceDO::getName, requestParam.getName())
-                            .set(LlmServiceDO::getApiUrl, requestParam.getApiUrl())
-                            .set(LlmServiceDO::getModelName, requestParam.getModelName());
-                    int update = baseMapper.update(updateWrapper);
-                    if (update < 1) {
-                        log.error("update LLM service error: userId {}, tenantId {}, serviceId {}", userId, tenantId, serviceId);
-                        throw new ServerException(LlmManageErrorCodeEnum.LLM_UPDATE_FAILED);
-                    }
-                    // 删除缓存
-                    stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
-                    stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId);
-                    stringRedisTemplate.opsForHash().delete(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName());
-                    stringRedisTemplate.opsForHash().put(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, requestParam.getName(), String.valueOf(serviceId));
-                    stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
-                    return Boolean.TRUE;
-                } finally {
-                    lock.unlock();
-                }
-            } else {
+            if (!lock.tryLock(3, 30, TimeUnit.SECONDS)) {
                 throw new ClientException(LlmManageErrorCodeEnum.LLM_NAME_DUPLICATED);
+            }
+            try {
+                Long dup = baseMapper.selectCount(Wrappers.lambdaQuery(LlmServiceDO.class)
+                        .eq(LlmServiceDO::getTenantId, tenantId)
+                        .eq(LlmServiceDO::getName, newName)
+                        .ne(LlmServiceDO::getServiceId, serviceId)
+                        .eq(LlmServiceDO::getDelFlag, 0));
+                if (dup != null && dup > 0) {
+                    throw new ClientException(LlmManageErrorCodeEnum.LLM_NAME_DUPLICATED);
+                }
+                doUpdateService(tenantId, serviceId, requestParam);
+            } finally {
+                lock.unlock();
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.error("llm name lock interrupt for name {}", requestParam.getName(), e);
+            log.error("llm name lock interrupt for name {}", newName, e);
             throw new ServerException(LlmManageErrorCodeEnum.THREAD_INTERRUPTED);
+        } catch (AbstractException e) {
+            throw e;
         } catch (Exception e) {
-            if (e instanceof AbstractException) {
-                throw e;
-            }
-            log.error("update LLM error: userId {} tenantId {} serviceId {}", userId, tenantId, serviceId, e);
+            log.error("update LLM error: tenantId {} serviceId {}", tenantId, serviceId, e);
+            throw new ServerException(LlmManageErrorCodeEnum.LLM_UPDATE_FAILED);
+        }
+    }
+
+    /**
+     * 仅更新请求中非空的字段。
+     */
+    private void doUpdateService(Long tenantId, Long serviceId, LlmServiceUpdateReqDTO requestParam) {
+        LambdaUpdateWrapper<LlmServiceDO> updateWrapper = Wrappers.lambdaUpdate(LlmServiceDO.class)
+                .eq(LlmServiceDO::getServiceId, serviceId)
+                .eq(LlmServiceDO::getTenantId, tenantId);
+        if (StrUtil.isNotBlank(requestParam.getName())) {
+            updateWrapper.set(LlmServiceDO::getName, requestParam.getName().trim());
+        }
+        if (StrUtil.isNotBlank(requestParam.getApiUrl())) {
+            updateWrapper.set(LlmServiceDO::getApiUrl, requestParam.getApiUrl());
+        }
+        if (StrUtil.isNotBlank(requestParam.getModelName())) {
+            updateWrapper.set(LlmServiceDO::getModelName, requestParam.getModelName());
+        }
+        if (StrUtil.isNotBlank(requestParam.getApiKey())) {
+            updateWrapper.set(LlmServiceDO::getApiKey, aesUtil.encrypt(requestParam.getApiKey()));
+        }
+        int update = baseMapper.update(updateWrapper);
+        if (update < 1) {
+            log.error("update LLM service error: tenantId {}, serviceId {}", tenantId, serviceId);
             throw new ServerException(LlmManageErrorCodeEnum.LLM_UPDATE_FAILED);
         }
     }
