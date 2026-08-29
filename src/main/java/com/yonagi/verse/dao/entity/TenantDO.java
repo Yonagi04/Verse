@@ -55,4 +55,14 @@ public class TenantDO extends BaseDO {
      * 状态：0=停用, 1=正常
      */
     private Integer status;
+
+    /**
+     * 租户级 RPM 上限（NULL=不限）
+     */
+    private Integer rateLimitRpm;
+
+    /**
+     * 租户级 TPM 上限（NULL=不限）
+     */
+    private Integer rateLimitTpm;
 }

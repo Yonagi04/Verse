@@ -1,5 +1,6 @@
 package com.yonagi.verse.dto.req;
 
+import jakarta.validation.constraints.Min;
 import lombok.Data;
 import org.hibernate.validator.constraints.Length;
 
@@ -8,6 +9,9 @@ import org.hibernate.validator.constraints.Length;
  *
  * <p>采用「部分更新」语义：字段为 {@code null} 或空白字符串表示「不修改」，仅提交需要变更的字段即可。
  * 例如只改模型名称时，只需传 {@code name}，其余字段留空。</p>
+ *
+ * <p>限流与降级字段（{@code rpm}/{@code tpm}/{@code fallbackServiceId}）额外约定：
+ * {@code 0} 表示「清除」对应配置（即不限/无降级），用于与「不修改」（{@code null}）区分。</p>
  *
  * <p>注意：{@code apiKey} 在详情接口中返回的是脱敏值，前端<b>不要</b>将脱敏值回传；
  * 仅在需要修改 API Key 时填写新值，留空表示保持不变。</p>
@@ -41,4 +45,22 @@ public class LlmServiceUpdateReqDTO {
      * 供应商侧记录的模型名称。留空表示不修改。
      */
     private String modelName;
+
+    /**
+     * 模型级 RPM 上限。{@code null}=不修改；{@code 0}=清除限制（不限）；正数=设置限制值。
+     */
+    @Min(value = 0, message = "RPM 不能为负数")
+    private Integer rpm;
+
+    /**
+     * 模型级 TPM 上限。{@code null}=不修改；{@code 0}=清除限制（不限）；正数=设置限制值。
+     */
+    @Min(value = 0, message = "TPM 不能为负数")
+    private Integer tpm;
+
+    /**
+     * 备用模型 serviceId。{@code null}=不修改；{@code 0}=清除降级配置；正数=设置备用模型。
+     */
+    @Min(value = 0, message = "备用模型 ID 不能为负数")
+    private Long fallbackServiceId;
 }

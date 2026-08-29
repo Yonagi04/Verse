@@ -2,7 +2,6 @@ package com.yonagi.verse.service.forward;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
-import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -49,13 +48,15 @@ public class OpenAiCompatibleAdapter implements ProviderAdapter {
                     .retrieve()
                     .body(String.class);
         } catch (RestClientResponseException e) {
+            int status = e.getStatusCode().value();
+            boolean retryable = status == 429 || status >= 500;
             String upstreamMsg = extractUpstreamError(e.getResponseBodyAsString());
-            log.warn("[llm-forward] 上游返回错误: status={}, message={}", e.getStatusCode().value(), upstreamMsg);
-            throw new ClientException(upstreamMsg, LlmForwardErrorCodeEnum.UPSTREAM_ERROR);
+            log.warn("[llm-forward] 上游返回错误: status={}, message={}", status, upstreamMsg);
+            throw new UpstreamFailureException(upstreamMsg, LlmForwardErrorCodeEnum.UPSTREAM_ERROR, retryable);
         } catch (ResourceAccessException e) {
             log.warn("[llm-forward] 上游连接失败或超时: url={}", url, e);
-            throw new ClientException(LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT.message(),
-                    LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT);
+            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT.message(),
+                    LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, true);
         }
     }
 

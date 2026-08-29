@@ -4,6 +4,7 @@ import cn.hutool.crypto.digest.DigestUtil;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.ApiKeyErrorCodeEnum;
@@ -22,7 +23,7 @@ import com.yonagi.verse.service.ApiKeyService;
 import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.checkerframework.checker.units.qual.C;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,6 +51,7 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
 
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;
+    private final StringRedisTemplate stringRedisTemplate;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -72,6 +74,8 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         apiKeyDO.setName(requestParam.getName());
         apiKeyDO.setStatus(1);
         apiKeyDO.setExpiresAt(expiresAt);
+        apiKeyDO.setRateLimitRpm(normalizeLimit(requestParam.getRpm()));
+        apiKeyDO.setRateLimitTpm(normalizeLimit(requestParam.getTpm()));
         apiKeyDO.setCreateTime(new Date());
         int inserted = baseMapper.insert(apiKeyDO);
         if (inserted < 1) {
@@ -158,11 +162,15 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
                 .eq(ApiKeyDO::getApiKeyId, apiKeyId)
                 .set(ApiKeyDO::getName, requestParam.getName())
                 .set(ApiKeyDO::getExpiresAt, newExpiresAt)
+                .set(ApiKeyDO::getRateLimitRpm, normalizeLimit(requestParam.getRpm()))
+                .set(ApiKeyDO::getRateLimitTpm, normalizeLimit(requestParam.getTpm()))
                 .set(ApiKeyDO::getStatus, 1));
         if (updated < 1) {
             log.error("Update API key failed, userId: {}, tenantId: {}, apiKeyId: {}", userId, tenantId, apiKeyId);
             throw new ServerException(ApiKeyErrorCodeEnum.API_KEY_UPDATE_ERROR);
         }
+        // 失效认证缓存，使新的限流配置对后续请求立即生效
+        stringRedisTemplate.delete(RedisKeyConstant.API_KEY_AUTH_KEY + apiKey.getApiKey());
         return Boolean.TRUE;
     }
 
@@ -187,8 +195,17 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         dto.setStatus(apiKeyDO.getStatus());
         dto.setLastUsedAt(apiKeyDO.getLastUsedAt());
         dto.setExpiresAt(apiKeyDO.getExpiresAt());
+        dto.setRateLimitRpm(apiKeyDO.getRateLimitRpm());
+        dto.setRateLimitTpm(apiKeyDO.getRateLimitTpm());
         dto.setCreateTime(apiKeyDO.getCreateTime());
         return dto;
+    }
+
+    /**
+     * 规范化限流值：{@code null} 或非正数统一存为 {@code null}（不限），仅保留正数上限。
+     */
+    private Integer normalizeLimit(Integer value) {
+        return value != null && value > 0 ? value : null;
     }
 
     private String generateApiKey() {

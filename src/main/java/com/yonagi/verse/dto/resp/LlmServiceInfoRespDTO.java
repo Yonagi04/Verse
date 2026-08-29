@@ -53,6 +53,22 @@ public class LlmServiceInfoRespDTO {
     private Integer status;
 
     /**
+     * 模型级 RPM 上限（NULL=不限）
+     */
+    private Integer rateLimitRpm;
+
+    /**
+     * 模型级 TPM 上限（NULL=不限）
+     */
+    private Integer rateLimitTpm;
+
+    /**
+     * 备用模型 serviceId（NULL=无降级）
+     */
+    @JsonSerialize(using = ToStringSerializer.class)
+    private Long fallbackServiceId;
+
+    /**
      * 创建者用户名
      */
     private String createdByUsername;

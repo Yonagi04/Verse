@@ -1,7 +1,7 @@
 package com.yonagi.verse.dto.req;
 
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -22,4 +22,16 @@ public class ApiKeyCreateReqDTO {
     private String name;
 
     private Date expiresAt;
+
+    /**
+     * Key 级 RPM 上限（NULL=不限）
+     */
+    @Min(value = 0, message = "RPM 不能为负数")
+    private Integer rpm;
+
+    /**
+     * Key 级 TPM 上限（NULL=不限）
+     */
+    @Min(value = 0, message = "TPM 不能为负数")
+    private Integer tpm;
 }

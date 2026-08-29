@@ -49,6 +49,16 @@ public class ApiKeyListRespDTO {
     private Date expiresAt;
 
     /**
+     * Key 级 RPM 上限（NULL=不限）
+     */
+    private Integer rateLimitRpm;
+
+    /**
+     * Key 级 TPM 上限（NULL=不限）
+     */
+    private Integer rateLimitTpm;
+
+    /**
      * 创建时间
      */
     private Date createTime;

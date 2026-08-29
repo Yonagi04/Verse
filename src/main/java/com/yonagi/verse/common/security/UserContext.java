@@ -43,4 +43,14 @@ public class UserContext {
      * API Key 业务 ID（API Key 认证场景写入，JWT 场景为 null）
      */
     private Long apiKeyId;
+
+    /**
+     * API Key 级 RPM 上限（NULL=不限，仅 API Key 认证场景写入）
+     */
+    private Integer apiKeyRateLimitRpm;
+
+    /**
+     * API Key 级 TPM 上限（NULL=不限，仅 API Key 认证场景写入）
+     */
+    private Integer apiKeyRateLimitTpm;
 }

@@ -34,6 +34,7 @@
         <thumbnailator.version>0.4.20</thumbnailator.version>
         <webp-imageio.version>0.1.6</webp-imageio.version>
         <rocketmq-spring-boot.version>2.3.6</rocketmq-spring-boot.version>
+        <resilience4j.version>2.2.0</resilience4j.version>
     </properties>
 
     <dependencies>
@@ -168,6 +169,12 @@
             <groupId>org.apache.rocketmq</groupId>
             <artifactId>rocketmq-spring-boot-starter</artifactId>
             <version>${rocketmq-spring-boot.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>io.github.resilience4j</groupId>
+            <artifactId>resilience4j-spring-boot3</artifactId>
+            <version>${resilience4j.version}</version>
         </dependency>
     </dependencies>
 

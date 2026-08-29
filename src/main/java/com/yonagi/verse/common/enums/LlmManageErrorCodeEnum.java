@@ -20,6 +20,8 @@ public enum LlmManageErrorCodeEnum implements IErrorCode {
     LLM_REMOVE_TOKEN_EXPIRED("A000706", "Token已过期"),
     PAGINATION_PARAM_INVALID("A000707", "分页参数不合法"),
     LLM_UPDATE_PARAM_EMPTY("A000708", "至少填写一个需要更新的字段"),
+    LLM_FALLBACK_ID_INVALID("A000709", "模型的备用模型不能映射到自身"),
+    LLM_FALLBACK_INVALID("A000710", "备用模型不存在或不可用"),
 
     LLM_ADD_FAILED("B000700", "添加模型失败"),
     LLM_UPDATE_FAILED("B000701", "更新模型失败"),

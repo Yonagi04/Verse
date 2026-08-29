@@ -33,6 +33,19 @@ verse:
     upstream:
       connect-timeout: 5000
       read-timeout: 120000
+    circuit-breaker:
+      failure-rate-threshold: 50
+      sliding-window-size: 20
+      minimum-number-of-calls: 10
+      wait-duration-open-ms: 30000
+    rate-limit:
+      # 全局默认值（预留：本阶段限流阈值取自 t_tenant/t_api_key/t_llm_service 字段，NULL=不限，此处默认值暂未接入）
+      default-tenant-rpm: 600
+      default-tenant-tpm: 60000
+      default-apikey-rpm: 60
+      default-apikey-tpm: 6000
+      default-model-rpm: 60
+      default-model-tpm: 6000
   security:
     jwt:
       secret: ${JWT_SECRET:your-256-bit-secret-key-change-in-production}

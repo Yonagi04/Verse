@@ -75,7 +75,9 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         UserContext ctx = new UserContext()
                 .setUserId(apiKey.getUserId())
                 .setCurrentTenantId(apiKey.getTenantId())
-                .setApiKeyId(apiKey.getApiKeyId());
+                .setApiKeyId(apiKey.getApiKeyId())
+                .setApiKeyRateLimitRpm(apiKey.getRateLimitRpm())
+                .setApiKeyRateLimitTpm(apiKey.getRateLimitTpm());
         UserContextHolder.set(ctx);
 
         try {

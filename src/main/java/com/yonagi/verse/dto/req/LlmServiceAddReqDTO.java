@@ -1,5 +1,6 @@
 package com.yonagi.verse.dto.req;
 
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 import org.hibernate.validator.constraints.Length;
@@ -29,4 +30,10 @@ public class LlmServiceAddReqDTO {
 
     @NotBlank(message = "供应商提供的模型名称不能为空")
     private String modelName;
+
+    @Min(value = 0, message = "RPM不能小于0")
+    private Integer rpm;
+
+    @Min(value = 0, message = "TPM不能小于0")
+    private Integer tpm;
 }

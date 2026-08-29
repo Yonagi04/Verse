@@ -123,4 +123,14 @@ public class RedisKeyConstant {
      * API Key 认证缓存（{sha256} → ApiKeyDO JSON），用于 /api/v1/openai/** 鉴权
      */
     public static final String API_KEY_AUTH_KEY = "verse:api-key:auth:";
+
+    /**
+     * RPM 限流（Redisson RRateLimiter）：{dimension}:{id}，dimension ∈ tenant/key/model
+     */
+    public static final String RATE_LIMIT_RPM_KEY = "verse:ratelimit:rpm:";
+
+    /**
+     * TPM 软限流计数（String INCRBY）：{dimension}:{id}:{epochMinute}
+     */
+    public static final String RATE_LIMIT_TPM_KEY = "verse:ratelimit:tpm:";
 }

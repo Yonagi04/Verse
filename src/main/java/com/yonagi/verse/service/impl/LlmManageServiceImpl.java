@@ -98,6 +98,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                             .modelName(requestParam.getModelName())
                             .status(1)
                             .createdBy(userId)
+                            .rateLimitRpm(requestParam.getRpm())
+                            .rateLimitTpm(requestParam.getTpm())
                             .build();
                     int insert = baseMapper.insert(llmServiceDO);
                     if (insert < 1) {
@@ -208,7 +210,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         if (StrUtil.isBlank(requestParam.getName())
                 && StrUtil.isBlank(requestParam.getApiUrl())
                 && StrUtil.isBlank(requestParam.getApiKey())
-                && StrUtil.isBlank(requestParam.getModelName())) {
+                && StrUtil.isBlank(requestParam.getModelName())
+                && requestParam.getRpm() == null
+                && requestParam.getTpm() == null
+                && requestParam.getFallbackServiceId() == null) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_UPDATE_PARAM_EMPTY);
         }
 
@@ -295,6 +300,19 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         }
         if (StrUtil.isNotBlank(requestParam.getApiKey())) {
             updateWrapper.set(LlmServiceDO::getApiKey, aesUtil.encrypt(requestParam.getApiKey()));
+        }
+        if (requestParam.getRpm() != null) {
+            updateWrapper.set(LlmServiceDO::getRateLimitRpm, requestParam.getRpm() > 0 ? requestParam.getRpm() : null);
+        }
+        if (requestParam.getTpm() != null) {
+            updateWrapper.set(LlmServiceDO::getRateLimitTpm, requestParam.getTpm() > 0 ? requestParam.getTpm() : null);
+        }
+        if (requestParam.getFallbackServiceId() != null) {
+            Long fallbackServiceId = requestParam.getFallbackServiceId() > 0 ? requestParam.getFallbackServiceId() : null;
+            if (fallbackServiceId != null) {
+                validateFallback(tenantId, serviceId, fallbackServiceId);
+            }
+            updateWrapper.set(LlmServiceDO::getFallbackServiceId, fallbackServiceId);
         }
         int update = baseMapper.update(updateWrapper);
         if (update < 1) {
@@ -475,6 +493,23 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         validateTenantAndMembership(userId, tenantId);
         List<LlmServiceListRespDTO.LlmServiceInfo> infos = loadServiceInfos(tenantId);
         return infos.size();
+    }
+
+    /**
+     * 校验备用模型：不能映射到自身，且必须是同租户内启用且未删除的服务。
+     */
+    private void validateFallback(Long tenantId, Long serviceId, Long fallbackServiceId) {
+        if (serviceId.equals(fallbackServiceId)) {
+            throw new ClientException(LlmManageErrorCodeEnum.LLM_FALLBACK_ID_INVALID);
+        }
+        LlmServiceDO fallback = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
+                .eq(LlmServiceDO::getServiceId, fallbackServiceId)
+                .eq(LlmServiceDO::getTenantId, tenantId)
+                .eq(LlmServiceDO::getStatus, 1)
+                .eq(LlmServiceDO::getDelFlag, 0));
+        if (fallback == null) {
+            throw new ClientException(LlmManageErrorCodeEnum.LLM_FALLBACK_INVALID);
+        }
     }
 
     private void validateTenantAndMembership(Long userId, Long tenantId) {
