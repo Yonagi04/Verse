@@ -10,6 +10,7 @@ import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
+import com.yonagi.verse.common.enums.LLMProviderEnum;
 import com.yonagi.verse.common.enums.LlmManageErrorCodeEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
@@ -135,10 +136,42 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    public LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
+    public LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum, Integer pageSize, String keyword) {
         validateTenantAndMembership(userId, tenantId);
         List<LlmServiceListRespDTO.LlmServiceInfo> all = loadServiceInfos(tenantId);
+        if (StrUtil.isNotBlank(keyword)) {
+            String kw = keyword.trim();
+            all = all.stream()
+                    .filter(info -> matchesKeyword(info, kw))
+                    .toList();
+        }
         return paginate(all, pageNum, pageSize);
+    }
+
+    /**
+     * 关键词模糊匹配：服务别名、供应商英文标识、供应商中文显示名及别名（均忽略大小写）。
+     */
+    private boolean matchesKeyword(LlmServiceListRespDTO.LlmServiceInfo info, String keyword) {
+        if (StrUtil.containsIgnoreCase(info.getName(), keyword)
+                || StrUtil.containsIgnoreCase(info.getProvider(), keyword)) {
+            return true;
+        }
+        LLMProviderEnum providerEnum = LLMProviderEnum.fromProvider(info.getProvider());
+        if (providerEnum == null) {
+            return false;
+        }
+        if (StrUtil.containsIgnoreCase(providerEnum.getDisplayName(), keyword)) {
+            return true;
+        }
+        String[] aliases = providerEnum.getAliases();
+        if (aliases != null) {
+            for (String alias : aliases) {
+                if (StrUtil.containsIgnoreCase(alias, keyword)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private List<LlmServiceListRespDTO.LlmServiceInfo> loadServiceInfos(Long tenantId) {

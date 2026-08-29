@@ -21,7 +21,7 @@ public interface LlmManageService extends IService<LlmServiceDO> {
 
     Boolean addLlmService(Long userId, Long tenantId, @Valid LlmServiceAddReqDTO requestParam);
 
-    LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum, Integer pageSize);
+    LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum, Integer pageSize, String keyword);
 
     Boolean updateLlmService(Long userId, Long tenantId, Long serviceId, LlmServiceUpdateReqDTO requestParam);
 
