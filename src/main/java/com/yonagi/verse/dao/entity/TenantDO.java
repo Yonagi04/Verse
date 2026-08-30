@@ -65,4 +65,9 @@ public class TenantDO extends BaseDO {
      * 租户级 TPM 上限（NULL=不限）
      */
     private Integer rateLimitTpm;
+
+    /**
+     * 是否开启模型调用审计：0=关闭, 1=开启
+     */
+    private Integer auditEnabled;
 }

@@ -12,6 +12,7 @@ public final class EventTag {
     public static final String LOGIN_LOG = "LOGIN_LOG";
     public static final String COUNTER = "COUNTER";
     public static final String TOKEN_USAGE = "TOKEN_USAGE";
+    public static final String LLM_AUDIT = "LLM_AUDIT";
 
     private EventTag() {
     }

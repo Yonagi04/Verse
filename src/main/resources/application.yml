@@ -50,6 +50,9 @@ verse:
       default-apikey-tpm: 6000
       default-model-rpm: 60
       default-model-tpm: 6000
+    audit:
+      # 审计概略截断长度（字符），超出部分追加 "..."，仅用于列表展示，详情回源 S3 取全量
+      preview-length: 20
   security:
     jwt:
       secret: ${JWT_SECRET:your-256-bit-secret-key-change-in-production}

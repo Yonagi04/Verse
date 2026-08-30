@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS `t_tenant` (
     `join_approval_mode` TINYINT NOT NULL DEFAULT 0 COMMENT '加入审批模式：0=直接加入, 1=管理员审批；TODO 2=多级审批',
     `rate_limit_rpm`   INT      DEFAULT NULL COMMENT '租户级 RPM 上限（NULL=不限）',
     `rate_limit_tpm`   INT      DEFAULT NULL COMMENT '租户级 TPM 上限（NULL=不限）',
+    `audit_enabled`    TINYINT  NOT NULL DEFAULT 0 COMMENT '是否开启模型调用审计：0=关闭, 1=开启',
     `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `del_flag`    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
@@ -274,3 +275,31 @@ CREATE TABLE IF NOT EXISTS `t_counter_event` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_event_id` (`event_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='邀请码计数事件去重表';
+
+-- ============================================
+-- 15. LLM 调用审计索引表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_llm_audit_log` (
+    `id`                  BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `request_id`          VARCHAR(64)  NOT NULL COMMENT '请求追踪ID',
+    `tenant_id`           BIGINT       NOT NULL COMMENT '租户ID（业务ID）',
+    `user_id`             BIGINT       NOT NULL COMMENT '用户ID（业务ID）',
+    `api_key_id`          BIGINT       NOT NULL COMMENT 'API Key ID（业务ID）',
+    `service_id`          BIGINT       NOT NULL COMMENT 'LLM服务ID（业务ID）',
+    `model`               VARCHAR(100) NOT NULL COMMENT '实际调用模型别名',
+    `prompt_preview`      VARCHAR(512) DEFAULT NULL COMMENT '输入 prompt 概略',
+    `response_preview`    VARCHAR(512) DEFAULT NULL COMMENT '输出 response 概略',
+    `prompt_object_key`   VARCHAR(512) DEFAULT NULL COMMENT '输入 prompt 在 S3 的 objectKey',
+    `response_object_key` VARCHAR(512) DEFAULT NULL COMMENT '输出 response 在 S3 的 objectKey',
+    `prompt_tokens`       INT          NOT NULL DEFAULT 0 COMMENT '输入Token数',
+    `completion_tokens`   INT          NOT NULL DEFAULT 0 COMMENT '输出Token数',
+    `total_tokens`        INT          NOT NULL DEFAULT 0 COMMENT '总Token数',
+    `latency_ms`          INT          NOT NULL DEFAULT 0 COMMENT '调用耗时（毫秒）',
+    `status`              VARCHAR(10)  NOT NULL COMMENT 'SUCCESS / FAIL',
+    `error_code`          VARCHAR(20)  DEFAULT NULL COMMENT '失败时的错误码',
+    `create_time`         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_request_id` (`request_id`),
+    KEY `idx_tenant_time` (`tenant_id`, `create_time`),
+    KEY `idx_user_time` (`user_id`, `create_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型调用审计索引表';

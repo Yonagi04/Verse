@@ -22,4 +22,9 @@ public class TenantInfoRespDTO {
     private String type;
 
     private String description;
+
+    /**
+     * 是否开启模型调用审计：0=关闭, 1=开启
+     */
+    private Integer auditEnabled;
 }

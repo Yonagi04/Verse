@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.async.api.DomainEventPublisher;
+import com.yonagi.verse.async.event.LlmAuditEvent;
 import com.yonagi.verse.async.event.TokenUsageEvent;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
@@ -82,16 +83,21 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         LlmServiceDO actualService = primary;
         RateLimitContext actualCtx = primaryCtx;
         String response;
+        long start = System.currentTimeMillis();
         try {
             response = forwardWithResilience(primary, primaryCtx, body);
         } catch (UpstreamFailureException e) {
             if (!e.isRetryable()) {
+                publishAudit(ctx, tenant, primary, body, null, requestId, start,
+                        LlmAuditEvent.STATUS_FAIL, e.getErrorCode());
                 throw e;
             }
             // 主模型可重试失败/熔断打开 → 降级到备用模型
             LlmServiceDO fallbackService = fallbackExecutor.resolveFallback(primary);
             if (fallbackService == null) {
                 // 无备用模型：透传主模型真实错误（含上游错误信息/熔断状态），不误报为「模型已熔断」
+                publishAudit(ctx, tenant, primary, body, null, requestId, start,
+                        LlmAuditEvent.STATUS_FAIL, e.getErrorCode());
                 throw e;
             }
             log.warn("[llm-forward] 主模型转发失败，降级到备用模型: primary={}, fallback={}, reason={}",
@@ -105,11 +111,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 // 备用模型也失败：透传备用模型真实错误
                 log.warn("[llm-forward] 备用模型转发失败: fallback={}, reason={}",
                         fallbackService.getServiceId(), e2.getMessage());
+                publishAudit(ctx, tenant, fallbackService, body, null, requestId, start,
+                        LlmAuditEvent.STATUS_FAIL, e2.getErrorCode());
                 throw e2;
             }
         }
 
-        return settleAndPublish(ctx, tenantId, actualService, actualCtx, response, requestId);
+        return settleAndPublish(ctx, tenant, actualService, actualCtx, body, response, requestId, start);
     }
 
     /**
@@ -170,14 +178,47 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 .build();
     }
 
-    private String settleAndPublish(UserContext ctx, Long tenantId, LlmServiceDO service,
-                                    RateLimitContext rateCtx, String response, String requestId) {
+    private String settleAndPublish(UserContext ctx, TenantDO tenant, LlmServiceDO service,
+                                    RateLimitContext rateCtx, String body, String response,
+                                    String requestId, long start) {
         JSONObject usage = extractUsage(response);
         int totalTokens = getInt(usage, "total_tokens");
         // 同步结算，保证「拦后续请求」及时生效；token 归属实际服务 serviceId
         rateLimiter.settle(rateCtx, totalTokens);
-        publishTokenUsage(ctx, tenantId, service, usage, requestId);
+        publishTokenUsage(ctx, tenant.getTenantId(), service, usage, requestId);
+        publishAudit(ctx, tenant, service, body, response, requestId, start,
+                LlmAuditEvent.STATUS_SUCCESS, null);
         return response;
+    }
+
+    /**
+     * 投递审计事件：仅当租户开启审计（auditEnabled=1）时记录输入/输出。
+     */
+    private void publishAudit(UserContext ctx, TenantDO tenant, LlmServiceDO service,
+                              String body, String response, String requestId,
+                              long start, String status, String errorCode) {
+        if (!Integer.valueOf(1).equals(tenant.getAuditEnabled())) {
+            return;
+        }
+        LlmAuditEvent event = new LlmAuditEvent();
+        event.setRequestId(requestId);
+        event.setUserId(ctx.getUserId());
+        event.setTenantId(tenant.getTenantId());
+        event.setApiKeyId(ctx.getApiKeyId());
+        event.setServiceId(service.getServiceId());
+        event.setModel(service.getName());
+        event.setPrompt(body);
+        event.setResponse(response);
+        event.setLatencyMs((int) (System.currentTimeMillis() - start));
+        event.setStatus(status);
+        event.setErrorCode(errorCode);
+        if (LlmAuditEvent.STATUS_SUCCESS.equals(status)) {
+            JSONObject usage = extractUsage(response);
+            event.setPromptTokens(getInt(usage, "prompt_tokens"));
+            event.setCompletionTokens(getInt(usage, "completion_tokens"));
+            event.setTotalTokens(getInt(usage, "total_tokens"));
+        }
+        eventPublisher.publish(event);
     }
 
     @Override
