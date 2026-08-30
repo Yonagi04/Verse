@@ -11,6 +11,7 @@ import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.service.LlmForwardService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -35,6 +36,11 @@ import java.util.List;
 public class LlmForwardController {
 
     private static final String HEADER_REQUEST_ID = "x-request-id";
+
+    /**
+     * 限流 429 的 Retry-After 秒数（RPM/TPM 均以 1 分钟为窗口）
+     */
+    private static final long RETRY_AFTER_SECONDS = 60L;
 
     private final LlmForwardService llmForwardService;
 
@@ -83,16 +89,21 @@ public class LlmForwardController {
      */
     private ResponseEntity<String> toOpenAiError(AbstractException e, String requestId) {
         String code = e.getErrorCode();
+        HttpStatus status = statusFor(code);
         JSONObject error = new JSONObject();
         error.put("message", e.getErrorMessage());
         error.put("type", typeFor(code));
         error.put("code", code);
         JSONObject body = new JSONObject();
         body.put("error", error);
-        return ResponseEntity.status(statusFor(code))
+
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_JSON)
-                .header(HEADER_REQUEST_ID, requestId)
-                .body(JSON.toJSONString(body));
+                .header(HEADER_REQUEST_ID, requestId);
+        if (status == HttpStatus.TOO_MANY_REQUESTS) {
+            builder.header(HttpHeaders.RETRY_AFTER, String.valueOf(RETRY_AFTER_SECONDS));
+        }
+        return builder.body(JSON.toJSONString(body));
     }
 
     private String typeFor(String code) {

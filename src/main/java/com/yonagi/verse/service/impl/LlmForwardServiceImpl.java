@@ -18,6 +18,7 @@ import com.yonagi.verse.resilience.api.CircuitBreaker;
 import com.yonagi.verse.resilience.api.FallbackExecutor;
 import com.yonagi.verse.resilience.api.RateLimitContext;
 import com.yonagi.verse.resilience.api.RateLimiter;
+import com.yonagi.verse.resilience.impl.Resilience4jTimeLimiter;
 import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.forward.ForwardContext;
 import com.yonagi.verse.service.forward.ModelResolver;
@@ -25,6 +26,7 @@ import com.yonagi.verse.service.forward.ProviderAdapter;
 import com.yonagi.verse.service.forward.UpstreamFailureException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -49,6 +51,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private final RateLimiter rateLimiter;
     private final CircuitBreaker circuitBreaker;
     private final FallbackExecutor fallbackExecutor;
+    private final Resilience4jTimeLimiter timeLimiter;
+
+    /**
+     * 同模型短重试次数（不含首次调用），来自 {@code verse.llm.upstream.max-retries}
+     */
+    @Value("${verse.llm.upstream.max-retries:1}")
+    private int maxRetries;
 
     @Override
     public String chatCompletion(UserContext ctx, String body, String requestId) {
@@ -104,7 +113,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     }
 
     /**
-     * 单次转发 + 韧性包裹：限流检查 → 熔断判断 → 上游调用 → 记录成功/失败。
+     * 单次转发 + 韧性包裹：限流检查 → 熔断判断 → 上游调用（超时 + 短重试）→ 记录成功/失败。
      */
     private String forwardWithResilience(LlmServiceDO service, RateLimitContext rateCtx, String body) {
         rateLimiter.check(rateCtx);
@@ -122,16 +131,29 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 .modelName(service.getModelName())
                 .body(body)
                 .build();
-        try {
-            String response = providerAdapter.forward(forwardContext);
-            circuitBreaker.recordSuccess(serviceId);
-            return response;
-        } catch (UpstreamFailureException e) {
-            if (e.isRetryable()) {
+
+        int maxAttempts = Math.max(1, maxRetries + 1);
+        for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                String response = timeLimiter.execute(() -> providerAdapter.forward(forwardContext));
+                circuitBreaker.recordSuccess(serviceId);
+                return response;
+            } catch (UpstreamFailureException e) {
+                if (!e.isRetryable()) {
+                    // 4xx 业务错误不重试、不计熔断健康度，直接透传
+                    throw e;
+                }
                 circuitBreaker.recordFailure(serviceId);
+                if (attempt >= maxAttempts) {
+                    throw e;
+                }
+                log.warn("[llm-forward] 上游调用失败，第 {} 次重试: serviceId={}, reason={}",
+                        attempt, serviceId, e.getMessage());
             }
-            throw e;
         }
+        // 理论不可达：循环内每次失败要么重试、要么抛出
+        throw new UpstreamFailureException(LlmForwardErrorCodeEnum.FORWARD_FAILED.message(),
+                LlmForwardErrorCodeEnum.FORWARD_FAILED, true);
     }
 
     private RateLimitContext buildRateContext(UserContext ctx, TenantDO tenant, LlmServiceDO service) {

@@ -33,6 +33,10 @@ verse:
     upstream:
       connect-timeout: 5000
       read-timeout: 120000
+      # 同模型短重试次数（不含首次调用）
+      max-retries: 1
+      # 上游调用硬性总耗时上限（毫秒），区别于 read-timeout 的“两次数据到达间隔”语义
+      time-limit-ms: 120000
     circuit-breaker:
       failure-rate-threshold: 50
       sliding-window-size: 20
