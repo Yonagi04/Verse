@@ -18,6 +18,7 @@ public class LlmAuditEvent extends DomainEvent {
 
     public static final String STATUS_SUCCESS = "SUCCESS";
     public static final String STATUS_FAIL = "FAIL";
+    public static final String STATUS_ABORTED = "ABORTED";
 
     private String requestId;
 

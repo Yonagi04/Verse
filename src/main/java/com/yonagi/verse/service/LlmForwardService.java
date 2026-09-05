@@ -1,6 +1,8 @@
 package com.yonagi.verse.service;
 
 import com.yonagi.verse.common.security.UserContext;
+import org.springframework.http.codec.ServerSentEvent;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -20,6 +22,16 @@ public interface LlmForwardService {
      * @return 上游响应体（OpenAI 兼容格式，含 usage）
      */
     String chatCompletion(UserContext ctx, String body, String requestId);
+
+    /**
+     * 处理一次流式（stream=true）chat/completions 转发请求，返回上游 SSE 事件流。
+     *
+     * @param ctx       当前请求上下文（含 userId/tenantId/apiKeyId）
+     * @param body      原始请求体（OpenAI 兼容 JSON，stream=true）
+     * @param requestId 请求追踪 ID
+     * @return 上游 SSE 事件流（惰性，订阅时才连上游）
+     */
+    Flux<ServerSentEvent<String>> chatCompletionStream(UserContext ctx, String body, String requestId);
 
     /**
      * 列出当前租户下启用的模型别名（OpenAI /models 兼容）。

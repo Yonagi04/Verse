@@ -24,14 +24,20 @@ import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.forward.ForwardContext;
 import com.yonagi.verse.service.forward.ModelResolver;
 import com.yonagi.verse.service.forward.ProviderAdapter;
+import com.yonagi.verse.service.forward.StreamResponseAccumulator;
 import com.yonagi.verse.service.forward.UpstreamFailureException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * LLM 转发服务实现 — 非事务同步阻塞编排：解析模型 → 限流 → 熔断 → 转发 → 失败降级 → 结算/发 Token 事件。
@@ -59,6 +65,12 @@ public class LlmForwardServiceImpl implements LlmForwardService {
      */
     @Value("${verse.llm.upstream.max-retries:1}")
     private int maxRetries;
+
+    /**
+     * 流式 chunk 间空闲超时（毫秒），区别于阻塞链路的 time-limit-ms 总耗时硬超时
+     */
+    @Value("${verse.llm.upstream.stream-idle-timeout-ms:120000}")
+    private long streamIdleTimeoutMs;
 
     @Override
     public String chatCompletion(UserContext ctx, String body, String requestId) {
@@ -118,6 +130,70 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         }
 
         return settleAndPublish(ctx, tenant, actualService, actualCtx, body, response, requestId, start);
+    }
+
+    @Override
+    public Flux<ServerSentEvent<String>> chatCompletionStream(UserContext ctx, String body, String requestId) {
+        // 同步序言：校验/解析/限流/熔断，任一失败抛异常 → controller 转 OpenAI JSON error（响应头未发）
+        if (ctx == null || ctx.getCurrentTenantId() == null) {
+            throw new ClientException(LlmForwardErrorCodeEnum.API_KEY_INVALID);
+        }
+        Long tenantId = ctx.getCurrentTenantId();
+        TenantDO tenant = validateTenant(tenantId);
+
+        JSONObject bodyJson = JSON.parseObject(body);
+        if (bodyJson == null || !StringUtils.hasText(bodyJson.getString("model"))) {
+            throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_FOUND);
+        }
+
+        LlmServiceDO service = modelResolver.resolve(tenantId, bodyJson.getString("model"));
+        RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
+        rateLimiter.check(rateCtx);
+
+        String serviceId = String.valueOf(service.getServiceId());
+        if (circuitBreaker.isOpen(serviceId)) {
+            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.MODEL_CIRCUIT_OPEN.message(),
+                    LlmForwardErrorCodeEnum.MODEL_CIRCUIT_OPEN, true);
+        }
+
+        String realApiKey = aesUtil.decrypt(service.getApiKey());
+        ForwardContext forwardContext = ForwardContext.builder()
+                .apiUrl(service.getApiUrl())
+                .apiKey(realApiKey)
+                .modelName(service.getModelName())
+                .body(body)
+                .build();
+
+        boolean auditEnabled = Integer.valueOf(1).equals(tenant.getAuditEnabled());
+
+        // 每次订阅独立持有首块状态和响应聚合器，避免冷 Flux 重复订阅时共享可变状态。
+        return Flux.defer(() -> {
+            long start = System.currentTimeMillis();
+            AtomicBoolean firstChunk = new AtomicBoolean(false);
+            StreamResponseAccumulator accumulator = new StreamResponseAccumulator(auditEnabled);
+
+            // 惰性 Flux：订阅时才连上游；流式无重试/降级，仅 pre-flight + 首字节前失败记录
+            return providerAdapter.stream(forwardContext)
+                    .timeout(Duration.ofMillis(streamIdleTimeoutMs))
+                    .publishOn(Schedulers.boundedElastic())
+                    .doOnNext(sse -> {
+                        if (firstChunk.compareAndSet(false, true)) {
+                            circuitBreaker.recordSuccess(serviceId);
+                        }
+                        accumulator.accept(sse.data());
+                    })
+                    .doOnComplete(() -> finalizeStream(ctx, tenant, service, rateCtx, body, requestId, start,
+                            accumulator, LlmAuditEvent.STATUS_SUCCESS, null))
+                    .doOnCancel(() -> finalizeStream(ctx, tenant, service, rateCtx, body, requestId, start,
+                            accumulator, LlmAuditEvent.STATUS_ABORTED, null))
+                    .doOnError(e -> {
+                        if (!firstChunk.get()) {
+                            circuitBreaker.recordFailure(serviceId);
+                        }
+                        finalizeStream(ctx, tenant, service, rateCtx, body, requestId, start,
+                                accumulator, LlmAuditEvent.STATUS_FAIL, errorCode(e));
+                    });
+        });
     }
 
     /**
@@ -260,6 +336,75 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         event.setTotalTokens(getInt(usage, "total_tokens"));
         event.setRequestId(requestId);
         eventPublisher.publish(event);
+    }
+
+    /**
+     * 流式收尾：结算 TPM + 发布 token/audit 事件，每个流仅触发一次（complete/cancel/error 互斥）。
+     */
+    private void finalizeStream(UserContext ctx, TenantDO tenant, LlmServiceDO service,
+                                RateLimitContext rateCtx, String body, String requestId,
+                                long start, StreamResponseAccumulator accumulator,
+                                String status, String errorCode) {
+        JSONObject usage = accumulator.usage();
+        String response = accumulator.buildResponseJson();
+        int totalTokens = getInt(usage, "total_tokens");
+        // 同步结算 TPM，保证「拦后续请求」及时生效；abort/无 usage 时 totalTokens=0
+        rateLimiter.settle(rateCtx, totalTokens);
+        String usageSource = usage == null
+                ? TokenUsageEvent.SOURCE_UNKNOWN
+                : LlmAuditEvent.STATUS_SUCCESS.equals(status)
+                ? TokenUsageEvent.SOURCE_EXACT
+                : TokenUsageEvent.SOURCE_ESTIMATED;
+        publishTokenUsageStream(ctx, tenant.getTenantId(), service, usage, requestId, status, usageSource);
+        publishAuditStream(ctx, tenant, service, body, response, requestId, start, usage, status, errorCode);
+    }
+
+    private void publishTokenUsageStream(UserContext ctx, Long tenantId, LlmServiceDO service,
+                                         JSONObject usage, String requestId, String status, String usageSource) {
+        TokenUsageEvent event = new TokenUsageEvent();
+        event.setUserId(ctx.getUserId());
+        event.setTenantId(tenantId);
+        event.setApiKeyId(ctx.getApiKeyId());
+        event.setServiceId(service.getServiceId());
+        event.setModel(service.getName());
+        event.setPromptTokens(getInt(usage, "prompt_tokens"));
+        event.setCompletionTokens(getInt(usage, "completion_tokens"));
+        event.setTotalTokens(getInt(usage, "total_tokens"));
+        event.setRequestId(requestId);
+        event.setStatus(status);
+        event.setUsageSource(usageSource);
+        eventPublisher.publish(event);
+    }
+
+    private void publishAuditStream(UserContext ctx, TenantDO tenant, LlmServiceDO service,
+                                    String body, String response, String requestId, long start,
+                                    JSONObject usage, String status, String errorCode) {
+        if (!Integer.valueOf(1).equals(tenant.getAuditEnabled())) {
+            return;
+        }
+        LlmAuditEvent event = new LlmAuditEvent();
+        event.setRequestId(requestId);
+        event.setUserId(ctx.getUserId());
+        event.setTenantId(tenant.getTenantId());
+        event.setApiKeyId(ctx.getApiKeyId());
+        event.setServiceId(service.getServiceId());
+        event.setModel(service.getName());
+        event.setPrompt(body);
+        event.setResponse(response);
+        event.setLatencyMs((int) (System.currentTimeMillis() - start));
+        event.setStatus(status);
+        event.setErrorCode(errorCode);
+        event.setPromptTokens(getInt(usage, "prompt_tokens"));
+        event.setCompletionTokens(getInt(usage, "completion_tokens"));
+        event.setTotalTokens(getInt(usage, "total_tokens"));
+        eventPublisher.publish(event);
+    }
+
+    private String errorCode(Throwable e) {
+        if (e instanceof UpstreamFailureException ufe) {
+            return ufe.getErrorCode();
+        }
+        return LlmForwardErrorCodeEnum.FORWARD_FAILED.code();
     }
 
     private JSONObject extractUsage(String response) {

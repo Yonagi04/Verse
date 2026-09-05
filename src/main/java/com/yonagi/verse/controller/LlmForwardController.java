@@ -15,11 +15,15 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
+import org.reactivestreams.Publisher;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
 
@@ -44,21 +48,71 @@ public class LlmForwardController {
 
     private final LlmForwardService llmForwardService;
 
-    @PostMapping("/chat/completions")
-    public ResponseEntity<String> chatCompletion(@RequestBody String body) {
+    @PostMapping(
+            value = "/chat/completions",
+            produces = {MediaType.APPLICATION_JSON_VALUE, MediaType.TEXT_EVENT_STREAM_VALUE})
+    public ResponseEntity<Publisher<String>> chatCompletion(@RequestBody String body) {
         UserContext ctx = UserContextHolder.get();
         String requestId = String.valueOf(SnowflakeIdUtil.nextId());
+        if (isStreamRequest(body)) {
+            return streamCompletion(ctx, body, requestId);
+        }
         try {
             String response = llmForwardService.chatCompletion(ctx, body, requestId);
             return ResponseEntity.ok()
                     .contentType(MediaType.APPLICATION_JSON)
                     .header(HEADER_REQUEST_ID, requestId)
-                    .body(response);
+                    .body(Mono.just(response));
         } catch (AbstractException e) {
             return toOpenAiError(e, requestId);
         } catch (Exception e) {
             log.error("[llm-forward] 未预期异常: requestId={}", requestId, e);
             return toOpenAiError(new ServerException(LlmForwardErrorCodeEnum.FORWARD_FAILED), requestId);
+        }
+    }
+
+    /**
+     * 流式转发：pre-flight 失败同步转 OpenAI JSON error；成功后返回 SSE 事件流。
+     */
+    private ResponseEntity<Publisher<String>> streamCompletion(UserContext ctx, String body, String requestId) {
+        try {
+            Flux<String> flux = llmForwardService.chatCompletionStream(ctx, body, requestId)
+                    .map(this::toDataOnlySse);
+            return ResponseEntity.ok()
+                    .contentType(MediaType.TEXT_EVENT_STREAM)
+                    .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+                    .header(HEADER_REQUEST_ID, requestId)
+                    .body(flux);
+        } catch (AbstractException e) {
+            return toOpenAiError(e, requestId);
+        } catch (Exception e) {
+            log.error("[llm-forward] 流式转发未预期异常: requestId={}", requestId, e);
+            return toOpenAiError(new ServerException(LlmForwardErrorCodeEnum.FORWARD_FAILED), requestId);
+        }
+    }
+
+    /**
+     * Spring MVC 以文本流逐块写出已经编码好的 data-only SSE 帧。
+     * OpenAI Chat Completions 流只依赖 data 字段，末尾的 [DONE] 也按同样格式透传。
+     */
+    private String toDataOnlySse(ServerSentEvent<String> sse) {
+        String data = sse.data();
+        if (data == null) {
+            return ":\n\n";
+        }
+        String normalized = data.replace("\r\n", "\n").replace('\r', '\n');
+        return "data: " + normalized.replace("\n", "\ndata: ") + "\n\n";
+    }
+
+    /**
+     * 解析请求体判断是否流式（stream=true）。
+     */
+    private boolean isStreamRequest(String body) {
+        try {
+            JSONObject json = JSON.parseObject(body);
+            return json != null && Boolean.TRUE.equals(json.getBoolean("stream"));
+        } catch (Exception e) {
+            return false;
         }
     }
 
@@ -87,7 +141,7 @@ public class LlmForwardController {
     /**
      * 业务异常 → OpenAI error 格式。
      */
-    private ResponseEntity<String> toOpenAiError(AbstractException e, String requestId) {
+    private ResponseEntity<Publisher<String>> toOpenAiError(AbstractException e, String requestId) {
         String code = e.getErrorCode();
         HttpStatus status = statusFor(code);
         JSONObject error = new JSONObject();
@@ -103,7 +157,7 @@ public class LlmForwardController {
         if (status == HttpStatus.TOO_MANY_REQUESTS) {
             builder.header(HttpHeaders.RETRY_AFTER, String.valueOf(RETRY_AFTER_SECONDS));
         }
-        return builder.body(JSON.toJSONString(body));
+        return builder.body(Mono.just(JSON.toJSONString(body)));
     }
 
     private String typeFor(String code) {

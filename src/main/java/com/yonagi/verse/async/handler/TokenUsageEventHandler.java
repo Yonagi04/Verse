@@ -45,6 +45,8 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
         tokenUsage.setCompletionTokens(event.getCompletionTokens());
         tokenUsage.setTotalTokens(event.getTotalTokens());
         tokenUsage.setRequestId(event.getRequestId());
+        tokenUsage.setStatus(event.getStatus());
+        tokenUsage.setUsageSource(event.getUsageSource());
         tokenUsage.setCreateTime(new Date());
         tokenUsageMapper.insert(tokenUsage);
     }

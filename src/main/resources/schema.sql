@@ -150,6 +150,8 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     `completion_tokens` INT          NOT NULL DEFAULT 0 COMMENT '输出Token数',
     `total_tokens`      INT          NOT NULL DEFAULT 0 COMMENT '总Token数',
     `request_id`        VARCHAR(64)  DEFAULT NULL COMMENT '请求追踪ID',
+    `status`            VARCHAR(16)  NOT NULL DEFAULT 'SUCCESS' COMMENT '状态：SUCCESS / ABORTED / FAIL',
+    `usage_source`      VARCHAR(16)  NOT NULL DEFAULT 'EXACT' COMMENT 'usage来源：EXACT / ESTIMATED / UNKNOWN',
     `create_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     KEY `idx_user_tenant_time` (`user_id`, `tenant_id`, `create_time`),

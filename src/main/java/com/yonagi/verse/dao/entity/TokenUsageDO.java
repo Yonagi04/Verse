@@ -66,6 +66,16 @@ public class TokenUsageDO {
     private String requestId;
 
     /**
+     * 状态：SUCCESS / ABORTED / FAIL
+     */
+    private String status;
+
+    /**
+     * usage来源：EXACT / ESTIMATED / UNKNOWN
+     */
+    private String usageSource;
+
+    /**
      * 创建时间
      */
     private Date createTime;

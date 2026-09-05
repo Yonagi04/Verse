@@ -16,6 +16,10 @@ import lombok.Setter;
 @NoArgsConstructor
 public class TokenUsageEvent extends DomainEvent {
 
+    public static final String SOURCE_EXACT = "EXACT";
+    public static final String SOURCE_ESTIMATED = "ESTIMATED";
+    public static final String SOURCE_UNKNOWN = "UNKNOWN";
+
     private Long userId;
 
     private Long tenantId;
@@ -36,6 +40,16 @@ public class TokenUsageEvent extends DomainEvent {
     private Integer totalTokens;
 
     private String requestId;
+
+    /**
+     * 状态：SUCCESS / ABORTED / FAIL
+     */
+    private String status;
+
+    /**
+     * usage来源：EXACT / ESTIMATED / UNKNOWN
+     */
+    private String usageSource;
 
     @Override
     public String eventType() {
