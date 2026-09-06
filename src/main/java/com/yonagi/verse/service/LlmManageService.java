@@ -8,7 +8,10 @@ import com.yonagi.verse.dto.req.LlmServiceUpdateReqDTO;
 import com.yonagi.verse.dto.resp.LlmServiceRemovePreRespDTO;
 import com.yonagi.verse.dto.resp.LlmServiceInfoRespDTO;
 import com.yonagi.verse.dto.resp.LlmServiceListRespDTO;
+import com.yonagi.verse.dto.resp.TagInfoRespDTO;
 import jakarta.validation.Valid;
+
+import java.util.List;
 
 /**
  * @author Yonagi
@@ -21,7 +24,8 @@ public interface LlmManageService extends IService<LlmServiceDO> {
 
     Boolean addLlmService(Long userId, Long tenantId, @Valid LlmServiceAddReqDTO requestParam);
 
-    LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum, Integer pageSize, String keyword);
+    LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum,
+                                         Integer pageSize, String keyword, String tagCodes);
 
     Boolean updateLlmService(Long userId, Long tenantId, Long serviceId, LlmServiceUpdateReqDTO requestParam);
 
@@ -36,4 +40,6 @@ public interface LlmManageService extends IService<LlmServiceDO> {
     Boolean removeLlmService(Long userId, Long tenantId, Long serviceId, LlmServiceRemoveReqDTO requestParam);
 
     Integer getLlmServiceCount(Long userId, Long tenantId);
+
+    List<TagInfoRespDTO> listTags();
 }

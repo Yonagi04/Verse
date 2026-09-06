@@ -86,4 +86,19 @@ public class LlmServiceDO extends BaseDO {
      * 备用模型 serviceId（单级降级，NULL=无降级）
      */
     private Long fallbackServiceId;
+
+    /**
+     * 上下文窗口大小
+     */
+    private Long contextWindow;
+
+    /**
+     * 最大输出 Token 数
+     */
+    private Long maxOutputTokens;
+
+    /**
+     * 当前生效定价版本 ID
+     */
+    private Long activePricingId;
 }

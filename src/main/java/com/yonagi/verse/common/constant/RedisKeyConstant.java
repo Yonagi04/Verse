@@ -109,6 +109,9 @@ public class RedisKeyConstant {
      */
     public static final String LLM_SERVICE_LIST_KEY = "verse:llm-service:list:";
 
+    /** Current active pricing cache; every entry remains interval-validated against the database. */
+    public static final String LLM_SERVICE_PRICING_KEY = "verse:llm-service:pricing:";
+
     /**
      * 删除llm服务的前置token key: {serviceId} -> token
      */

@@ -127,6 +127,9 @@ CREATE TABLE IF NOT EXISTS `t_llm_service` (
     `rate_limit_rpm` INT       DEFAULT NULL COMMENT '模型级 RPM 上限（NULL=不限）',
     `rate_limit_tpm` INT       DEFAULT NULL COMMENT '模型级 TPM 上限（NULL=不限）',
     `fallback_service_id` BIGINT DEFAULT NULL COMMENT '备用模型 serviceId（单级降级，NULL=无降级）',
+    `context_window` BIGINT DEFAULT NULL COMMENT '上下文长度',
+    `max_output_tokens` BIGINT DEFAULT NULL COMMENT '最大输出 Token',
+    `active_pricing_id` BIGINT DEFAULT NULL COMMENT '当前计费版本业务 ID',
     `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `del_flag`    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
@@ -152,11 +155,105 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     `request_id`        VARCHAR(64)  DEFAULT NULL COMMENT '请求追踪ID',
     `status`            VARCHAR(16)  NOT NULL DEFAULT 'SUCCESS' COMMENT '状态：SUCCESS / ABORTED / FAIL',
     `usage_source`      VARCHAR(16)  NOT NULL DEFAULT 'EXACT' COMMENT 'usage来源：EXACT / ESTIMATED / UNKNOWN',
+    `event_id`          VARCHAR(64)  DEFAULT NULL COMMENT '消息幂等键',
+    `request_started_at` DATETIME(3) DEFAULT NULL COMMENT '网关请求开始时间',
+    `input_tokens` BIGINT DEFAULT NULL,
+    `cached_input_tokens` BIGINT DEFAULT NULL,
+    `cache_write_input_tokens` BIGINT DEFAULT NULL,
+    `output_tokens` BIGINT DEFAULT NULL,
+    `pricing_id` BIGINT DEFAULT NULL,
+    `billing_mode` VARCHAR(16) DEFAULT NULL,
+    `price_period_type` VARCHAR(16) DEFAULT NULL,
+    `price_period_id` BIGINT DEFAULT NULL,
+    `cache_miss_input_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `cache_hit_input_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `output_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `request_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `estimated_cost_fen` DECIMAL(38,18) DEFAULT NULL,
+    `cost_status` VARCHAR(24) NOT NULL DEFAULT 'UNPRICED',
+    `currency` CHAR(3) DEFAULT NULL,
+    `usage_details_json` JSON DEFAULT NULL,
     `create_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     KEY `idx_user_tenant_time` (`user_id`, `tenant_id`, `create_time`),
-    KEY `idx_tenant_time` (`tenant_id`, `create_time`)
+    KEY `idx_tenant_time` (`tenant_id`, `create_time`),
+    KEY `idx_usage_tenant_cost_started` (`tenant_id`, `cost_status`, `request_started_at`),
+    KEY `idx_usage_tenant_user_cost_started` (`tenant_id`, `user_id`, `cost_status`, `request_started_at`),
+    UNIQUE KEY `uk_token_usage_event_id` (`event_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token消耗记录表';
+
+-- ============================================
+-- 7.1 LLM 标签与计费版本
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_llm_tag` (
+    `tag_code` VARCHAR(40) NOT NULL,
+    `display_name` VARCHAR(40) NOT NULL,
+    `description` VARCHAR(255) NOT NULL,
+    `sort_order` SMALLINT NOT NULL,
+    PRIMARY KEY (`tag_code`),
+    UNIQUE KEY `uk_llm_tag_sort_order` (`sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LLM 固定能力标签字典';
+
+CREATE TABLE IF NOT EXISTS `t_llm_service_tag` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `service_id` BIGINT NOT NULL,
+    `tag_code` VARCHAR(40) NOT NULL,
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_llm_service_tag` (`service_id`, `tag_code`),
+    KEY `idx_llm_service_tag_code` (`tag_code`, `service_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LLM 服务能力标签关联';
+
+CREATE TABLE IF NOT EXISTS `t_llm_service_pricing` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `pricing_id` BIGINT NOT NULL,
+    `tenant_id` BIGINT NOT NULL,
+    `service_id` BIGINT NOT NULL,
+    `billing_mode` VARCHAR(16) NOT NULL,
+    `currency` CHAR(3) NOT NULL DEFAULT 'CNY',
+    `base_cache_miss_input_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `base_cache_hit_input_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `base_output_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `base_request_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `effective_from` DATETIME(3) NOT NULL,
+    `effective_to` DATETIME(3) DEFAULT NULL,
+    `created_by` BIGINT NOT NULL,
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_llm_pricing_id` (`pricing_id`),
+    KEY `idx_llm_pricing_lookup` (`tenant_id`, `service_id`, `effective_from`, `effective_to`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LLM 服务不可变计费版本';
+
+CREATE TABLE IF NOT EXISTS `t_llm_pricing_peak_period` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `period_id` BIGINT NOT NULL,
+    `pricing_id` BIGINT NOT NULL,
+    `weekday_mask` TINYINT UNSIGNED NOT NULL,
+    `start_minute` SMALLINT UNSIGNED NOT NULL,
+    `end_minute` SMALLINT UNSIGNED NOT NULL,
+    `peak_cache_miss_input_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `peak_cache_hit_input_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `peak_output_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `peak_request_price_fen` DECIMAL(30,12) DEFAULT NULL,
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_llm_peak_period_id` (`period_id`),
+    KEY `idx_llm_peak_pricing` (`pricing_id`),
+    CHECK (`start_minute` < `end_minute` AND `end_minute` <= 1440)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LLM 计费高峰期规则';
+
+INSERT INTO `t_llm_tag` (`tag_code`, `display_name`, `description`, `sort_order`) VALUES
+('text-generation', '文本生成', '支持文本理解与生成', 1),
+('tool-calling', '工具调用', '支持结构化工具调用', 2),
+('image-understanding', '图像理解', '支持图像输入和理解', 3),
+('image-generation', '图像生成', '支持图像生成', 4),
+('video-generation', '视频生成', '支持视频生成', 5),
+('embedding', '向量嵌入', '支持文本向量嵌入', 6),
+('audio-input', '音频输入', '支持音频输入', 7),
+('audio-output', '音频输出', '支持音频输出', 8),
+('reasoning', '推理', '支持推理类模型能力', 9),
+('structured-output', '结构化输出', '支持结构化输出', 10)
+ON DUPLICATE KEY UPDATE `display_name` = VALUES(`display_name`), `description` = VALUES(`description`), `sort_order` = VALUES(`sort_order`);
 
 -- ============================================
 -- 8. 通知记录表

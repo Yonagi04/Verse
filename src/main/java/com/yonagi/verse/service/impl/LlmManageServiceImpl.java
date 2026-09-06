@@ -31,6 +31,8 @@ import com.yonagi.verse.dto.resp.LlmServiceInfoRespDTO;
 import com.yonagi.verse.dto.resp.LlmServiceListRespDTO;
 import com.yonagi.verse.service.LlmManageService;
 import com.yonagi.verse.service.UserTenantService;
+import com.yonagi.verse.service.pricing.LlmMetadataService;
+import com.yonagi.verse.service.pricing.PricingConfigurationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
@@ -40,7 +42,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
@@ -67,6 +71,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     private final UserMapper userMapper;
     private final JwtUtil jwtUtil;
     private final RedissonClient redissonClient;
+    private final LlmMetadataService metadataService;
+    private final PricingConfigurationService pricingConfigurationService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -100,11 +106,21 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                             .createdBy(userId)
                             .rateLimitRpm(requestParam.getRpm())
                             .rateLimitTpm(requestParam.getTpm())
+                            .contextWindow(requestParam.getContextWindow())
+                            .maxOutputTokens(requestParam.getMaxOutputTokens())
                             .build();
+                    validateTokenLimits(null, llmServiceDO.getContextWindow(), llmServiceDO.getMaxOutputTokens(), true);
                     int insert = baseMapper.insert(llmServiceDO);
                     if (insert < 1) {
                         log.error("insert LLM service error: userId {}, tenantId {}", userId, tenantId);
                         throw new ServerException(LlmManageErrorCodeEnum.LLM_ADD_FAILED);
+                    }
+                    metadataService.replaceTags(llmServiceId, requestParam.getTagCodes());
+                    if (requestParam.getPricing() != null) {
+                        pricingConfigurationService.replace(userId, llmServiceDO, requestParam.getPricing());
+                        baseMapper.update(Wrappers.lambdaUpdate(LlmServiceDO.class)
+                                .eq(LlmServiceDO::getServiceId, llmServiceId)
+                                .set(LlmServiceDO::getActivePricingId, llmServiceDO.getActivePricingId()));
                     }
 
                     // 缓存
@@ -138,7 +154,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    public LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum, Integer pageSize, String keyword) {
+    public LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum,
+                                                Integer pageSize, String keyword, String tagCodes) {
         validateTenantAndMembership(userId, tenantId);
         List<LlmServiceListRespDTO.LlmServiceInfo> all = loadServiceInfos(tenantId);
         if (StrUtil.isNotBlank(keyword)) {
@@ -146,6 +163,19 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             all = all.stream()
                     .filter(info -> matchesKeyword(info, kw))
                     .toList();
+        }
+        Map<Long, List<String>> tags = metadataService.tagsByServiceIds(all.stream()
+                .map(LlmServiceListRespDTO.LlmServiceInfo::getServiceId)
+                .toList());
+        all.forEach(info -> info.setTagCodes(tags.getOrDefault(info.getServiceId(), List.of())));
+        if (StrUtil.isNotBlank(tagCodes)) {
+            List<String> filters = Arrays.stream(tagCodes.split(","))
+                    .map(String::trim)
+                    .filter(StrUtil::isNotBlank)
+                    .distinct()
+                    .toList();
+            metadataService.validateCodes(filters);
+            all = all.stream().filter(info -> info.getTagCodes().stream().anyMatch(filters::contains)).toList();
         }
         return paginate(all, pageNum, pageSize);
     }
@@ -213,10 +243,13 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 && StrUtil.isBlank(requestParam.getModelName())
                 && requestParam.getRpm() == null
                 && requestParam.getTpm() == null
-                && requestParam.getFallbackServiceId() == null) {
+                && requestParam.getFallbackServiceId() == null
+                && requestParam.getTagCodes() == null
+                && requestParam.getContextWindow() == null
+                && requestParam.getMaxOutputTokens() == null
+                && requestParam.getPricing() == null) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_UPDATE_PARAM_EMPTY);
         }
-
         // 查询对应的服务是否存在 or 是否启用
         LlmServiceDO llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
                 .eq(LlmServiceDO::getServiceId, serviceId)
@@ -227,31 +260,64 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         } else if (llmServiceDO.getStatus() == 0) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_CAN_NOT_UPDATE);
         }
+        validateTokenLimits(llmServiceDO, requestParam.getContextWindow(), requestParam.getMaxOutputTokens(), false);
 
         String newName = StrUtil.isBlank(requestParam.getName()) ? null : requestParam.getName().trim();
         boolean nameChanged = newName != null && !newName.equals(llmServiceDO.getName());
 
-        if (nameChanged) {
-            checkNameUniqueAndUpdate(tenantId, serviceId, newName, requestParam);
-        } else {
-            doUpdateService(tenantId, serviceId, requestParam);
+        if (hasServiceFieldUpdate(requestParam)) {
+            if (nameChanged) {
+                checkNameUniqueAndUpdate(tenantId, serviceId, newName, requestParam);
+            } else {
+                doUpdateService(tenantId, serviceId, requestParam);
+            }
+        }
+        if (requestParam.getTagCodes() != null) {
+            metadataService.replaceTags(serviceId, requestParam.getTagCodes());
+        }
+        if (requestParam.getPricing() != null) {
+            pricingConfigurationService.replace(userId, llmServiceDO, requestParam.getPricing());
+            baseMapper.update(Wrappers.lambdaUpdate(LlmServiceDO.class)
+                    .eq(LlmServiceDO::getServiceId, serviceId)
+                    .eq(LlmServiceDO::getTenantId, tenantId)
+                    .set(LlmServiceDO::getActivePricingId, llmServiceDO.getActivePricingId()));
         }
 
         // 失效缓存；名称变更时重建路由索引
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId);
-        stringRedisTemplate.opsForHash().delete(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName());
+        stringRedisTemplate.opsForHash().delete(
+                RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName()
+        );
         if (nameChanged) {
-            stringRedisTemplate.opsForHash().put(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, newName, String.valueOf(serviceId));
+            stringRedisTemplate.opsForHash().put(
+                    RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, newName, String.valueOf(serviceId)
+            );
             stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
         }
         return Boolean.TRUE;
     }
 
     /**
+     * 判断本次请求是否包含模型服务表字段更新，避免标签或计费单独更新时生成空 SET SQL。
+     */
+    private boolean hasServiceFieldUpdate(LlmServiceUpdateReqDTO requestParam) {
+        return StrUtil.isNotBlank(requestParam.getName())
+                || StrUtil.isNotBlank(requestParam.getApiUrl())
+                || StrUtil.isNotBlank(requestParam.getApiKey())
+                || StrUtil.isNotBlank(requestParam.getModelName())
+                || requestParam.getRpm() != null
+                || requestParam.getTpm() != null
+                || requestParam.getFallbackServiceId() != null
+                || requestParam.getContextWindow() != null
+                || requestParam.getMaxOutputTokens() != null;
+    }
+
+    /**
      * 名称变更时的更新：加分布式锁并在锁内重查，保证并发下的名称唯一性。
      */
-    private void checkNameUniqueAndUpdate(Long tenantId, Long serviceId, String newName, LlmServiceUpdateReqDTO requestParam) {
+    private void checkNameUniqueAndUpdate(Long tenantId, Long serviceId, String newName,
+                                          LlmServiceUpdateReqDTO requestParam) {
         RLock lock = redissonClient.getLock(RedisKeyConstant.LLM_LOCK_KEY + tenantId + ":" + newName);
         try {
             if (!lock.tryLock(3, 30, TimeUnit.SECONDS)) {
@@ -308,11 +374,21 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             updateWrapper.set(LlmServiceDO::getRateLimitTpm, requestParam.getTpm() > 0 ? requestParam.getTpm() : null);
         }
         if (requestParam.getFallbackServiceId() != null) {
-            Long fallbackServiceId = requestParam.getFallbackServiceId() > 0 ? requestParam.getFallbackServiceId() : null;
+            Long fallbackServiceId = requestParam.getFallbackServiceId() > 0
+                    ? requestParam.getFallbackServiceId()
+                    : null;
             if (fallbackServiceId != null) {
                 validateFallback(tenantId, serviceId, fallbackServiceId);
             }
             updateWrapper.set(LlmServiceDO::getFallbackServiceId, fallbackServiceId);
+        }
+        if (requestParam.getContextWindow() != null) {
+            updateWrapper.set(LlmServiceDO::getContextWindow,
+                    requestParam.getContextWindow() == 0 ? null : requestParam.getContextWindow());
+        }
+        if (requestParam.getMaxOutputTokens() != null) {
+            updateWrapper.set(LlmServiceDO::getMaxOutputTokens,
+                    requestParam.getMaxOutputTokens() == 0 ? null : requestParam.getMaxOutputTokens());
         }
         int update = baseMapper.update(updateWrapper);
         if (update < 1) {
@@ -352,11 +428,48 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         BeanUtil.copyProperties(llmServiceDO, respDTO);
         respDTO.setCreatedByUsername(createUsername);
         respDTO.setApiKey(maskedApiKey);
+        respDTO.setTagCodes(metadataService.tags(serviceId));
+        respDTO.setPricing(pricingConfigurationService.current(serviceId));
         // 如果没命中缓存，就写回
         if (!isReadFromCache) {
             stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(llmServiceDO), 30, TimeUnit.MINUTES);
         }
         return respDTO;
+    }
+
+    private void validateTokenLimits(LlmServiceDO existing, Long contextWindow,
+                                     Long maxOutputTokens, boolean create) {
+        if (create && (notPositive(contextWindow) || notPositive(maxOutputTokens))) {
+            throw new ClientException(LlmManageErrorCodeEnum.LLM_TOKEN_LIMIT_INVALID);
+        }
+        if (!create && (negative(contextWindow) || negative(maxOutputTokens))) {
+            throw new ClientException(LlmManageErrorCodeEnum.LLM_TOKEN_LIMIT_INVALID);
+        }
+        Long finalContext = resolveTokenLimit(
+                contextWindow, existing == null ? null : existing.getContextWindow()
+        );
+        Long finalOutput = resolveTokenLimit(
+                maxOutputTokens, existing == null ? null : existing.getMaxOutputTokens()
+        );
+        if ((finalContext != null && finalContext <= 0) || (finalOutput != null && finalOutput <= 0)
+                || (finalContext != null && finalOutput != null && finalOutput > finalContext)) {
+            throw new ClientException(LlmManageErrorCodeEnum.LLM_TOKEN_LIMIT_INVALID);
+        }
+    }
+
+    private boolean notPositive(Long value) {
+        return value != null && value <= 0;
+    }
+
+    private boolean negative(Long value) {
+        return value != null && value < 0;
+    }
+
+    private Long resolveTokenLimit(Long requested, Long existing) {
+        if (requested == null) {
+            return existing;
+        }
+        return requested == 0 ? null : requested;
     }
 
     @Override
@@ -384,7 +497,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         // 删缓存
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId);
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
-        stringRedisTemplate.opsForHash().delete(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName());
+        stringRedisTemplate.opsForHash().delete(
+                RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName()
+        );
         return Boolean.TRUE;
     }
 
@@ -416,7 +531,11 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         stringRedisTemplate.opsForValue().set(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId,
                 JSON.toJSONString(llmServiceDO),
                 30, TimeUnit.MINUTES);
-        stringRedisTemplate.opsForHash().put(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName(), String.valueOf(serviceId));
+        stringRedisTemplate.opsForHash().put(
+                RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId,
+                llmServiceDO.getName(),
+                String.valueOf(serviceId)
+        );
         stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
         return Boolean.TRUE;
     }
@@ -433,7 +552,12 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         }
         String removeLlmToken = jwtUtil.generateRemoveLlmToken(serviceId, tenantId, 5 * 60 * 1000L);
         Date expiresAt = new Date(System.currentTimeMillis() + 5 * 60 * 1000L);
-        stringRedisTemplate.opsForValue().set(RedisKeyConstant.LLM_REMOVE_TOKEN_KEY + serviceId, removeLlmToken, 5, TimeUnit.MINUTES);
+        stringRedisTemplate.opsForValue().set(
+                RedisKeyConstant.LLM_REMOVE_TOKEN_KEY + serviceId,
+                removeLlmToken,
+                5,
+                TimeUnit.MINUTES
+        );
 
         return new LlmServiceRemovePreRespDTO(LLM_SERVICE_PREPARE_REMOVE_INFO, removeLlmToken, expiresAt);
     }
@@ -484,7 +608,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId);
         stringRedisTemplate.delete(RedisKeyConstant.LLM_REMOVE_TOKEN_KEY + serviceId);
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
-        stringRedisTemplate.opsForHash().delete(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName());
+        stringRedisTemplate.opsForHash().delete(
+                RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName()
+        );
         return Boolean.TRUE;
     }
 
@@ -493,6 +619,11 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         validateTenantAndMembership(userId, tenantId);
         List<LlmServiceListRespDTO.LlmServiceInfo> infos = loadServiceInfos(tenantId);
         return infos.size();
+    }
+
+    @Override
+    public List<com.yonagi.verse.dto.resp.TagInfoRespDTO> listTags() {
+        return metadataService.catalogue();
     }
 
     /**

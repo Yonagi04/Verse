@@ -18,14 +18,19 @@ import java.util.List;
 @Accessors(chain = true)
 public class LlmServiceListRespDTO {
 
+    /** 当前页服务列表。 */
     private List<LlmServiceInfo> serviceInfoList;
 
+    /** 总记录数。 */
     private Long total;
 
+    /** 总页数。 */
     private Long totalPages;
 
+    /** 当前页码。 */
     private Integer page;
 
+    /** 每页记录数。 */
     private Integer pageSize;
 
     @Data
@@ -57,5 +62,20 @@ public class LlmServiceListRespDTO {
          * 创建者用户名
          */
         private String createdByUsername;
+
+        /** 标签编码列表。 */
+        private List<String> tagCodes;
+
+        /** 上下文窗口大小。 */
+        private Long contextWindow;
+
+        /** 最大输出 Token 数。 */
+        private Long maxOutputTokens;
+
+        /** 计费状态：UNPRICED、TOKEN 或 REQUEST。 */
+        private String billingStatus;
+
+        /** 计费币种。 */
+        private String currency;
     }
 }

@@ -30,6 +30,9 @@ server:
 verse:
   frontend-baseurl: http://localhost:3000
   llm:
+    costing:
+      # 用量计费总开关；关闭后不再投递用量事件。
+      enabled: true
     upstream:
       connect-timeout: 5000
       read-timeout: 120000

@@ -24,7 +24,6 @@ hs_err_pid*
 replay_pid*
 
 target/
-src/test/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

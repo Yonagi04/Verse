@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.util.Date;
+import java.util.List;
 
 /**
  * @author Yonagi
@@ -77,4 +78,16 @@ public class LlmServiceInfoRespDTO {
      * 创建时间
      */
     private Date createTime;
+
+    /** 标签编码列表。 */
+    private List<String> tagCodes;
+
+    /** 上下文窗口大小。 */
+    private Long contextWindow;
+
+    /** 最大输出 Token 数。 */
+    private Long maxOutputTokens;
+
+    /** 当前定价配置。 */
+    private PricingConfigRespDTO pricing;
 }

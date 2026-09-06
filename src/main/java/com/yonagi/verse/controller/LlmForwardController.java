@@ -26,6 +26,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.time.Instant;
 
 /**
  * LLM 转发控制器 — OpenAI 兼容端点，不走 Result 包装，直接透传 OpenAI 响应。
@@ -54,11 +55,12 @@ public class LlmForwardController {
     public ResponseEntity<Publisher<String>> chatCompletion(@RequestBody String body) {
         UserContext ctx = UserContextHolder.get();
         String requestId = String.valueOf(SnowflakeIdUtil.nextId());
+        Instant requestStartedAt = Instant.now();
         if (isStreamRequest(body)) {
-            return streamCompletion(ctx, body, requestId);
+            return streamCompletion(ctx, body, requestId, requestStartedAt);
         }
         try {
-            String response = llmForwardService.chatCompletion(ctx, body, requestId);
+            String response = llmForwardService.chatCompletion(ctx, body, requestId, requestStartedAt);
             return ResponseEntity.ok()
                     .contentType(MediaType.APPLICATION_JSON)
                     .header(HEADER_REQUEST_ID, requestId)
@@ -74,9 +76,10 @@ public class LlmForwardController {
     /**
      * 流式转发：pre-flight 失败同步转 OpenAI JSON error；成功后返回 SSE 事件流。
      */
-    private ResponseEntity<Publisher<String>> streamCompletion(UserContext ctx, String body, String requestId) {
+    private ResponseEntity<Publisher<String>> streamCompletion(UserContext ctx, String body,
+                                                                String requestId, Instant requestStartedAt) {
         try {
-            Flux<String> flux = llmForwardService.chatCompletionStream(ctx, body, requestId)
+            Flux<String> flux = llmForwardService.chatCompletionStream(ctx, body, requestId, requestStartedAt)
                     .map(this::toDataOnlySse);
             return ResponseEntity.ok()
                     .contentType(MediaType.TEXT_EVENT_STREAM)

@@ -4,6 +4,8 @@ import jakarta.validation.constraints.Min;
 import lombok.Data;
 import org.hibernate.validator.constraints.Length;
 
+import java.util.List;
+
 /**
  * LLM 服务更新请求。
  *
@@ -63,4 +65,18 @@ public class LlmServiceUpdateReqDTO {
      */
     @Min(value = 0, message = "备用模型 ID 不能为负数")
     private Long fallbackServiceId;
+
+    /** {@code null} 表示不修改；空列表表示清空全部标签。 */
+    private List<String> tagCodes;
+
+    /** {@code null} 表示不修改；零表示清除；正数表示设置上下文窗口。 */
+    @Min(value = 0, message = "上下文窗口不能为负数")
+    private Long contextWindow;
+
+    /** {@code null} 表示不修改；零表示清除；正数表示设置最大输出 Token 数。 */
+    @Min(value = 0, message = "最大输出 Token 数不能为负数")
+    private Long maxOutputTokens;
+
+    /** {@code null} 表示不修改；禁用时关闭计费；启用时创建完整的新定价版本。 */
+    private PricingConfigReqDTO pricing;
 }

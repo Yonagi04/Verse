@@ -48,7 +48,8 @@ public class LlmManageController {
                                                         @PathVariable Long tenantId,
                                                         @RequestParam Integer pageNum,
                                                         @RequestParam Integer pageSize,
-                                                        @RequestParam(required = false) String keyword) {
+                                                        @RequestParam(required = false) String keyword,
+                                                        @RequestParam(required = false) String tagCodes) {
         if (tenantId == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
         }
@@ -61,7 +62,12 @@ public class LlmManageController {
         if (pageNum < 1 || pageSize < 1) {
             throw new ClientException(LlmManageErrorCodeEnum.PAGINATION_PARAM_INVALID);
         }
-        return Results.success(llmManageService.listLlmService(userId, tenantId, pageNum, pageSize, keyword));
+        return Results.success(llmManageService.listLlmService(userId, tenantId, pageNum, pageSize, keyword, tagCodes));
+    }
+
+    @GetMapping("/tags")
+    public Result<java.util.List<com.yonagi.verse.dto.resp.TagInfoRespDTO>> tags() {
+        return Results.success(llmManageService.listTags());
     }
 
     @PreAuthorize("hasAnyRole('ADMIN', 'SUPER_ADMIN')")
