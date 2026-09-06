@@ -161,10 +161,14 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     `cached_input_tokens` BIGINT DEFAULT NULL,
     `cache_write_input_tokens` BIGINT DEFAULT NULL,
     `output_tokens` BIGINT DEFAULT NULL,
+    `normalized_total_tokens` BIGINT DEFAULT NULL,
+    `usage_parser` VARCHAR(40) DEFAULT NULL,
     `pricing_id` BIGINT DEFAULT NULL,
     `billing_mode` VARCHAR(16) DEFAULT NULL,
     `price_period_type` VARCHAR(16) DEFAULT NULL,
     `price_period_id` BIGINT DEFAULT NULL,
+    `price_effective_from` DATETIME(3) DEFAULT NULL,
+    `price_effective_to` DATETIME(3) DEFAULT NULL,
     `cache_miss_input_price_fen` DECIMAL(30,12) DEFAULT NULL,
     `cache_hit_input_price_fen` DECIMAL(30,12) DEFAULT NULL,
     `output_price_fen` DECIMAL(30,12) DEFAULT NULL,
@@ -181,6 +185,33 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     KEY `idx_usage_tenant_user_cost_started` (`tenant_id`, `user_id`, `cost_status`, `request_started_at`),
     UNIQUE KEY `uk_token_usage_event_id` (`event_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token消耗记录表';
+
+-- ============================================
+-- 7.0.1 计费用量事件持久化发送表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_token_usage_outbox` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `event_id` VARCHAR(64) NOT NULL COMMENT '稳定事件ID',
+    `tenant_id` BIGINT NOT NULL COMMENT '租户ID',
+    `event_type` VARCHAR(40) NOT NULL COMMENT 'RocketMQ 标签',
+    `message_key` VARCHAR(128) NOT NULL COMMENT 'RocketMQ 顺序键',
+    `payload_json` JSON NOT NULL COMMENT '不可变事件载荷',
+    `status` VARCHAR(16) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/CLAIMED/RETRY/FAILED/PUBLISHED',
+    `attempt_count` INT NOT NULL DEFAULT 0 COMMENT '发送尝试次数',
+    `next_retry_at` DATETIME(3) NOT NULL COMMENT '下次可重试时间',
+    `claim_owner` VARCHAR(64) DEFAULT NULL COMMENT '声明实例',
+    `claim_expires_at` DATETIME(3) DEFAULT NULL COMMENT '声明租约到期时间',
+    `last_error` VARCHAR(2000) DEFAULT NULL COMMENT '最近发送错误',
+    `published_at` DATETIME(3) DEFAULT NULL COMMENT 'Broker确认接收时间',
+    `reconciled_at` DATETIME(3) DEFAULT NULL COMMENT '事实表对账完成时间',
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_token_usage_outbox_event` (`event_id`),
+    KEY `idx_usage_outbox_claim` (`status`, `next_retry_at`, `claim_expires_at`, `id`),
+    KEY `idx_usage_outbox_retention` (`status`, `reconciled_at`),
+    KEY `idx_usage_outbox_tenant` (`tenant_id`, `event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='计费用量事件持久化发送表';
 
 -- ============================================
 -- 7.1 LLM 标签与计费版本

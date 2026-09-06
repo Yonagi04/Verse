@@ -1,0 +1,222 @@
+package com.yonagi.verse.service.impl;
+
+import com.yonagi.verse.async.api.DomainEventPublisher;
+import com.yonagi.verse.async.api.TokenUsageEventPublisher;
+import com.yonagi.verse.async.event.TokenUsageEvent;
+import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
+import com.yonagi.verse.common.enums.BillingMode;
+import com.yonagi.verse.common.enums.PricePeriodType;
+import com.yonagi.verse.common.enums.CostStatus;
+import com.yonagi.verse.common.security.UserContext;
+import com.yonagi.verse.common.util.AesUtil;
+import com.yonagi.verse.dao.entity.LlmServiceDO;
+import com.yonagi.verse.dao.entity.TenantDO;
+import com.yonagi.verse.dao.mapper.LlmServiceMapper;
+import com.yonagi.verse.dao.mapper.TenantMapper;
+import com.yonagi.verse.resilience.api.CircuitBreaker;
+import com.yonagi.verse.resilience.api.FallbackExecutor;
+import com.yonagi.verse.resilience.api.RateLimiter;
+import com.yonagi.verse.resilience.impl.Resilience4jTimeLimiter;
+import com.yonagi.verse.service.forward.ModelResolver;
+import com.yonagi.verse.service.forward.ProviderAdapter;
+import com.yonagi.verse.service.forward.UpstreamFailureException;
+import com.yonagi.verse.service.pricing.CostCalculator;
+import com.yonagi.verse.service.pricing.PricingResolver;
+import com.yonagi.verse.service.pricing.PricingSnapshot;
+import com.yonagi.verse.service.usage.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.test.util.ReflectionTestUtils;
+import reactor.core.publisher.Flux;
+
+import java.time.Instant;
+import java.math.BigDecimal;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+class LlmForwardUsagePublicationTest {
+    private ModelResolver modelResolver;
+    private ProviderAdapter providerAdapter;
+    private TokenUsageEventPublisher usagePublisher;
+    private FallbackExecutor fallbackExecutor;
+    private Resilience4jTimeLimiter timeLimiter;
+    private PricingResolver pricingResolver;
+    private LlmForwardServiceImpl service;
+    private LlmServiceDO primary;
+    private UserContext context;
+
+    @BeforeEach
+    void setUp() {
+        modelResolver = mock(ModelResolver.class);
+        providerAdapter = mock(ProviderAdapter.class);
+        AesUtil aesUtil = mock(AesUtil.class);
+        DomainEventPublisher eventPublisher = mock(DomainEventPublisher.class);
+        usagePublisher = mock(TokenUsageEventPublisher.class);
+        TenantMapper tenantMapper = mock(TenantMapper.class);
+        LlmServiceMapper serviceMapper = mock(LlmServiceMapper.class);
+        RateLimiter rateLimiter = mock(RateLimiter.class);
+        CircuitBreaker circuitBreaker = mock(CircuitBreaker.class);
+        fallbackExecutor = mock(FallbackExecutor.class);
+        timeLimiter = mock(Resilience4jTimeLimiter.class);
+        pricingResolver = mock(PricingResolver.class);
+        when(pricingResolver.resolve(anyLong(), anyLong(), any())).thenReturn(PricingSnapshot.unpriced());
+        UsageNormalizerRegistry registry = new UsageNormalizerRegistry(List.of(
+                new OpenAiUsageNormalizer(), new AnthropicUsageNormalizer(), new GeminiUsageNormalizer(),
+                new DeepSeekUsageNormalizer(), new ZhipuUsageNormalizer(), new QwenUsageNormalizer(),
+                new DoubaoUsageNormalizer(), new KimiUsageNormalizer(), new MiniMaxUsageNormalizer(),
+                new OpenAiCompatibleUsageNormalizer()));
+        service = new LlmForwardServiceImpl(modelResolver, providerAdapter, aesUtil, eventPublisher,
+                usagePublisher, tenantMapper, serviceMapper, rateLimiter, circuitBreaker, fallbackExecutor,
+                timeLimiter, registry, pricingResolver, new CostCalculator());
+        ReflectionTestUtils.setField(service, "maxRetries", 0);
+        ReflectionTestUtils.setField(service, "streamIdleTimeoutMs", 5000L);
+        ReflectionTestUtils.setField(service, "costingEnabled", true);
+
+        TenantDO tenant = new TenantDO();
+        tenant.setTenantId(2L);
+        tenant.setStatus(1);
+        tenant.setAuditEnabled(0);
+        when(tenantMapper.selectOne(any())).thenReturn(tenant);
+        primary = llm(10L, "primary", "openai");
+        when(modelResolver.resolve(2L, "alias")).thenReturn(primary);
+        when(aesUtil.decrypt(anyString())).thenReturn("plain-key");
+        context = new UserContext().setUserId(1L).setCurrentTenantId(2L).setApiKeyId(3L);
+    }
+
+    @Test
+    void blockingSuccessStagesExactlyOneTerminalEvent() {
+        when(timeLimiter.execute(any())).thenReturn("""
+                {"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}
+                """);
+        Instant startedAt = Instant.parse("2026-09-06T01:02:03Z");
+
+        service.chatCompletion(context, "{\"model\":\"alias\"}", "request-1", startedAt);
+
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher, times(1)).publish(captor.capture());
+        assertEquals(10L, captor.getValue().getServiceId());
+        assertEquals(startedAt, captor.getValue().getRequestStartedAt());
+        assertEquals("SUCCESS", captor.getValue().getStatus());
+    }
+
+    @Test
+    void fallbackSuccessAttributesOneEventToActualService() {
+        LlmServiceDO fallback = llm(11L, "fallback", "deepseek");
+        when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
+        UpstreamFailureException failure = retryableFailure();
+        when(timeLimiter.execute(any())).thenThrow(failure).thenReturn("""
+                {"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}
+                """);
+
+        service.chatCompletion(context, "{\"model\":\"alias\"}", "request-2", Instant.now());
+
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher, times(1)).publish(captor.capture());
+        assertEquals(11L, captor.getValue().getServiceId());
+        assertEquals("openai-compatible", captor.getValue().getNormalizedUsage().parser());
+    }
+
+    @Test
+    void retryExhaustionStagesExactlyOneFailureEvent() {
+        ReflectionTestUtils.setField(service, "maxRetries", 1);
+        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        when(fallbackExecutor.resolveFallback(primary)).thenReturn(null);
+
+        assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(
+                context, "{\"model\":\"alias\"}", "request-3", Instant.now()));
+
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher, times(1)).publish(captor.capture());
+        assertEquals("FAIL", captor.getValue().getStatus());
+        assertEquals(10L, captor.getValue().getServiceId());
+    }
+
+    @Test
+    void fallbackFailureStagesExactlyOneEventForFallback() {
+        LlmServiceDO fallback = llm(11L, "fallback", "openai");
+        when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
+        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+
+        assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(
+                context, "{\"model\":\"alias\"}", "request-fallback-fail", Instant.now()));
+
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher, times(1)).publish(captor.capture());
+        assertEquals(11L, captor.getValue().getServiceId());
+        assertEquals("FAIL", captor.getValue().getStatus());
+    }
+
+    @Test
+    void streamCompletionAndCompetingCallbacksStageOnce() {
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(
+                ServerSentEvent.builder("{\"choices\":[]}").build(),
+                ServerSentEvent.builder("{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}").build(),
+                ServerSentEvent.builder("[DONE]").build()));
+
+        service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}",
+                "request-4", Instant.now()).blockLast();
+
+        verify(usagePublisher, times(1)).publish(any(TokenUsageEvent.class));
+    }
+
+    @Test
+    void streamCancellationAndErrorsEachStageOneTerminalEvent() {
+        when(providerAdapter.stream(any())).thenReturn(Flux.concat(
+                Flux.just(ServerSentEvent.builder("{\"choices\":[]}").build()), Flux.never()));
+        service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}",
+                "request-5", Instant.now()).take(1).blockLast();
+        verify(usagePublisher, times(1)).publish(any(TokenUsageEvent.class));
+
+        reset(usagePublisher);
+        when(providerAdapter.stream(any())).thenReturn(Flux.error(retryableFailure()));
+        assertThrows(RuntimeException.class, () -> service.chatCompletionStream(context,
+                "{\"model\":\"alias\",\"stream\":true}", "request-6", Instant.now()).blockLast());
+        verify(usagePublisher, times(1)).publish(any(TokenUsageEvent.class));
+    }
+
+    @Test
+    void streamPostFirstByteErrorStagesOnlyOneFailureEvent() {
+        when(providerAdapter.stream(any())).thenReturn(Flux.concat(
+                Flux.just(ServerSentEvent.builder("{\"choices\":[]}").build()),
+                Flux.error(retryableFailure())));
+
+        assertThrows(RuntimeException.class, () -> service.chatCompletionStream(context,
+                "{\"model\":\"alias\",\"stream\":true}", "request-7", Instant.now()).blockLast());
+
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher, times(1)).publish(captor.capture());
+        assertEquals("FAIL", captor.getValue().getStatus());
+    }
+
+    @Test
+    void successfulTokenPricedStreamWithoutUsageIsUncalculable() {
+        PricingSnapshot priced = new PricingSnapshot(99L, BillingMode.TOKEN, "CNY", PricePeriodType.BASE,
+                null, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, null,
+                Instant.EPOCH, null);
+        when(pricingResolver.resolve(anyLong(), anyLong(), any())).thenReturn(priced);
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(
+                ServerSentEvent.builder("{\"choices\":[]}").build(),
+                ServerSentEvent.builder("[DONE]").build()));
+
+        service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}",
+                "request-8", Instant.now()).blockLast();
+
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher).publish(captor.capture());
+        assertEquals(CostStatus.UNCALCULABLE, captor.getValue().getCostResult().status());
+    }
+
+    private LlmServiceDO llm(Long id, String name, String provider) {
+        return LlmServiceDO.builder().serviceId(id).tenantId(2L).name(name).provider(provider)
+                .apiUrl("https://example.invalid").apiKey("encrypted").modelName("upstream").status(1).build();
+    }
+
+    private UpstreamFailureException retryableFailure() {
+        return new UpstreamFailureException("upstream failed", LlmForwardErrorCodeEnum.FORWARD_FAILED, true);
+    }
+}

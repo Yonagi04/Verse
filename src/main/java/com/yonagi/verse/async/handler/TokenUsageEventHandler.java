@@ -7,6 +7,8 @@ import com.yonagi.verse.dao.entity.TokenUsageDO;
 import com.yonagi.verse.dao.mapper.TokenUsageMapper;
 import com.yonagi.verse.common.enums.CostStatus;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -20,6 +22,7 @@ import java.time.ZoneId;
  */
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEvent> {
 
     private final TokenUsageMapper tokenUsageMapper;
@@ -37,6 +40,7 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void onEvent(TokenUsageEvent event) {
+        validate(event);
         TokenUsageDO tokenUsage = new TokenUsageDO();
         tokenUsage.setUserId(event.getUserId());
         tokenUsage.setTenantId(event.getTenantId());
@@ -58,6 +62,8 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
             tokenUsage.setCachedInputTokens(event.getNormalizedUsage().cachedInputTokens());
             tokenUsage.setCacheWriteInputTokens(event.getNormalizedUsage().cacheWriteInputTokens());
             tokenUsage.setOutputTokens(event.getNormalizedUsage().outputTokens());
+            tokenUsage.setNormalizedTotalTokens(event.getNormalizedUsage().totalTokens());
+            tokenUsage.setUsageParser(event.getNormalizedUsage().parser());
         }
         if (event.getPricingSnapshot() != null) {
             tokenUsage.setPricingId(event.getPricingSnapshot().pricingId());
@@ -73,6 +79,8 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
             tokenUsage.setOutputPriceFen(event.getPricingSnapshot().outputPriceFen());
             tokenUsage.setRequestPriceFen(event.getPricingSnapshot().requestPriceFen());
             tokenUsage.setCurrency(event.getPricingSnapshot().currency());
+            tokenUsage.setPriceEffectiveFrom(toShanghai(event.getPricingSnapshot().effectiveFrom()));
+            tokenUsage.setPriceEffectiveTo(toShanghai(event.getPricingSnapshot().effectiveTo()));
         }
         tokenUsage.setEstimatedCostFen(event.getCostResult() == null
                 ? null
@@ -81,6 +89,36 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
                 ? CostStatus.UNPRICED.name()
                 : event.getCostResult().status().name());
         tokenUsage.setUsageDetailsJson(event.getUsageDetailsJson());
-        tokenUsageMapper.insertIdempotently(tokenUsage);
+        try {
+            tokenUsageMapper.insert(tokenUsage);
+        } catch (DuplicateKeyException e) {
+            if (tokenUsageMapper.countByEventId(event.getEventId()) > 0) {
+                log.info("[token-usage] 重复事件已确认: eventId={}", event.getEventId());
+                return;
+            }
+            throw e;
+        }
+    }
+
+    private void validate(TokenUsageEvent event) {
+        if (event == null || event.getEventId() == null || event.getEventId().isBlank()
+                || event.getTenantId() == null || event.getUserId() == null
+                || event.getApiKeyId() == null || event.getServiceId() == null
+                || event.getModel() == null || event.getModel().isBlank()
+                || event.getStatus() == null || event.getUsageSource() == null
+                || event.getRequestStartedAt() == null) {
+            throw new IllegalArgumentException("计费用量事件缺少必要字段");
+        }
+        if (event.getCostResult() == null || event.getCostResult().status() == null) {
+            throw new IllegalArgumentException("计费用量事件缺少费用终态");
+        }
+        boolean calculated = CostStatus.CALCULATED == event.getCostResult().status();
+        if (calculated != (event.getCostResult().estimatedCostFen() != null)) {
+            throw new IllegalArgumentException("费用金额与费用终态不一致");
+        }
+    }
+
+    private LocalDateTime toShanghai(java.time.Instant instant) {
+        return instant == null ? null : LocalDateTime.ofInstant(instant, ZoneId.of("Asia/Shanghai"));
     }
 }

@@ -4,6 +4,7 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.async.api.DomainEventPublisher;
+import com.yonagi.verse.async.api.TokenUsageEventPublisher;
 import com.yonagi.verse.async.api.DomainEvent;
 import com.yonagi.verse.async.event.LlmAuditEvent;
 import com.yonagi.verse.async.event.TokenUsageEvent;
@@ -62,6 +63,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private final ProviderAdapter providerAdapter;
     private final AesUtil aesUtil;
     private final DomainEventPublisher eventPublisher;
+    private final TokenUsageEventPublisher tokenUsageEventPublisher;
     private final TenantMapper tenantMapper;
     private final LlmServiceMapper llmServiceMapper;
     private final RateLimiter rateLimiter;
@@ -286,11 +288,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private String settleAndPublish(UserContext ctx, TenantDO tenant, LlmServiceDO service,
                                     RateLimitContext rateCtx, String body, String response,
                                     String requestId, long start) {
-        JSONObject usage = extractUsage(response);
-        int totalTokens = getInt(usage, "total_tokens");
+        JSONObject responseEnvelope = parseResponseEnvelope(response);
+        UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), responseEnvelope);
+        int totalTokens = safeTokenCount(normalized.totalTokens());
         // 同步结算，保证「拦后续请求」及时生效；token 归属实际服务 serviceId
         settleRateLimitSafely(rateCtx, totalTokens);
-        publishTokenUsage(ctx, tenant.getTenantId(), service, usage, requestId, LlmAuditEvent.STATUS_SUCCESS, start);
+        publishTokenUsage(ctx, tenant.getTenantId(), service, responseEnvelope, requestId,
+                LlmAuditEvent.STATUS_SUCCESS, start);
         publishAudit(ctx, tenant, service, body, response, requestId, start,
                 LlmAuditEvent.STATUS_SUCCESS, null);
         return response;
@@ -318,7 +322,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         event.setStatus(status);
         event.setErrorCode(errorCode);
         if (LlmAuditEvent.STATUS_SUCCESS.equals(status)) {
-            JSONObject usage = extractUsage(response);
+            JSONObject usage = usageObject(parseResponseEnvelope(response));
             event.setPromptTokens(getInt(usage, "prompt_tokens"));
             event.setCompletionTokens(getInt(usage, "completion_tokens"));
             event.setTotalTokens(getInt(usage, "total_tokens"));
@@ -353,9 +357,12 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     }
 
     private void publishTokenUsage(UserContext ctx, Long tenantId, LlmServiceDO service,
-                                   JSONObject usage, String requestId, String status, long requestStartedAt) {
-        String usageSource = usage == null ? TokenUsageEvent.SOURCE_UNKNOWN : TokenUsageEvent.SOURCE_EXACT;
-        publishTokenUsage(ctx, tenantId, service, usage, requestId, status, usageSource, requestStartedAt);
+                                   JSONObject responseEnvelope, String requestId, String status,
+                                   long requestStartedAt) {
+        String usageSource = usageObject(responseEnvelope) == null
+                ? TokenUsageEvent.SOURCE_UNKNOWN : TokenUsageEvent.SOURCE_EXACT;
+        publishTokenUsage(ctx, tenantId, service, responseEnvelope, requestId, status, usageSource,
+                requestStartedAt);
     }
 
     /**
@@ -365,9 +372,11 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                                 RateLimitContext rateCtx, String body, String requestId,
                                 long start, StreamResponseAccumulator accumulator,
                                 String status, String errorCode) {
+        JSONObject responseEnvelope = accumulator.usageEnvelope();
         JSONObject usage = accumulator.usage();
         String response = accumulator.buildResponseJson();
-        int totalTokens = getInt(usage, "total_tokens");
+        UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), responseEnvelope);
+        int totalTokens = safeTokenCount(normalized.totalTokens());
         // 同步结算 TPM，保证「拦后续请求」及时生效；abort/无 usage 时 totalTokens=0
         settleRateLimitSafely(rateCtx, totalTokens);
         String usageSource = usage == null
@@ -375,7 +384,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 : LlmAuditEvent.STATUS_SUCCESS.equals(status)
                 ? TokenUsageEvent.SOURCE_EXACT
                 : TokenUsageEvent.SOURCE_ESTIMATED;
-        publishTokenUsage(ctx, tenant.getTenantId(), service, usage, requestId, status, usageSource, start);
+        publishTokenUsage(ctx, tenant.getTenantId(), service, responseEnvelope, requestId, status, usageSource, start);
         publishAuditStream(ctx, tenant, service, body, response, requestId, start, usage, status, errorCode);
     }
 
@@ -389,7 +398,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     }
 
     private void publishTokenUsage(UserContext ctx, Long tenantId, LlmServiceDO service,
-                                   JSONObject usage, String requestId, String status,
+                                   JSONObject responseEnvelope, String requestId, String status,
                                    String usageSource, long requestStartedAt) {
         if (!costingEnabled) {
             return;
@@ -400,19 +409,19 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         event.setApiKeyId(ctx.getApiKeyId());
         event.setServiceId(service.getServiceId());
         event.setModel(service.getName());
-        event.setPromptTokens(getInt(usage, "prompt_tokens"));
-        event.setCompletionTokens(getInt(usage, "completion_tokens"));
-        event.setTotalTokens(getInt(usage, "total_tokens"));
         event.setRequestId(requestId);
         event.setStatus(status);
         event.setUsageSource(usageSource);
         Instant started = Instant.ofEpochMilli(requestStartedAt);
         event.setRequestStartedAt(started);
         try {
-            JSONObject response = new JSONObject();
-            response.put("usage", usage);
-            UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), response);
+            UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), responseEnvelope);
             event.setNormalizedUsage(normalized);
+            event.setPromptTokens(safeTokenCount(normalized.inputTokens()));
+            event.setCompletionTokens(safeTokenCount(normalized.outputTokens()));
+            event.setTotalTokens(safeTokenCount(normalized.totalTokens()));
+            event.setUsageDetailsJson(normalized.rawUsage() == null
+                    ? null : JSON.toJSONString(normalized.rawUsage()));
             if (LlmAuditEvent.STATUS_SUCCESS.equals(status)) {
                 PricingSnapshot pricing = pricingResolver.resolve(tenantId, service.getServiceId(), started);
                 event.setPricingSnapshot(pricing);
@@ -420,14 +429,14 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             } else {
                 event.setCostResult(CostResult.of(CostStatus.NOT_CHARGEABLE));
             }
-            event.setUsageDetailsJson(usage == null ? null : JSON.toJSONString(usage));
         } catch (Exception e) {
             // 计费属于旁路能力，失败时记录为不可计算，不能覆盖已经取得的上游响应。
             log.warn("[llm-cost] 计算费用失败: tenantId={}, serviceId={}, requestId={}",
                     tenantId, service.getServiceId(), requestId, e);
             event.setCostResult(CostResult.of(CostStatus.UNCALCULABLE));
         }
-        publishEventSafely(event);
+        // Outbox 写入成功才代表计费用量事件已被可靠接管；失败必须显式向上传播。
+        tokenUsageEventPublisher.publish(event);
     }
 
     private void publishAuditStream(UserContext ctx, TenantDO tenant, LlmServiceDO service,
@@ -481,24 +490,46 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         return LlmForwardErrorCodeEnum.FORWARD_FAILED.code();
     }
 
-    private JSONObject extractUsage(String response) {
+    private JSONObject parseResponseEnvelope(String response) {
         if (!StringUtils.hasText(response)) {
             return null;
         }
         try {
-            JSONObject json = JSON.parseObject(response);
-            return json == null ? null : json.getJSONObject("usage");
+            return JSON.parseObject(response);
         } catch (Exception e) {
-            log.debug("[llm-forward] 解析 usage 失败: {}", e.getMessage());
+            log.debug("[llm-forward] 解析响应 envelope 失败: {}", e.getMessage());
             return null;
         }
+    }
+
+    private JSONObject usageObject(JSONObject responseEnvelope) {
+        if (responseEnvelope == null) {
+            return null;
+        }
+        Object usage = responseEnvelope.get("usage");
+        if (usage instanceof JSONObject json) {
+            return json;
+        }
+        Object metadata = responseEnvelope.get("usageMetadata");
+        return metadata instanceof JSONObject json ? json : null;
+    }
+
+    private int safeTokenCount(Long value) {
+        if (value == null || value <= 0) {
+            return 0;
+        }
+        return value > Integer.MAX_VALUE ? Integer.MAX_VALUE : value.intValue();
     }
 
     private int getInt(JSONObject obj, String key) {
         if (obj == null) {
             return 0;
         }
-        Integer value = obj.getInteger(key);
-        return value == null ? 0 : value;
+        try {
+            Integer value = obj.getInteger(key);
+            return value == null ? 0 : value;
+        } catch (RuntimeException ignored) {
+            return 0;
+        }
     }
 }

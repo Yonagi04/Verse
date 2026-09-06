@@ -10,7 +10,8 @@ public class DeepSeekUsageNormalizer implements UsageNormalizer {
     @Override
     public boolean supports(String provider, JSONObject response) {
         JSONObject usage = OpenAiCompatibleUsageNormalizer.usageOf(response);
-        return usage != null && ("deepseek".equalsIgnoreCase(provider) || usage.containsKey("prompt_cache_hit_tokens"));
+        return OpenAiCompatibleUsageNormalizer.providerIs(provider, "deepseek") && usage != null
+                && (usage.containsKey("prompt_cache_hit_tokens") || usage.containsKey("prompt_cache_miss_tokens"));
     }
 
     @Override
@@ -19,14 +20,22 @@ public class DeepSeekUsageNormalizer implements UsageNormalizer {
         Long hit = OpenAiCompatibleUsageNormalizer.longValue(usage, "prompt_cache_hit_tokens");
         Long miss = OpenAiCompatibleUsageNormalizer.longValue(usage, "prompt_cache_miss_tokens");
         Long output = OpenAiCompatibleUsageNormalizer.longValue(usage, "completion_tokens");
-        if (hit == null || miss == null) {
+        if (OpenAiCompatibleUsageNormalizer.hasMalformedLong(usage, "prompt_cache_hit_tokens",
+                "prompt_cache_miss_tokens", "prompt_tokens", "completion_tokens", "total_tokens")
+                || hit == null || miss == null || output == null) {
             return UsageBreakdown.unavailable("deepseek", usage);
         }
         Long prompt = OpenAiCompatibleUsageNormalizer.longValue(usage, "prompt_tokens");
-        if (prompt != null && !prompt.equals(hit + miss)) {
+        try {
+            long input = Math.addExact(hit, miss);
+            if (prompt != null && !prompt.equals(input)) {
+                return UsageBreakdown.unavailable("deepseek", usage);
+            }
+            Long total = OpenAiCompatibleUsageNormalizer.longValue(usage, "total_tokens");
+            return OpenAiCompatibleUsageNormalizer.valid(input, hit, 0L, output,
+                    total == null ? Math.addExact(input, output) : total, "deepseek", usage);
+        } catch (ArithmeticException ignored) {
             return UsageBreakdown.unavailable("deepseek", usage);
         }
-        return OpenAiCompatibleUsageNormalizer.valid(hit + miss, hit, 0L, output,
-                hit + miss + (output == null ? 0 : output), "deepseek", usage);
     }
 }

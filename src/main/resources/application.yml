@@ -33,6 +33,17 @@ verse:
     costing:
       # 用量计费总开关；关闭后不再投递用量事件。
       enabled: true
+    usage-outbox:
+      # 关闭时停止新增与 Relay；已有 Outbox 与事实记录均保留。
+      enabled: true
+      batch-size: 100
+      relay-delay-ms: 1000
+      claim-lease-ms: 30000
+      max-attempts: 8
+      initial-backoff-ms: 1000
+      max-backoff-ms: 300000
+      retention-days: 30
+      cleanup-delay-ms: 3600000
     upstream:
       connect-timeout: 5000
       read-timeout: 120000

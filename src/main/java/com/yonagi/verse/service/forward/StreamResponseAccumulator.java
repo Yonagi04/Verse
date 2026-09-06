@@ -21,6 +21,7 @@ public final class StreamResponseAccumulator {
     private final Map<Integer, ChoiceAccumulator> choices = new TreeMap<>();
 
     private JSONObject usage;
+    private String usageKey;
     private boolean validResponseChunk;
 
     public StreamResponseAccumulator(boolean captureResponse) {
@@ -45,9 +46,22 @@ public final class StreamResponseAccumulator {
             return;
         }
 
-        JSONObject chunkUsage = chunk.getJSONObject("usage");
-        if (chunkUsage != null && !chunkUsage.isEmpty()) {
-            usage = chunkUsage;
+        Object chunkUsageValue = chunk.get("usage");
+        String chunkUsageKey = "usage";
+        if (chunkUsageValue == null) {
+            chunkUsageValue = chunk.get("usageMetadata");
+            chunkUsageKey = "usageMetadata";
+        }
+        if (chunkUsageValue != null) {
+            if (chunkUsageValue instanceof JSONObject chunkUsage && !chunkUsage.isEmpty()) {
+                usage = chunkUsage;
+                usageKey = chunkUsageKey;
+            } else if (!(chunkUsageValue instanceof JSONObject)) {
+                // 保留“出现但格式非法”的事实，确保专用解析器返回 unavailable，而不是当作缺失。
+                usage = new JSONObject();
+                usage.put("_malformed", chunkUsageValue);
+                usageKey = chunkUsageKey;
+            }
         }
 
         if (!captureResponse) {
@@ -56,7 +70,7 @@ public final class StreamResponseAccumulator {
 
         JSONArray chunkChoices = chunk.getJSONArray("choices");
         boolean recognized = containsAny(chunk, "id", "created", "model", "system_fingerprint",
-                "service_tier", "usage") || chunkChoices != null;
+                "service_tier", "usage", "usageMetadata") || chunkChoices != null;
         if (!recognized) {
             return;
         }
@@ -86,6 +100,16 @@ public final class StreamResponseAccumulator {
         return usage;
     }
 
+    /** 返回仅包含终态 usage 子对象的完整 envelope，供 shape-aware registry 选择解析器。 */
+    public JSONObject usageEnvelope() {
+        if (usage == null || usageKey == null) {
+            return null;
+        }
+        JSONObject envelope = new JSONObject();
+        envelope.put(usageKey, usage);
+        return envelope;
+    }
+
     /**
      * Builds an immutable JSON string for MQ publication, or {@code null} if no valid response
      * chunk was observed (or response capture was disabled).
@@ -102,8 +126,8 @@ public final class StreamResponseAccumulator {
         JSONArray responseChoices = new JSONArray();
         choices.values().forEach(choice -> responseChoices.add(choice.toJson()));
         response.put("choices", responseChoices);
-        if (usage != null) {
-            response.put("usage", usage);
+        if (usage != null && usageKey != null) {
+            response.put(usageKey, usage);
         }
         return JSON.toJSONString(response);
     }

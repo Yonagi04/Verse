@@ -100,6 +100,12 @@ public class TokenUsageDO {
     /** 标准化输出 Token 数。 */
     private Long outputTokens;
 
+    /** 标准化总 Token 数。 */
+    private Long normalizedTotalTokens;
+
+    /** 命中的用量解析器标识。 */
+    private String usageParser;
+
     /** 命中的定价版本 ID。 */
     private Long pricingId;
 
@@ -111,6 +117,12 @@ public class TokenUsageDO {
 
     /** 命中的峰值时段 ID。 */
     private Long pricePeriodId;
+
+    /** 定价版本生效时间。 */
+    private LocalDateTime priceEffectiveFrom;
+
+    /** 定价版本失效时间。 */
+    private LocalDateTime priceEffectiveTo;
 
     /** 缓存未命中输入 Token 单价，单位为分/百万 Token。 */
     private BigDecimal cacheMissInputPriceFen;
