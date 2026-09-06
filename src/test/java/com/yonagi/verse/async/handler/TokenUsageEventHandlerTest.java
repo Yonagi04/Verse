@@ -3,11 +3,13 @@ package com.yonagi.verse.async.handler;
 import com.yonagi.verse.async.event.TokenUsageEvent;
 import com.yonagi.verse.common.enums.CostStatus;
 import com.yonagi.verse.dao.entity.TokenUsageDO;
+import com.yonagi.verse.dao.mapper.TokenUsageCostMapper;
 import com.yonagi.verse.dao.mapper.TokenUsageMapper;
 import com.yonagi.verse.service.pricing.CostResult;
 import com.yonagi.verse.service.usage.UsageBreakdown;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.dao.DuplicateKeyException;
 
 import java.math.BigDecimal;
@@ -18,9 +20,22 @@ import static org.mockito.Mockito.*;
 
 class TokenUsageEventHandlerTest {
     @Test
+    void springSelectsProductionConstructorWhenMultipleConstructorsExist() {
+        try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+            context.registerBean(TokenUsageMapper.class, () -> mock(TokenUsageMapper.class));
+            context.registerBean(TokenUsageCostMapper.class, () -> mock(TokenUsageCostMapper.class));
+            context.register(TokenUsageEventHandler.class);
+
+            context.refresh();
+
+            assertNotNull(context.getBean(TokenUsageEventHandler.class));
+        }
+    }
+
+    @Test
     void preservesNormalizedSnapshotInFact() {
         TokenUsageMapper mapper = mock(TokenUsageMapper.class);
-        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper);
+        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper, null);
         TokenUsageEvent event = validEvent();
 
         handler.onEvent(event);
@@ -37,7 +52,7 @@ class TokenUsageEventHandlerTest {
     @Test
     void duplicateEventIsAcknowledgedButOtherUniqueConflictPropagates() {
         TokenUsageMapper mapper = mock(TokenUsageMapper.class);
-        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper);
+        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper, null);
         TokenUsageEvent event = validEvent();
         doThrow(new DuplicateKeyException("duplicate")).when(mapper).insert(any());
         when(mapper.countByEventId(event.getEventId())).thenReturn(1L);
@@ -49,7 +64,7 @@ class TokenUsageEventHandlerTest {
 
     @Test
     void invalidPayloadPropagatesForRocketMqRetry() {
-        TokenUsageEventHandler handler = new TokenUsageEventHandler(mock(TokenUsageMapper.class));
+        TokenUsageEventHandler handler = new TokenUsageEventHandler(mock(TokenUsageMapper.class), null);
         assertThrows(IllegalArgumentException.class, () -> handler.onEvent(new TokenUsageEvent()));
     }
 
@@ -57,7 +72,7 @@ class TokenUsageEventHandlerTest {
     void transientDatabaseFailurePropagatesForRocketMqRetry() {
         TokenUsageMapper mapper = mock(TokenUsageMapper.class);
         doThrow(new IllegalStateException("database unavailable")).when(mapper).insert(any());
-        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper);
+        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper, null);
         assertThrows(IllegalStateException.class, () -> handler.onEvent(validEvent()));
     }
 

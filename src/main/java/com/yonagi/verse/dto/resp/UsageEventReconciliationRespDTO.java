@@ -13,4 +13,6 @@ public class UsageEventReconciliationRespDTO {
     private Long failedCount;
     /** Broker 已接收但事实表尚不存在的事件数。 */
     private Long publishedMissingFactCount;
+    /** 已存在用量事实但缺少费用事实的记录数。 */
+    private Long usageMissingCostCount;
 }

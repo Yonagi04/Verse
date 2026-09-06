@@ -6,6 +6,7 @@ import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.enums.UsageOutboxStatus;
 import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.TokenUsageOutboxMapper;
+import com.yonagi.verse.dao.mapper.TokenUsageCostMapper;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.dto.resp.UsageEventReconciliationRespDTO;
 import com.yonagi.verse.service.UsageEventOperationsService;
@@ -20,6 +21,7 @@ import java.time.LocalDateTime;
 public class UsageEventOperationsServiceImpl implements UsageEventOperationsService {
     private final TokenUsageOutboxMapper outboxMapper;
     private final UserTenantMapper userTenantMapper;
+    private final TokenUsageCostMapper tokenUsageCostMapper;
 
     @Override
     public UsageEventReconciliationRespDTO reconcile(Long userId, Long tenantId) {
@@ -30,6 +32,7 @@ public class UsageEventOperationsServiceImpl implements UsageEventOperationsServ
         result.setRetryCount(outboxMapper.countTenantStatus(tenantId, UsageOutboxStatus.RETRY.name()));
         result.setFailedCount(outboxMapper.countTenantStatus(tenantId, UsageOutboxStatus.FAILED.name()));
         result.setPublishedMissingFactCount(outboxMapper.countTenantPublishedMissingFacts(tenantId));
+        result.setUsageMissingCostCount(tokenUsageCostMapper == null ? 0L : tokenUsageCostMapper.countMissingByTenantId(tenantId));
         return result;
     }
 

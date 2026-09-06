@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/v1/usage-events")
 @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
 public class UsageEventOperationsController {
+
     private final UsageEventOperationsService operationsService;
 
     @GetMapping("/{tenantId}/reconciliation")

@@ -44,6 +44,13 @@ verse:
       max-backoff-ms: 300000
       retention-days: 30
       cleanup-delay-ms: 3600000
+    usage-reporting:
+      enabled: true
+      refresh-delay-ms: 300000
+      refresh-lookback-hours: 2
+      compensation-days: 7
+      compensation-cron: "0 20 1 * * ?"
+      max-range-days: 366
     upstream:
       connect-timeout: 5000
       read-timeout: 120000

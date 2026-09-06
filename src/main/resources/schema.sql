@@ -186,6 +186,60 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     UNIQUE KEY `uk_token_usage_event_id` (`event_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token消耗记录表';
 
+CREATE TABLE IF NOT EXISTS `t_token_usage_cost` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `usage_id` BIGINT NOT NULL COMMENT 'Token用量事实主键ID',
+    `pricing_id` BIGINT DEFAULT NULL COMMENT '定价版本业务ID快照',
+    `billing_mode` VARCHAR(16) DEFAULT NULL COMMENT '计费模式快照',
+    `price_period_type` VARCHAR(16) DEFAULT NULL COMMENT '价格时段类型快照',
+    `price_period_id` BIGINT DEFAULT NULL COMMENT '价格时段业务ID快照',
+    `price_effective_from` DATETIME(3) DEFAULT NULL COMMENT '定价生效时间快照',
+    `price_effective_to` DATETIME(3) DEFAULT NULL COMMENT '定价失效时间快照',
+    `cache_miss_input_price_fen` DECIMAL(30,12) DEFAULT NULL COMMENT '缓存未命中输入单价快照，分/百万Token',
+    `cache_hit_input_price_fen` DECIMAL(30,12) DEFAULT NULL COMMENT '缓存命中输入单价快照，分/百万Token',
+    `output_price_fen` DECIMAL(30,12) DEFAULT NULL COMMENT '输出单价快照，分/百万Token',
+    `request_price_fen` DECIMAL(30,12) DEFAULT NULL COMMENT '单次请求价格快照，分',
+    `estimated_cost_fen` DECIMAL(38,18) DEFAULT NULL COMMENT '预估费用，分',
+    `cost_status` VARCHAR(24) NOT NULL COMMENT 'CALCULATED/UNCALCULABLE/UNPRICED/NOT_CHARGEABLE',
+    `currency` CHAR(3) DEFAULT NULL COMMENT '计费币种',
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_token_usage_cost_usage` (`usage_id`),
+    KEY `idx_token_usage_cost_status` (`cost_status`),
+    CONSTRAINT `fk_token_usage_cost_usage` FOREIGN KEY (`usage_id`) REFERENCES `t_token_usage` (`id`) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token用量费用快照表';
+
+CREATE TABLE IF NOT EXISTS `t_token_usage_hourly_agg` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `tenant_id` BIGINT NOT NULL COMMENT '租户业务ID',
+    `user_id` BIGINT NOT NULL COMMENT '用户业务ID',
+    `api_key_id` BIGINT NOT NULL COMMENT 'API Key业务ID',
+    `service_id` BIGINT NOT NULL COMMENT 'LLM服务业务ID',
+    `model` VARCHAR(100) NOT NULL COMMENT '实际调用模型名快照',
+    `bucket_start` DATETIME NOT NULL COMMENT 'Asia/Shanghai小时桶起点',
+    `input_tokens` BIGINT NOT NULL DEFAULT 0 COMMENT '输入Token合计',
+    `cached_input_tokens` BIGINT NOT NULL DEFAULT 0 COMMENT '缓存命中输入Token合计',
+    `cache_write_input_tokens` BIGINT NOT NULL DEFAULT 0 COMMENT '缓存写入输入Token合计',
+    `output_tokens` BIGINT NOT NULL DEFAULT 0 COMMENT '输出Token合计',
+    `total_tokens` BIGINT NOT NULL DEFAULT 0 COMMENT '总Token合计',
+    `request_count` BIGINT NOT NULL DEFAULT 0 COMMENT '终态请求数',
+    `success_request_count` BIGINT NOT NULL DEFAULT 0 COMMENT '成功请求数',
+    `exact_usage_count` BIGINT NOT NULL DEFAULT 0 COMMENT '精确用量请求数',
+    `estimated_usage_count` BIGINT NOT NULL DEFAULT 0 COMMENT '预估用量请求数',
+    `unknown_usage_count` BIGINT NOT NULL DEFAULT 0 COMMENT '未知用量请求数',
+    `estimated_cost_fen` DECIMAL(38,18) NOT NULL DEFAULT 0 COMMENT '可计算预估费用合计，分',
+    `calculated_count` BIGINT NOT NULL DEFAULT 0 COMMENT '费用已计算请求数',
+    `unpriced_count` BIGINT NOT NULL DEFAULT 0 COMMENT '未启用计费请求数',
+    `uncalculable_count` BIGINT NOT NULL DEFAULT 0 COMMENT '费用无法计算请求数',
+    `not_chargeable_count` BIGINT NOT NULL DEFAULT 0 COMMENT '不可计费请求数',
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_usage_hourly_grain` (`tenant_id`,`user_id`,`api_key_id`,`service_id`,`model`,`bucket_start`),
+    KEY `idx_usage_hourly_tenant_bucket` (`tenant_id`,`bucket_start`),
+    KEY `idx_usage_hourly_tenant_user_bucket` (`tenant_id`,`user_id`,`bucket_start`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token用量小时预聚合表';
+
 -- ============================================
 -- 7.0.1 计费用量事件持久化发送表
 -- ============================================

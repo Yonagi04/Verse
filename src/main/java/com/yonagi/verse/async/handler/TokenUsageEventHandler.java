@@ -4,6 +4,8 @@ import com.yonagi.verse.async.EventTag;
 import com.yonagi.verse.async.api.DomainEventHandler;
 import com.yonagi.verse.async.event.TokenUsageEvent;
 import com.yonagi.verse.dao.entity.TokenUsageDO;
+import com.yonagi.verse.dao.entity.TokenUsageCostDO;
+import com.yonagi.verse.dao.mapper.TokenUsageCostMapper;
 import com.yonagi.verse.dao.mapper.TokenUsageMapper;
 import com.yonagi.verse.common.enums.CostStatus;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +28,7 @@ import java.time.ZoneId;
 public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEvent> {
 
     private final TokenUsageMapper tokenUsageMapper;
+    private final TokenUsageCostMapper tokenUsageCostMapper;
 
     @Override
     public String eventType() {
@@ -91,13 +94,46 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
         tokenUsage.setUsageDetailsJson(event.getUsageDetailsJson());
         try {
             tokenUsageMapper.insert(tokenUsage);
+            if (tokenUsageCostMapper != null) tokenUsageCostMapper.insert(toCostFact(tokenUsage.getId(), tokenUsage));
         } catch (DuplicateKeyException e) {
-            if (tokenUsageMapper.countByEventId(event.getEventId()) > 0) {
+            if (tokenUsageCostMapper == null) {
+                if (tokenUsageMapper.countByEventId(event.getEventId()) > 0) {
+                    log.info("[token-usage] 重复事件已确认: eventId={}", event.getEventId());
+                    return;
+                }
+                throw e;
+            }
+            Long usageId = tokenUsageMapper.selectIdByEventId(event.getEventId());
+            if (usageId != null && tokenUsageCostMapper.countByUsageId(usageId) == 1) {
                 log.info("[token-usage] 重复事件已确认: eventId={}", event.getEventId());
                 return;
             }
+            if (usageId != null) {
+                throw new IllegalStateException("用量事实缺少费用事实: eventId=" + event.getEventId(), e);
+            }
             throw e;
         }
+    }
+
+    /** 从兼容期用量对象复制不可变费用快照。 */
+    private TokenUsageCostDO toCostFact(Long usageId, TokenUsageDO usage) {
+        TokenUsageCostDO cost = new TokenUsageCostDO();
+        cost.setUsageId(usageId);
+        cost.setPricingId(usage.getPricingId());
+        cost.setBillingMode(usage.getBillingMode());
+        cost.setPricePeriodType(usage.getPricePeriodType());
+        cost.setPricePeriodId(usage.getPricePeriodId());
+        cost.setPriceEffectiveFrom(usage.getPriceEffectiveFrom());
+        cost.setPriceEffectiveTo(usage.getPriceEffectiveTo());
+        cost.setCacheMissInputPriceFen(usage.getCacheMissInputPriceFen());
+        cost.setCacheHitInputPriceFen(usage.getCacheHitInputPriceFen());
+        cost.setOutputPriceFen(usage.getOutputPriceFen());
+        cost.setRequestPriceFen(usage.getRequestPriceFen());
+        cost.setEstimatedCostFen(usage.getEstimatedCostFen());
+        cost.setCostStatus(usage.getCostStatus());
+        cost.setCurrency(usage.getCurrency());
+        cost.setCreateTime(LocalDateTime.now(ZoneId.of("Asia/Shanghai")));
+        return cost;
     }
 
     private void validate(TokenUsageEvent event) {

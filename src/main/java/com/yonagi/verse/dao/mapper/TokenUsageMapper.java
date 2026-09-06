@@ -17,4 +17,8 @@ public interface TokenUsageMapper extends BaseMapper<TokenUsageDO> {
 
     @Select("SELECT COUNT(*) FROM t_token_usage WHERE event_id=#{eventId}")
     long countByEventId(@Param("eventId") String eventId);
+
+    /** 按稳定事件 ID 查询用量事实主键。 */
+    @Select("SELECT id FROM t_token_usage WHERE event_id=#{eventId} LIMIT 1")
+    Long selectIdByEventId(@Param("eventId") String eventId);
 }

@@ -9,6 +9,7 @@ import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.security.UserContextHolder;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.service.LlmForwardService;
+import com.yonagi.verse.service.forward.InFlightRequestCoalescer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
@@ -48,6 +49,7 @@ public class LlmForwardController {
     private static final long RETRY_AFTER_SECONDS = 60L;
 
     private final LlmForwardService llmForwardService;
+    private final InFlightRequestCoalescer inFlightRequestCoalescer;
 
     @PostMapping(
             value = "/chat/completions",
@@ -60,11 +62,16 @@ public class LlmForwardController {
             return streamCompletion(ctx, body, requestId, requestStartedAt);
         }
         try {
-            String response = llmForwardService.chatCompletion(ctx, body, requestId, requestStartedAt);
+            InFlightRequestCoalescer.CoalescedResponse response = inFlightRequestCoalescer.execute(
+                    ctx,
+                    body,
+                    requestId,
+                    () -> llmForwardService.chatCompletion(ctx, body, requestId, requestStartedAt)
+            );
             return ResponseEntity.ok()
                     .contentType(MediaType.APPLICATION_JSON)
-                    .header(HEADER_REQUEST_ID, requestId)
-                    .body(Mono.just(response));
+                    .header(HEADER_REQUEST_ID, response.requestId())
+                    .body(Mono.just(response.body()));
         } catch (AbstractException e) {
             return toOpenAiError(e, requestId);
         } catch (Exception e) {
