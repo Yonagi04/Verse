@@ -3,6 +3,7 @@ package com.yonagi.verse.async.handler;
 import com.yonagi.verse.async.event.TokenUsageEvent;
 import com.yonagi.verse.common.enums.CostStatus;
 import com.yonagi.verse.dao.entity.TokenUsageDO;
+import com.yonagi.verse.dao.entity.TokenUsageCostDO;
 import com.yonagi.verse.dao.mapper.TokenUsageCostMapper;
 import com.yonagi.verse.dao.mapper.TokenUsageMapper;
 import com.yonagi.verse.service.pricing.CostResult;
@@ -14,6 +15,7 @@ import org.springframework.dao.DuplicateKeyException;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -47,6 +49,20 @@ class TokenUsageEventHandlerTest {
         assertEquals(12L, fact.getNormalizedTotalTokens());
         assertEquals("openai-compatible", fact.getUsageParser());
         assertEquals(new BigDecimal("0.1"), fact.getEstimatedCostFen());
+        assertEquals(LocalDateTime.of(2026,9,6,9,2,3),fact.getRequestStartedAt());
+    }
+
+    @Test
+    void persistsUsageAndCostAsACompletePair() {
+        TokenUsageMapper usageMapper=mock(TokenUsageMapper.class);
+        TokenUsageCostMapper costMapper=mock(TokenUsageCostMapper.class);
+        doAnswer(invocation->{invocation.<TokenUsageDO>getArgument(0).setId(99L);return 1;}).when(usageMapper).insert(any());
+        new TokenUsageEventHandler(usageMapper,costMapper).onEvent(validEvent());
+        ArgumentCaptor<TokenUsageCostDO> captor=ArgumentCaptor.forClass(TokenUsageCostDO.class);
+        verify(costMapper).insert(captor.capture());
+        assertEquals(99L,captor.getValue().getUsageId());
+        assertEquals(CostStatus.CALCULATED.name(),captor.getValue().getCostStatus());
+        assertEquals(0,captor.getValue().getEstimatedCostFen().compareTo(new BigDecimal("0.1")));
     }
 
     @Test

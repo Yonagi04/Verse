@@ -237,7 +237,9 @@ CREATE TABLE IF NOT EXISTS `t_token_usage_hourly_agg` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_usage_hourly_grain` (`tenant_id`,`user_id`,`api_key_id`,`service_id`,`model`,`bucket_start`),
     KEY `idx_usage_hourly_tenant_bucket` (`tenant_id`,`bucket_start`),
-    KEY `idx_usage_hourly_tenant_user_bucket` (`tenant_id`,`user_id`,`bucket_start`)
+    KEY `idx_usage_hourly_tenant_user_bucket` (`tenant_id`,`user_id`,`bucket_start`),
+    KEY `idx_usage_hourly_tenant_apikey_bucket` (`tenant_id`,`api_key_id`,`bucket_start`),
+    KEY `idx_usage_hourly_tenant_service_bucket` (`tenant_id`,`service_id`,`bucket_start`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token用量小时预聚合表';
 
 -- ============================================

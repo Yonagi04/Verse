@@ -9,6 +9,7 @@ import org.apache.ibatis.annotations.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 import com.yonagi.verse.dao.projection.UsageAggregateRow;
+import com.yonagi.verse.dao.projection.UsageBreakdownRow;
 import org.apache.ibatis.annotations.Select;
 
 /** Token 用量小时预聚合 Mapper。 */
@@ -54,8 +55,41 @@ public interface TokenUsageHourlyAggMapper extends BaseMapper<TokenUsageHourlyAg
       SUM(uncalculable_count) AS uncalculableCount,SUM(not_chargeable_count) AS notChargeableCount
       FROM t_token_usage_hourly_agg WHERE tenant_id=#{tenantId} AND bucket_start&gt;=#{from} AND bucket_start&lt;#{to}
       <if test='userId != null'>AND user_id=#{userId}</if>
+      <if test='apiKeyId != null'>AND api_key_id=#{apiKeyId}</if>
+      <if test='serviceId != null'>AND service_id=#{serviceId}</if>
       GROUP BY bucket_start ORDER BY bucket_start</script>
       """)
     List<UsageAggregateRow> summarizeHours(@Param("tenantId") Long tenantId, @Param("userId") Long userId,
+                                           @Param("apiKeyId") Long apiKeyId, @Param("serviceId") Long serviceId,
                                            @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+
+    /** 按所选业务维度聚合全部分组，由服务层完成稳定排序、占比和截断。 */
+    @Select("""
+      <script>SELECT
+      <choose>
+        <when test='dimension == "MODEL"'>service_id AS dimensionId,model AS model</when>
+        <when test='dimension == "API_KEY"'>api_key_id AS dimensionId,NULL AS model</when>
+        <otherwise>user_id AS dimensionId,NULL AS model</otherwise>
+      </choose>,
+      SUM(input_tokens) AS inputTokens,SUM(output_tokens) AS outputTokens,SUM(total_tokens) AS totalTokens,
+      SUM(success_request_count) AS requestCount,SUM(estimated_cost_fen) AS estimatedCostFen,
+      SUM(exact_usage_count) AS exactUsageCount,SUM(estimated_usage_count) AS estimatedUsageCount,
+      SUM(unknown_usage_count) AS unknownUsageCount,SUM(calculated_count) AS calculatedCount,
+      SUM(unpriced_count) AS unpricedCount,SUM(uncalculable_count) AS uncalculableCount,
+      SUM(not_chargeable_count) AS notChargeableCount
+      FROM t_token_usage_hourly_agg WHERE tenant_id=#{tenantId} AND bucket_start&gt;=#{from} AND bucket_start&lt;#{to}
+      <if test='userId != null'>AND user_id=#{userId}</if>
+      <if test='apiKeyId != null'>AND api_key_id=#{apiKeyId}</if>
+      <if test='serviceId != null'>AND service_id=#{serviceId}</if>
+      GROUP BY
+      <choose>
+        <when test='dimension == "MODEL"'>service_id,model</when>
+        <when test='dimension == "API_KEY"'>api_key_id</when>
+        <otherwise>user_id</otherwise>
+      </choose></script>
+      """)
+    List<UsageBreakdownRow> summarizeBreakdown(@Param("dimension") String dimension,
+        @Param("tenantId") Long tenantId, @Param("userId") Long userId,
+        @Param("apiKeyId") Long apiKeyId, @Param("serviceId") Long serviceId,
+        @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 }

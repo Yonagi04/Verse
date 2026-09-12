@@ -35,6 +35,8 @@
         <webp-imageio.version>0.1.6</webp-imageio.version>
         <rocketmq-spring-boot.version>2.3.6</rocketmq-spring-boot.version>
         <resilience4j.version>2.2.0</resilience4j.version>
+        <easyexcel.version>4.0.3</easyexcel.version>
+        <commons-io.version>2.16.1</commons-io.version>
     </properties>
 
     <dependencies>
@@ -190,6 +192,19 @@
             <groupId>io.github.resilience4j</groupId>
             <artifactId>resilience4j-spring-boot3</artifactId>
             <version>${resilience4j.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>easyexcel</artifactId>
+            <version>${easyexcel.version}</version>
+        </dependency>
+
+        <!-- EasyExcel/POI 需要新版流实现，覆盖 Dozer 传递引入的 commons-io 2.5。 -->
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
+            <version>${commons-io.version}</version>
         </dependency>
 
         <dependency>

@@ -51,6 +51,10 @@ verse:
       compensation-days: 7
       compensation-cron: "0 20 1 * * ?"
       max-range-days: 366
+      raw-export-max-range-days: 31
+      export-max-rows: 100000
+      export-batch-size: 1000
+      export-max-concurrency: 2
     upstream:
       connect-timeout: 5000
       read-timeout: 120000
