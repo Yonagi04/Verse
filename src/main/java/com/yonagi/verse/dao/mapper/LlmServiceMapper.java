@@ -16,7 +16,7 @@ import java.util.List;
 @Mapper
 public interface LlmServiceMapper extends BaseMapper<LlmServiceDO> {
 
-    @Select("SELECT tl.service_id, tl.name, tl.provider, tl.status, tl.context_window, tl.max_output_tokens, " +
+    @Select("SELECT tl.service_id, tl.name, tl.model_name, tl.provider, tl.description, tl.status, tl.context_window, tl.max_output_tokens, " +
             "COALESCE(tp.billing_mode, 'UNPRICED') AS billing_status, tp.currency, tu.username " +
             "FROM t_llm_service tl " +
             "JOIN t_user tu ON tl.created_by = tu.user_id " +
@@ -25,6 +25,7 @@ public interface LlmServiceMapper extends BaseMapper<LlmServiceDO> {
             "ORDER BY tl.create_time DESC")
     @Results({
             @Result(property = "serviceId", column = "service_id"),
+            @Result(property = "modelName", column = "model_name"),
             @Result(property = "contextWindow", column = "context_window"),
             @Result(property = "maxOutputTokens", column = "max_output_tokens"),
             @Result(property = "billingStatus", column = "billing_status"),

@@ -49,6 +49,12 @@ public class LlmServiceUpdateReqDTO {
     private String modelName;
 
     /**
+     * 模型介绍。{@code null}=不修改；空字符串=清空；非空字符串=更新，最多 100 个字符。
+     */
+    @Length(max = 100, message = "模型介绍不能超过100个字符")
+    private String description;
+
+    /**
      * 模型级 RPM 上限。{@code null}=不修改；{@code 0}=清除限制（不限）；正数=设置限制值。
      */
     @Min(value = 0, message = "RPM 不能为负数")

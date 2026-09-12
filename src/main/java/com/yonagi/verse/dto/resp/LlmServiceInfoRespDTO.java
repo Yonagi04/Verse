@@ -49,6 +49,11 @@ public class LlmServiceInfoRespDTO {
     private String modelName;
 
     /**
+     * 模型介绍
+     */
+    private String description;
+
+    /**
      * 状态：0=禁用, 1=启用
      */
     private Integer status;

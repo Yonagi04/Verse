@@ -102,6 +102,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                             .apiUrl(requestParam.getApiUrl())
                             .apiKey(encryptApiKey)
                             .modelName(requestParam.getModelName())
+                            .description(normalizeDescription(requestParam.getDescription()))
                             .status(1)
                             .createdBy(userId)
                             .rateLimitRpm(requestParam.getRpm())
@@ -241,6 +242,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 && StrUtil.isBlank(requestParam.getApiUrl())
                 && StrUtil.isBlank(requestParam.getApiKey())
                 && StrUtil.isBlank(requestParam.getModelName())
+                && requestParam.getDescription() == null
                 && requestParam.getRpm() == null
                 && requestParam.getTpm() == null
                 && requestParam.getFallbackServiceId() == null
@@ -306,6 +308,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 || StrUtil.isNotBlank(requestParam.getApiUrl())
                 || StrUtil.isNotBlank(requestParam.getApiKey())
                 || StrUtil.isNotBlank(requestParam.getModelName())
+                || requestParam.getDescription() != null
                 || requestParam.getRpm() != null
                 || requestParam.getTpm() != null
                 || requestParam.getFallbackServiceId() != null
@@ -367,6 +370,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         if (StrUtil.isNotBlank(requestParam.getApiKey())) {
             updateWrapper.set(LlmServiceDO::getApiKey, aesUtil.encrypt(requestParam.getApiKey()));
         }
+        if (requestParam.getDescription() != null) {
+            updateWrapper.set(LlmServiceDO::getDescription, normalizeDescription(requestParam.getDescription()));
+        }
         if (requestParam.getRpm() != null) {
             updateWrapper.set(LlmServiceDO::getRateLimitRpm, requestParam.getRpm() > 0 ? requestParam.getRpm() : null);
         }
@@ -395,6 +401,13 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             log.error("update LLM service error: tenantId {}, serviceId {}", tenantId, serviceId);
             throw new ServerException(LlmManageErrorCodeEnum.LLM_UPDATE_FAILED);
         }
+    }
+
+    /**
+     * 模型介绍统一去除首尾空白，空白内容按未配置处理。
+     */
+    private String normalizeDescription(String description) {
+        return StrUtil.isBlank(description) ? null : description.trim();
     }
 
     @Override

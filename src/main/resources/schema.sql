@@ -122,6 +122,7 @@ CREATE TABLE IF NOT EXISTS `t_llm_service` (
     `api_url`     VARCHAR(255) NOT NULL COMMENT 'API地址',
     `api_key`     VARCHAR(512) NOT NULL COMMENT '真实的LLM API Key（AES加密存储）',
     `model_name`  VARCHAR(100) DEFAULT NULL COMMENT '默认模型名',
+    `description` VARCHAR(255) DEFAULT NULL COMMENT '模型介绍',
     `status`      TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=禁用, 1=启用',
     `created_by`  BIGINT       NOT NULL COMMENT '创建者用户ID',
     `rate_limit_rpm` INT       DEFAULT NULL COMMENT '模型级 RPM 上限（NULL=不限）',

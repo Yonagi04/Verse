@@ -49,9 +49,19 @@ public class LlmServiceListRespDTO {
         private String name;
 
         /**
+         * 模型厂商侧记录的模型名称
+         */
+        private String modelName;
+
+        /**
          * 提供商（如openai, anthropic）
          */
         private String provider;
+
+        /**
+         * 模型介绍
+         */
+        private String description;
 
         /**
          * 状态：0=禁用, 1=启用

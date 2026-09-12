@@ -38,6 +38,10 @@ public class LlmServiceAddReqDTO {
     @NotBlank(message = "供应商提供的模型名称不能为空")
     private String modelName;
 
+    /** 模型介绍，最多 100 个字符。 */
+    @Length(max = 100, message = "模型介绍不能超过100个字符")
+    private String description;
+
     /** 模型级每分钟请求数上限，零表示不限。 */
     @Min(value = 0, message = "RPM不能小于0")
     private Integer rpm;
