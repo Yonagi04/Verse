@@ -1,6 +1,11 @@
 spring:
   application:
     name: Verse
+  servlet:
+    multipart:
+      # 与前端图片上传限制保持一致；请求上限额外预留 multipart 协议开销。
+      max-file-size: 5MB
+      max-request-size: 6MB
   datasource:
     username: root
     password: 20040401

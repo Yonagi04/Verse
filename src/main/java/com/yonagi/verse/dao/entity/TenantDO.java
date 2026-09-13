@@ -47,6 +47,16 @@ public class TenantDO extends BaseDO {
     private String description;
 
     /**
+     * 租户 Logo 在 S3 中的 objectKey
+     */
+    private String logo;
+
+    /**
+     * 租户头图在 S3 中的 objectKey
+     */
+    private String banner;
+
+    /**
      * 加入审批模式：0=直接加入, 1=管理员审批；TODO 2=多级审批
      */
     private Integer joinApprovalMode;

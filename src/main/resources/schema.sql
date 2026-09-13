@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS `t_tenant` (
     `type`        VARCHAR(20)  NOT NULL COMMENT '类型：PERSONAL / TEAM',
     `owner_id`    BIGINT       NOT NULL COMMENT '创建者用户ID',
     `description` VARCHAR(255) DEFAULT NULL COMMENT '租户描述',
+    `logo`        VARCHAR(512) DEFAULT NULL COMMENT '租户Logo在S3中的objectKey',
+    `banner`      VARCHAR(512) DEFAULT NULL COMMENT '租户头图在S3中的objectKey',
     `status`      TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=停用, 1=正常',
     `join_approval_mode` TINYINT NOT NULL DEFAULT 0 COMMENT '加入审批模式：0=直接加入, 1=管理员审批；TODO 2=多级审批',
     `rate_limit_rpm`   INT      DEFAULT NULL COMMENT '租户级 RPM 上限（NULL=不限）',

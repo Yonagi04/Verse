@@ -6,8 +6,10 @@ import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
+import com.yonagi.verse.service.TenantMediaService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -28,6 +30,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private final TenantMembershipServiceImpl membershipService;
     private final TenantInviteServiceImpl inviteService;
     private final TenantApprovalServiceImpl approvalService;
+    private final TenantMediaService tenantMediaService;
 
     @Override
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
@@ -52,6 +55,21 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     @Override
     public TenantInfoRespDTO getTenantInfo(Long userId, Long tenantId) {
         return crudService.getTenantInfo(userId, tenantId);
+    }
+
+    @Override
+    public TenantMediaUploadRespDTO uploadLogo(Long userId, Long tenantId, MultipartFile file) {
+        return tenantMediaService.uploadLogo(userId, tenantId, file);
+    }
+
+    @Override
+    public TenantMediaUploadRespDTO uploadBanner(Long userId, Long tenantId, MultipartFile file) {
+        return tenantMediaService.uploadBanner(userId, tenantId, file);
+    }
+
+    @Override
+    public TenantMediaUploadRespDTO selectBannerPreset(Long userId, Long tenantId, String presetId) {
+        return tenantMediaService.selectBannerPreset(userId, tenantId, presetId);
     }
 
     @Override

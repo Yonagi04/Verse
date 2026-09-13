@@ -21,6 +21,9 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     REQUEST_STATUS_UPDATE_ERROR("A000309", "申请单审批失败"),
     TENANT_JOIN_REQUEST_CREATE_ERROR("A000310", "加入租户申请单创建失败"),
     TENANT_NOTIFICATION_PUSH_ERROR("A000311", "发送并推送租户内通知失败"),
+    TENANT_MEDIA_PROCESS_ERROR("A000312", "租户图片处理失败，请重新上传"),
+    TENANT_MEDIA_UPLOAD_ERROR("A000313", "租户图片上传失败"),
+    TENANT_MEDIA_UPDATE_ERROR("A000314", "租户图片更新失败"),
 
     TENANT_NOT_EXIST("B000300", "租户不存在"),
     TENANT_ID_IS_NULL("B000301", "租户ID不能为空"),
@@ -55,7 +58,10 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     REQUEST_HAS_BEEN_REVIEWED("B000330", "该申请单已被审批"),
     TENANT_JOIN_REQUEST_PENDING_EXISTS("B000331", "您已提交过加入申请，请等待管理员审批"),
     SUPER_ADMIN_LEAVE_TENANT_ERROR("B000332", "超级管理员不能直接离开租户，请完成管理员交接后再离开"),
-    TENANT_NOTIFICATION_SEND_PER_DAY_LIMIT("B000333", "已达到租户内消息的单日发送次数上限，请明天再试");
+    TENANT_NOTIFICATION_SEND_PER_DAY_LIMIT("B000333", "已达到租户内消息的单日发送次数上限，请明天再试"),
+    TENANT_MEDIA_TYPE_INVALID("B000334", "图片格式不支持，仅允许PNG、JPG、WebP"),
+    TENANT_MEDIA_SIZE_EXCEED("B000335", "图片大小不能超过5MB"),
+    TENANT_BANNER_PRESET_INVALID("B000336", "租户头图预设无效");
 
     private final String code;
     private final String message;

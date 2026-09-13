@@ -13,6 +13,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -56,6 +57,27 @@ public class TenantController {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
         }
         return Results.success(tenantService.getTenantInfo(userId, tenantId));
+    }
+
+    @PostMapping(value = "/{tenantId}/logo", consumes = "multipart/form-data")
+    public Result<TenantMediaUploadRespDTO> uploadTenantLogo(@CurrentUser Long userId,
+                                                              @PathVariable Long tenantId,
+                                                              @RequestPart("file") MultipartFile file) {
+        return Results.success(tenantService.uploadLogo(userId, tenantId, file));
+    }
+
+    @PostMapping(value = "/{tenantId}/banner", consumes = "multipart/form-data")
+    public Result<TenantMediaUploadRespDTO> uploadTenantBanner(@CurrentUser Long userId,
+                                                                @PathVariable Long tenantId,
+                                                                @RequestPart("file") MultipartFile file) {
+        return Results.success(tenantService.uploadBanner(userId, tenantId, file));
+    }
+
+    @PostMapping("/{tenantId}/banner/preset")
+    public Result<TenantMediaUploadRespDTO> selectTenantBannerPreset(@CurrentUser Long userId,
+                                                                     @PathVariable Long tenantId,
+                                                                     @RequestBody @Valid TenantBannerPresetReqDTO requestParam) {
+        return Results.success(tenantService.selectBannerPreset(userId, tenantId, requestParam.getPresetId()));
     }
 
     @PreAuthorize("hasAnyRole('SUPER_ADMIN')")

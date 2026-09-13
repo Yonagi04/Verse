@@ -5,6 +5,7 @@ import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import jakarta.validation.Valid;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -26,6 +27,12 @@ public interface TenantService extends IService<TenantDO> {
     Boolean updateTenant(Long userId, Long tenantId, TenantUpdateReqDTO requestParam);
 
     TenantInfoRespDTO getTenantInfo(Long userId, Long tenantId);
+
+    TenantMediaUploadRespDTO uploadLogo(Long userId, Long tenantId, MultipartFile file);
+
+    TenantMediaUploadRespDTO uploadBanner(Long userId, Long tenantId, MultipartFile file);
+
+    TenantMediaUploadRespDTO selectBannerPreset(Long userId, Long tenantId, String presetId);
 
     Long getPersonalTenantId(Long userId);
 

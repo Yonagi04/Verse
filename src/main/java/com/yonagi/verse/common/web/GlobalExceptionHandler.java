@@ -18,6 +18,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.Optional;
 
@@ -84,6 +85,18 @@ public class GlobalExceptionHandler {
     public Result handleAccessDeniedException(HttpServletRequest request, AccessDeniedException ex) {
         log.warn("[{}] {} 权限不足", request.getMethod(), getUrl(request));
         return Results.failure(BaseErrorCode.TOKEN_INVALID.code(), "权限不足");
+    }
+
+    /**
+     * 拦截 multipart 文件大小超限异常。该异常发生在进入控制器之前，需要在此转换为统一响应。
+     */
+    @ExceptionHandler(value = {MaxUploadSizeExceededException.class})
+    public Result<Void> handleMaxUploadSizeExceededException(HttpServletRequest request,
+                                                              MaxUploadSizeExceededException ex) {
+        log.warn("[{}] {} 图片大小超过上传上限: maxUploadSize={}",
+                request.getMethod(), getUrl(request), ex.getMaxUploadSize());
+        return Results.failure(BaseErrorCode.UPLOAD_FILE_SIZE_EXCEED.code(),
+                BaseErrorCode.UPLOAD_FILE_SIZE_EXCEED.message());
     }
 
     /**

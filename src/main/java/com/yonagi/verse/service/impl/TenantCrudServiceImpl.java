@@ -19,6 +19,7 @@ import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.NotificationService;
 import com.yonagi.verse.service.TenantCrudService;
+import com.yonagi.verse.service.TenantMediaService;
 import com.yonagi.verse.service.UserTenantService;
 import com.yonagi.verse.service.helper.TenantValidationHelper;
 import lombok.RequiredArgsConstructor;
@@ -59,6 +60,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     private final NotificationService notificationService;
     private final TenantValidationHelper validationHelper;
     private final NotificationMapper notificationMapper;
+    private final TenantMediaService tenantMediaService;
 
     @Value("${verse.frontend-baseurl}")
     private String frontendBaseUrl;
@@ -168,23 +170,36 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         } else if (userId == null) {
             throw new ClientException(TenantErrorCodeEnum.USER_ID_IS_NULL);
         }
+        if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
         String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
         String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        TenantInfoRespDTO resp;
         if (cachedJson != null) {
-            return JSON.parseObject(cachedJson, TenantInfoRespDTO.class);
+            resp = JSON.parseObject(cachedJson, TenantInfoRespDTO.class);
+        } else {
+            TenantDO tenantDO = tenantMapper.selectOne(
+                    Wrappers.lambdaQuery(TenantDO.class)
+                            .eq(TenantDO::getTenantId, tenantId)
+                            .eq(TenantDO::getStatus, 1)
+                            .eq(TenantDO::getDelFlag, 0));
+            if (tenantDO == null) {
+                throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+            }
+            resp = new TenantInfoRespDTO();
+            BeanUtil.copyProperties(tenantDO, resp);
+            resp.setLogoUrl(tenantMediaService.resolveUrl(tenantDO.getLogo()));
+            resp.setBannerUrl(tenantMediaService.resolveUrl(tenantDO.getBanner()));
+            stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(resp), 30, TimeUnit.MINUTES);
         }
 
-        TenantDO tenantDO = tenantMapper.selectOne(
-                Wrappers.lambdaQuery(TenantDO.class)
-                        .eq(TenantDO::getTenantId, tenantId)
-                        .eq(TenantDO::getStatus, 1)
-                        .eq(TenantDO::getDelFlag, 0));
-        if (tenantDO == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        }
-        TenantInfoRespDTO resp = new TenantInfoRespDTO();
-        BeanUtil.copyProperties(tenantDO, resp);
-        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(resp), 30, TimeUnit.MINUTES);
+        // 角色和成员数是动态数据，不写入租户公共缓存，避免不同用户之间串角色。
+        resp.setRole(userTenantService.getRoleByUserIdAndTenantId(userId, tenantId));
+        resp.setMemberCount(userTenantService.count(
+                Wrappers.lambdaQuery(UserTenantDO.class)
+                        .eq(UserTenantDO::getTenantId, tenantId)
+                        .isNull(UserTenantDO::getLeftAt)));
         return resp;
     }
 
