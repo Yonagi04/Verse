@@ -25,4 +25,10 @@ public interface RateLimiter {
      * @param totalTokens 本次实际消耗 token 数
      */
     void settle(RateLimitContext ctx, int totalTokens);
+
+    /**
+     * 删除目标租户已创建的 RPM 限流器，使下一请求按数据库最新阈值重建。
+     * TPM 当前窗口计数不受影响。
+     */
+    void invalidateTenantRpm(Long tenantId);
 }

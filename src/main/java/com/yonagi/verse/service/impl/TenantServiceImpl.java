@@ -7,6 +7,7 @@ import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
 import com.yonagi.verse.service.TenantMediaService;
+import com.yonagi.verse.service.TenantSettingsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -31,6 +32,7 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     private final TenantInviteServiceImpl inviteService;
     private final TenantApprovalServiceImpl approvalService;
     private final TenantMediaService tenantMediaService;
+    private final TenantSettingsService tenantSettingsService;
 
     @Override
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
@@ -55,6 +57,17 @@ public class TenantServiceImpl extends ServiceImpl<TenantMapper, TenantDO> imple
     @Override
     public TenantInfoRespDTO getTenantInfo(Long userId, Long tenantId) {
         return crudService.getTenantInfo(userId, tenantId);
+    }
+
+    @Override
+    public TenantSettingsRespDTO getTenantSettings(Long userId, Long tenantId) {
+        return tenantSettingsService.getSettings(userId, tenantId);
+    }
+
+    @Override
+    public TenantSettingsRespDTO updateTenantSettings(Long userId, Long tenantId,
+                                                       TenantSettingsUpdateReqDTO requestParam) {
+        return tenantSettingsService.updateSettings(userId, tenantId, requestParam);
     }
 
     @Override

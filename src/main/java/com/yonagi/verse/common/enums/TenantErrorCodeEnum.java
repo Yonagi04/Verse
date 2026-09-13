@@ -61,7 +61,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_NOTIFICATION_SEND_PER_DAY_LIMIT("B000333", "已达到租户内消息的单日发送次数上限，请明天再试"),
     TENANT_MEDIA_TYPE_INVALID("B000334", "图片格式不支持，仅允许PNG、JPG、WebP"),
     TENANT_MEDIA_SIZE_EXCEED("B000335", "图片大小不能超过5MB"),
-    TENANT_BANNER_PRESET_INVALID("B000336", "租户头图预设无效");
+    TENANT_BANNER_PRESET_INVALID("B000336", "租户头图预设无效"),
+    TENANT_APPROVAL_MODE_INVALID("B000337", "个人租户不支持配置加入审批");
 
     private final String code;
     private final String message;

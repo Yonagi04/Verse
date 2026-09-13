@@ -59,6 +59,19 @@ public class TenantController {
         return Results.success(tenantService.getTenantInfo(userId, tenantId));
     }
 
+    @GetMapping("/{tenantId}/settings")
+    public Result<TenantSettingsRespDTO> getTenantSettings(@CurrentUser Long userId,
+                                                            @PathVariable Long tenantId) {
+        return Results.success(tenantService.getTenantSettings(userId, tenantId));
+    }
+
+    @PostMapping("/{tenantId}/settings/update")
+    public Result<TenantSettingsRespDTO> updateTenantSettings(@CurrentUser Long userId,
+                                                               @PathVariable Long tenantId,
+                                                               @RequestBody @Valid TenantSettingsUpdateReqDTO requestParam) {
+        return Results.success(tenantService.updateTenantSettings(userId, tenantId, requestParam));
+    }
+
     @PostMapping(value = "/{tenantId}/logo", consumes = "multipart/form-data")
     public Result<TenantMediaUploadRespDTO> uploadTenantLogo(@CurrentUser Long userId,
                                                               @PathVariable Long tenantId,

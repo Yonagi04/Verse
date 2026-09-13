@@ -53,6 +53,15 @@ public class RedisRateLimiter implements RateLimiter {
         settleDimension(DIM_MODEL, ctx.getServiceId(), ctx.getModelTpm(), totalTokens);
     }
 
+    @Override
+    public void invalidateTenantRpm(Long tenantId) {
+        if (tenantId == null) {
+            return;
+        }
+        redissonClient.getRateLimiter(
+                RedisKeyConstant.RATE_LIMIT_RPM_KEY + DIM_TENANT + ":" + tenantId).delete();
+    }
+
     /**
      * 单维度检查：RPM 硬限流（请求前扣减）+ TPM 软限流（读已结算计数），任一超限抛 A000802。
      */
