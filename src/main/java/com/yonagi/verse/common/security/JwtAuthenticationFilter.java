@@ -2,17 +2,14 @@ package com.yonagi.verse.common.security;
 
 import com.alibaba.fastjson2.JSON;
 import cn.hutool.crypto.digest.DigestUtil;
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.enums.PermissionEnum;
 import com.yonagi.verse.common.enums.RoleEnum;
-import com.yonagi.verse.dao.entity.UserDO;
-import com.yonagi.verse.dao.entity.UserTenantDO;
-import com.yonagi.verse.dao.mapper.UserMapper;
-import com.yonagi.verse.dao.mapper.UserTenantMapper;
+import com.yonagi.verse.dao.projection.CurrentTenantState;
+import com.yonagi.verse.service.CurrentTenantStateService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
@@ -52,8 +49,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
-    private final UserMapper userMapper;
-    private final UserTenantMapper userTenantMapper;
+    private final CurrentTenantStateService currentTenantStateService;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -89,9 +85,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             Long userId = Long.parseLong(claims.getSubject());
             String username = claims.get("username", String.class);
 
-            // 查询用户在当前活跃租户下的角色和权限
-            Long activeTenantId = getActiveTenantId(userId);
-            RoleEnum role = getUserRole(userId, activeTenantId);
+            // 每次请求均以数据库状态服务为权威来源，切换租户后无需重新签发 JWT。
+            CurrentTenantState tenantState = currentTenantStateService.resolveCurrentTenant(userId);
+            Long activeTenantId = tenantState.getTenantId();
+            RoleEnum role = parseRole(tenantState.getRole(), userId, activeTenantId);
             Set<PermissionEnum> permissions = role != null
                     ? role.getPermissions()
                     : Collections.emptySet();
@@ -130,39 +127,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
-    /**
-     * 获取用户的当前活跃租户 ID
-     */
-    private Long getActiveTenantId(Long userId) {
-        UserDO userDO = userMapper.selectOne(
-                Wrappers.lambdaQuery(UserDO.class)
-                        .eq(UserDO::getUserId, userId)
-                        .eq(UserDO::getDelFlag, 0));
-        if (userDO != null && userDO.getLastActiveTenantId() != null) {
-            return userDO.getLastActiveTenantId();
-        }
-        return null;
-    }
-
-    /**
-     * 获取用户在指定租户下的角色
-     */
-    private RoleEnum getUserRole(Long userId, Long tenantId) {
-        if (tenantId == null) {
-            return null;
-        }
-        UserTenantDO membership = userTenantMapper.selectOne(
-                Wrappers.lambdaQuery(UserTenantDO.class)
-                        .eq(UserTenantDO::getUserId, userId)
-                        .eq(UserTenantDO::getTenantId, tenantId)
-                        .isNull(UserTenantDO::getLeftAt));
-        if (membership == null) {
+    private RoleEnum parseRole(String role, Long userId, Long tenantId) {
+        if (role == null) {
             return null;
         }
         try {
-            return RoleEnum.valueOf(membership.getRole());
+            return RoleEnum.valueOf(role);
         } catch (IllegalArgumentException e) {
-            log.warn("用户 {} 在租户 {} 中的角色未知: {}", userId, tenantId, membership.getRole());
+            log.warn("用户 {} 在租户 {} 中的角色未知: {}", userId, tenantId, role);
             return null;
         }
     }

@@ -6,6 +6,7 @@ import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.CurrentUser;
+import com.yonagi.verse.common.security.TenantContextExempt;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.TenantService;
@@ -158,6 +159,7 @@ public class TenantController {
     }
 
     @PostMapping("/{tenantId}/switch")
+    @TenantContextExempt(reason = "切换目标租户天然允许不同于当前活跃租户")
     public Result<TenantSwitchRespDTO> switchTenant(@CurrentUser Long userId,
                                                     @PathVariable Long tenantId) {
         return Results.success(tenantService.switchTenant(userId, tenantId));

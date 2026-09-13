@@ -25,6 +25,9 @@ public class TenantInfoListRespDTO {
 
     private String role;
 
+    /** 是否为服务端权威的当前活跃租户。 */
+    private boolean current;
+
     private Date joinedAt;
 
     private Date lastAccessedAt;

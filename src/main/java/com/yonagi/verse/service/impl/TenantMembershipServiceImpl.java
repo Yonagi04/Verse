@@ -18,11 +18,14 @@ import com.yonagi.verse.service.TenantApprovalService;
 import com.yonagi.verse.service.TenantInviteService;
 import com.yonagi.verse.service.TenantMembershipService;
 import com.yonagi.verse.service.UserTenantService;
+import com.yonagi.verse.service.CurrentTenantStateService;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.service.helper.TenantValidationHelper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.util.List;
 import java.util.Map;
@@ -55,6 +58,8 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
     private final NotificationService notificationService;
     private final TenantInviteService inviteService;
     private final TenantApprovalService approvalService;
+    private final CurrentTenantStateService currentTenantStateService;
+    private final StringRedisTemplate stringRedisTemplate;
 
     @Override
     public TenantLeavePrepareRespDTO prepareLeaveTenant(Long userId, Long tenantId) {
@@ -78,11 +83,9 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
         if (RoleEnum.SUPER_ADMIN.name().equals(role)) {
             throw new ClientException(TenantErrorCodeEnum.SUPER_ADMIN_LEAVE_TENANT_ERROR);
         }
-        userTenantService.removeUser(userId, tenantId);
-        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getOwnerId, userId)
-                .eq(TenantDO::getType, "PERSONAL"));
-        return new TenantLeaveRespDTO(tenantDO.getTenantId());
+        Long fallbackTenantId = currentTenantStateService.removeMembershipAndFallback(userId, tenantId);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId);
+        return new TenantLeaveRespDTO(fallbackTenantId);
     }
 
     @Override
@@ -177,7 +180,8 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
         if (RoleEnum.valueOf(memberRole).isNotLowerThan(RoleEnum.valueOf(operatorRole))) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
         }
-        userTenantService.removeUser(memberId, tenantId);
+        currentTenantStateService.removeMembershipAndFallback(memberId, tenantId);
+        stringRedisTemplate.delete(RedisKeyConstant.USER_TENANT_RELATION_KEY + memberId + ":" + tenantId);
 
         notificationService.publishNotification(
                 tenantId, "SYSTEM", "WARNING",

@@ -98,6 +98,8 @@ verse:
   tenant:
     max-invite-code-per-day: 10
     max-notification-send-per-day: 5
+    # 路径中存在 tenantId 时强制与 JWT 当前租户一致；紧急回滚时可临时关闭。
+    context-isolation-enabled: true
   async:
     # 每类副作用可独立降级为同步执行（不走 MQ，直接调用 handler），用于 MQ 故障时的回滚开关
     login-log:

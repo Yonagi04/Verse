@@ -62,7 +62,8 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_MEDIA_TYPE_INVALID("B000334", "图片格式不支持，仅允许PNG、JPG、WebP"),
     TENANT_MEDIA_SIZE_EXCEED("B000335", "图片大小不能超过5MB"),
     TENANT_BANNER_PRESET_INVALID("B000336", "租户头图预设无效"),
-    TENANT_APPROVAL_MODE_INVALID("B000337", "个人租户不支持配置加入审批");
+    TENANT_APPROVAL_MODE_INVALID("B000337", "个人租户不支持配置加入审批"),
+    TENANT_CONTEXT_MISMATCH("B000338", "租户上下文已变化，请刷新后重试");
 
     private final String code;
     private final String message;

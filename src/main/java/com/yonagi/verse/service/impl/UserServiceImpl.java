@@ -26,6 +26,7 @@ import com.yonagi.verse.dao.entity.UserPrivacyDO;
 import com.yonagi.verse.dao.mapper.LoginDeviceMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dao.mapper.UserPrivacyMapper;
+import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.*;
@@ -85,7 +86,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final PasswordEncoder passwordEncoder;
     private final AesUtil aesUtil;
     private final TenantService tenantService;
-    private final UserTenantService userTenantService;
+    private final CurrentTenantStateService currentTenantStateService;
     private final NotificationService notificationService;
     private final LoginDeviceService loginDeviceService;
     private final JwtUtil jwtUtil;
@@ -262,6 +263,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             throw new ClientException(UserErrorCodeEnum.PASSWORD_ERROR);
         }
 
+        // 登录和 JWT 请求复用同一状态解析逻辑，避免两套回退规则产生分歧。
+        CurrentTenantState tenantState = currentTenantStateService.resolveCurrentTenant(userDO.getUserId());
+
         // 生成 JWT Token
         String token = jwtUtil.generateToken(userDO.getUserId(), userDO.getUsername());
         Date expiresAt = new Date(System.currentTimeMillis() + 86400000);
@@ -273,7 +277,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 .username(userDO.getUsername())
                 .token(token)
                 .expiresAt(expiresAt)
-                .lastActiveTenantId(userDO.getLastActiveTenantId())
+                .lastActiveTenantId(tenantState.getTenantId())
                 .loginTime(new Date())
                 .deviceId(deviceId)
                 .deviceName(deviceName)
@@ -301,42 +305,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         resp.setToken(token);
         resp.setExpiresAt(expiresAt);
 
-        if (userDO.getLastActiveTenantId() != null) {
-            try {
-                TenantInfoRespDTO tenantInfoResp = tenantService.getTenantInfo(userDO.getUserId(), userDO.getLastActiveTenantId());
-                if (tenantInfoResp != null) {
-                    String role = userTenantService.getRoleByUserIdAndTenantId(userDO.getUserId(), tenantInfoResp.getTenantId());
-                    resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()
-                            .setTenantId(tenantInfoResp.getTenantId())
-                            .setName(tenantInfoResp.getName())
-                            .setType(tenantInfoResp.getType())
-                            .setRole(role));
-                }
-            } catch (ClientException e) {
-                log.warn("上次活跃租户不可用, userId: {}, lastActiveTenantId: {}, 尝试回退到个人租户",
-                        userDO.getUserId(), userDO.getLastActiveTenantId());
-                Long personalTenantId = tenantService.getPersonalTenantId(userDO.getUserId());
-                if (personalTenantId != null) {
-                    TenantInfoRespDTO tenantInfoResp = tenantService.getTenantInfo(userDO.getUserId(), personalTenantId);
-                    String role = userTenantService.getRoleByUserIdAndTenantId(userDO.getUserId(), personalTenantId);
-                    resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()
-                            .setTenantId(tenantInfoResp.getTenantId())
-                            .setName(tenantInfoResp.getName())
-                            .setType(tenantInfoResp.getType())
-                            .setRole(role));
-
-                    // 修正 last_active_tenant_id，避免后续登录重复触发容错
-                    LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
-                            .eq(UserDO::getUserId, userDO.getUserId())
-                            .eq(UserDO::getDelFlag, 0)
-                            .set(UserDO::getLastActiveTenantId, personalTenantId);
-                    baseMapper.update(null, updateWrapper);
-
-                    // 更新 Redis Hash 中的 lastActiveTenantId
-                    session.setLastActiveTenantId(personalTenantId);
-                    stringRedisTemplate.opsForHash().put(hashKey, deviceId, JSON.toJSONString(session));
-                }
-            }
+        if (tenantState.isValid()) {
+            resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()
+                    .setTenantId(tenantState.getTenantId())
+                    .setName(tenantState.getName())
+                    .setType(tenantState.getType())
+                    .setRole(tenantState.getRole()));
         }
 
         return resp;

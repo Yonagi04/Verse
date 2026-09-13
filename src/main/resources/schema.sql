@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS `t_user` (
     UNIQUE KEY `uk_user_id` (`user_id`),
     UNIQUE KEY `uk_username` (`username`),
     UNIQUE KEY `uk_phone_hash` (`phone_hash`),
-    KEY `idx_email_hash` (`email_hash`)
+    KEY `idx_email_hash` (`email_hash`),
+    KEY `idx_last_active_tenant_id` (`last_active_tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 
 -- ============================================

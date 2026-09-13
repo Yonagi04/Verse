@@ -18,6 +18,7 @@ import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.NotificationService;
+import com.yonagi.verse.service.CurrentTenantStateService;
 import com.yonagi.verse.service.TenantCrudService;
 import com.yonagi.verse.service.TenantMediaService;
 import com.yonagi.verse.service.UserTenantService;
@@ -61,6 +62,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     private final TenantValidationHelper validationHelper;
     private final NotificationMapper notificationMapper;
     private final TenantMediaService tenantMediaService;
+    private final CurrentTenantStateService currentTenantStateService;
 
     @Value("${verse.frontend-baseurl}")
     private String frontendBaseUrl;
@@ -70,6 +72,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
 
     @Override
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
+        Long currentTenantId = currentTenantStateService.resolveCurrentTenant(userId).getTenantId();
         List<UserTenantDO> userTenants = userTenantService.getUserTenantList(userId, Boolean.FALSE, 10L);
         if (userTenants.isEmpty()) {
             return List.of();
@@ -92,6 +95,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
                     dto.setName(tenant != null ? tenant.getName() : null);
                     dto.setType(tenant != null ? tenant.getType() : null);
                     dto.setRole(ut.getRole());
+                    dto.setCurrent(ut.getTenantId().equals(currentTenantId));
                     dto.setJoinedAt(ut.getJoinedAt());
                     dto.setLastAccessedAt(ut.getLastAccessedAt());
                     return dto;
@@ -210,6 +214,10 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         if (!isJoinedTenant) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
+        if (!RoleEnum.SUPER_ADMIN.name().equals(
+                userTenantService.getRoleByUserIdAndTenantId(userId, tenantId))) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        }
 
         TenantClosePrepareRespDTO respDTO = new TenantClosePrepareRespDTO();
         respDTO.setWarningDescription(CLOSE_TENANT_WARNING_DESCRIPTION);
@@ -246,20 +254,8 @@ public class TenantCrudServiceImpl implements TenantCrudService {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NAME_ERROR);
         }
 
-        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
-        if (!isJoinedTenant) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
-
-        LambdaUpdateWrapper<TenantDO> updateWrapper = Wrappers.lambdaUpdate(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId)
-                .eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0)
-                .set(TenantDO::getStatus, 0);
-        int update = tenantMapper.update(updateWrapper);
-        if (update < 1) {
-            throw new ServerException(TenantErrorCodeEnum.TENANT_CLOSE_ERROR);
-        }
+        // 状态服务在同一事务中执行目标租户角色复核、固定锁序停用和集合式回退。
+        tenantDO = currentTenantStateService.closeTenantAndFallback(userId, tenantId);
         List<UserTenantDO> userTenants = userTenantService.list(
                 Wrappers.lambdaQuery(UserTenantDO.class)
                         .eq(UserTenantDO::getTenantId, tenantId)
@@ -286,32 +282,14 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public TenantSwitchRespDTO switchTenant(Long userId, Long tenantId) {
-        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
-        if (!isJoinedTenant) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
-
-        TenantInfoRespDTO respDTO = this.getTenantInfo(userId, tenantId);
-        if (respDTO == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        }
-        LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
-                .eq(UserDO::getUserId, userId)
-                .eq(UserDO::getStatus, 1)
-                .eq(UserDO::getDelFlag, 0)
-                .set(UserDO::getLastActiveTenantId, tenantId);
-        int update = userMapper.update(updateWrapper);
-        if (update < 1) {
-            log.error("Switch Tenant Error While Update UserDO Table: tenant {}, user {}", tenantId, userId);
-            throw new ServerException(TenantErrorCodeEnum.TENANT_SWITCH_ERROR);
-        }
-
-        userTenantService.switchTenant(userId, tenantId);
+        var state = currentTenantStateService.switchTenant(userId, tenantId);
+        // 最近访问时间变更后清理关系缓存，下一次读取获得新快照。
+        stringRedisTemplate.delete(RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId);
         TenantSwitchRespDTO resp = new TenantSwitchRespDTO();
-        resp.setName(respDTO.getName());
-        resp.setTenantId(tenantId);
-        resp.setType(respDTO.getType());
-        resp.setRole(userTenantService.getRoleByUserIdAndTenantId(userId, tenantId));
+        resp.setName(state.getName());
+        resp.setTenantId(state.getTenantId());
+        resp.setType(state.getType());
+        resp.setRole(state.getRole());
         return resp;
     }
 

@@ -10,6 +10,7 @@ import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.resp.TenantInfoRespDTO;
 import com.yonagi.verse.service.NotificationService;
+import com.yonagi.verse.service.CurrentTenantStateService;
 import com.yonagi.verse.service.TenantMediaService;
 import com.yonagi.verse.service.UserTenantService;
 import com.yonagi.verse.service.helper.TenantValidationHelper;
@@ -50,7 +51,8 @@ class TenantCrudServiceHomeTest {
                 mock(NotificationService.class),
                 mock(TenantValidationHelper.class),
                 mock(NotificationMapper.class),
-                mediaService);
+                mediaService,
+                mock(CurrentTenantStateService.class));
 
         TenantDO tenant = new TenantDO();
         tenant.setTenantId(20L);
@@ -89,7 +91,8 @@ class TenantCrudServiceHomeTest {
                 mock(NotificationService.class),
                 mock(TenantValidationHelper.class),
                 mock(NotificationMapper.class),
-                mock(TenantMediaService.class));
+                mock(TenantMediaService.class),
+                mock(CurrentTenantStateService.class));
 
         when(redisTemplate.opsForValue().get(anyString())).thenReturn(
                 "{\"tenantId\":\"20\",\"name\":\"Verse 团队\",\"type\":\"TEAM\",\"role\":\"SUPER_ADMIN\"}");

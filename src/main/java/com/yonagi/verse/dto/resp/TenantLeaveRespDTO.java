@@ -1,5 +1,7 @@
 package com.yonagi.verse.dto.resp;
 
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -16,5 +18,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class TenantLeaveRespDTO {
 
+    /** 退出后的个人租户 ID，按字符串输出避免 JavaScript 精度损失。 */
+    @JsonSerialize(using = ToStringSerializer.class)
     private Long targetTenantId;
 }
