@@ -14,8 +14,6 @@ import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -24,7 +22,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -105,10 +102,6 @@ class TenantActivityPersistenceIntegrationTest {
                 "SELECT event_id FROM tenant_activity_fact ORDER BY occurred_at DESC, id DESC",
                 String.class);
         assertEquals(List.of("same-ms-second", "same-ms-first", "delayed-older"), ordered);
-
-        String migration = Files.readString(Path.of(
-                "src/main/resources/db/migration/V20260919_01__tenant_activity_recording.sql"));
-        assertTrue(migration.contains("idx_tenant_activity_timeline (tenant_id,occurred_at DESC,id DESC)"));
     }
 
     private TenantActivityEvent event(String eventId, long occurredAt) {

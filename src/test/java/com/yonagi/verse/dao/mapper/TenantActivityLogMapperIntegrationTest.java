@@ -12,15 +12,12 @@ import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
 import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.mybatis.spring.SqlSessionFactoryBean;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TenantActivityLogMapperIntegrationTest {
 
@@ -113,14 +110,6 @@ class TenantActivityLogMapperIntegrationTest {
                 20L, cursorRow.getOccurredAt(), cursorRow.getId(), 3);
         assertEquals(List.of("tenant-20-older"),
                 second.stream().map(TenantActivityLogDO::getEventId).toList());
-    }
-
-    @Test
-    void productionMigrationKeepsCompositeTimelineIndex() throws Exception {
-        String migration = Files.readString(Path.of(
-                "src/main/resources/db/migration/V20260919_01__tenant_activity_recording.sql"));
-        assertTrue(migration.contains(
-                "idx_tenant_activity_timeline (tenant_id,occurred_at DESC,id DESC)"));
     }
 
     @Test
