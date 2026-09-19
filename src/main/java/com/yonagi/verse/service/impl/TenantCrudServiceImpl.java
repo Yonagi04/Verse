@@ -7,6 +7,10 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
+import com.yonagi.verse.async.activity.TenantActivityRecorder;
+import com.yonagi.verse.async.event.TenantActivityDraft;
+import com.yonagi.verse.common.enums.TenantActivityTargetType;
+import com.yonagi.verse.common.enums.TenantActivityType;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
@@ -63,6 +67,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     private final NotificationMapper notificationMapper;
     private final TenantMediaService tenantMediaService;
     private final CurrentTenantStateService currentTenantStateService;
+    private final TenantActivityRecorder activityRecorder;
 
     @Value("${verse.frontend-baseurl}")
     private String frontendBaseUrl;
@@ -138,6 +143,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Boolean updateTenant(Long userId, Long tenantId, TenantUpdateReqDTO requestParam) {
         if (tenantId == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
@@ -146,6 +152,8 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         if (!isJoinedTenant) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
+        TenantDO before = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
+                .eq(TenantDO::getTenantId, tenantId).eq(TenantDO::getStatus, 1).eq(TenantDO::getDelFlag, 0));
         LambdaUpdateWrapper<TenantDO> updateWrapper = Wrappers.lambdaUpdate(TenantDO.class)
                 .eq(TenantDO::getTenantId, tenantId)
                 .eq(TenantDO::getStatus, 1)
@@ -162,6 +170,12 @@ public class TenantCrudServiceImpl implements TenantCrudService {
             log.error("Update tenant failed, tenantId: {}, userId: {}", tenantId, userId);
             throw new ServerException(TenantErrorCodeEnum.TENANT_UPDATE_ERROR);
         }
+        List<String> changed = new ArrayList<>();
+        if (before != null && !java.util.Objects.equals(before.getName(), requestParam.getName())) changed.add("name");
+        if (before != null && !java.util.Objects.equals(before.getDescription(), StrUtil.trimToNull(requestParam.getDescription()))) changed.add("description");
+        if (!changed.isEmpty()) activityRecorder.record(tenantId,
+                TenantActivityDraft.of(TenantActivityType.TENANT_PROFILE_UPDATED).actor(userId)
+                        .target(TenantActivityTargetType.TENANT, tenantId, requestParam.getName()).detail("changedFields", changed));
         String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
         stringRedisTemplate.delete(cacheKey);
         return Boolean.TRUE;
@@ -256,6 +270,9 @@ public class TenantCrudServiceImpl implements TenantCrudService {
 
         // 状态服务在同一事务中执行目标租户角色复核、固定锁序停用和集合式回退。
         tenantDO = currentTenantStateService.closeTenantAndFallback(userId, tenantId);
+        activityRecorder.record(tenantId,
+                TenantActivityDraft.of(TenantActivityType.TENANT_DISABLED).actor(userId)
+                        .target(TenantActivityTargetType.TENANT, tenantId, tenantDO.getName()));
         List<UserTenantDO> userTenants = userTenantService.list(
                 Wrappers.lambdaQuery(UserTenantDO.class)
                         .eq(UserTenantDO::getTenantId, tenantId)

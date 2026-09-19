@@ -28,6 +28,9 @@ public class TenantSettingsRespDTO {
     /** 是否开启模型调用审计 */
     private Boolean auditEnabled;
 
+    /** 是否开启租户动态记录 */
+    private Boolean activityRecordingEnabled;
+
     /** 租户级 RPM 上限，NULL 表示不限 */
     private Integer rateLimitRpm;
 

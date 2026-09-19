@@ -5,6 +5,10 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.yonagi.verse.common.security.JwtUtil;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
+import com.yonagi.verse.async.activity.TenantActivityRecorder;
+import com.yonagi.verse.async.event.TenantActivityDraft;
+import com.yonagi.verse.common.enums.TenantActivityType;
 import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
 import com.yonagi.verse.dao.entity.TenantDO;
@@ -13,6 +17,7 @@ import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.req.LlmServiceAddReqDTO;
 import com.yonagi.verse.dto.req.LlmServiceUpdateReqDTO;
+import com.yonagi.verse.dto.req.LlmServiceRemoveReqDTO;
 import com.yonagi.verse.dto.resp.LlmServiceListRespDTO;
 import com.yonagi.verse.service.UserTenantService;
 import com.yonagi.verse.service.pricing.LlmMetadataService;
@@ -35,12 +40,15 @@ import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 class LlmManageServiceDescriptionTest {
@@ -52,6 +60,8 @@ class LlmManageServiceDescriptionTest {
     private final LlmServiceMapper llmServiceMapper = mock(LlmServiceMapper.class);
     private final RedissonClient redissonClient = mock(RedissonClient.class);
     private final LlmMetadataService metadataService = mock(LlmMetadataService.class);
+    private final TenantActivityRecorder activityRecorder = mock(TenantActivityRecorder.class);
+    private final JwtUtil jwtUtil = mock(JwtUtil.class);
     private LlmManageServiceImpl service;
 
     @BeforeEach
@@ -66,10 +76,11 @@ class LlmManageServiceDescriptionTest {
                 aesUtil,
                 redisTemplate,
                 mock(UserMapper.class),
-                mock(JwtUtil.class),
+                jwtUtil,
                 redissonClient,
                 metadataService,
-                mock(PricingConfigurationService.class)
+                mock(PricingConfigurationService.class),
+                activityRecorder
         );
         ReflectionTestUtils.setField(service, "baseMapper", llmServiceMapper);
         when(tenantMapper.selectOne(any())).thenReturn(new TenantDO());
@@ -99,6 +110,10 @@ class LlmManageServiceDescriptionTest {
         verify(llmServiceMapper).insert(captor.capture());
         assertEquals("通用测试模型", captor.getValue().getDescription());
         verify(lock).unlock();
+        ArgumentCaptor<TenantActivityDraft> activity=ArgumentCaptor.forClass(TenantActivityDraft.class);
+        verify(activityRecorder).record(eq(2L),activity.capture());
+        String details=com.alibaba.fastjson2.JSON.toJSONString(activity.getValue().details());
+        assertTrue(!details.contains("secret") && !details.contains("encrypted"));
     }
 
     @Test
@@ -125,6 +140,70 @@ class LlmManageServiceDescriptionTest {
         LambdaUpdateWrapper<LlmServiceDO> update = captureUpdateWrapper();
         assertTrue(update.getSqlSet().contains("description"));
         assertTrue(update.getParamNameValuePairs().containsValue(null));
+    }
+
+    @Test
+    void credentialUpdateRecordsOnlySafeChangeMarker() {
+        stubExistingService();
+        when(aesUtil.encrypt("plain-secret")).thenReturn("encrypted-secret");
+        LlmServiceUpdateReqDTO request = new LlmServiceUpdateReqDTO();
+        request.setApiKey("plain-secret");
+
+        assertTrue(service.updateLlmService(1L, 2L, 3L, request));
+
+        ArgumentCaptor<TenantActivityDraft> captor = ArgumentCaptor.forClass(TenantActivityDraft.class);
+        verify(activityRecorder).record(eq(2L), captor.capture());
+        TenantActivityDraft draft = captor.getValue();
+        assertEquals(TenantActivityType.LLM_SERVICE_UPDATED, draft.type());
+        assertEquals(Boolean.TRUE, draft.details().get("credentialChanged"));
+        assertTrue(((java.util.List<?>) draft.details().get("changedFields")).contains("credential"));
+        String details = com.alibaba.fastjson2.JSON.toJSONString(draft.details());
+        assertFalse(details.contains("plain-secret"));
+        assertFalse(details.contains("encrypted-secret"));
+    }
+
+    @Test
+    void submittingSameLimitDoesNotProduceFalseChangedField() {
+        LlmServiceDO existing = existingService();
+        existing.setRateLimitRpm(60);
+        when(llmServiceMapper.selectOne(any())).thenReturn(existing);
+        when(llmServiceMapper.update(any(Wrapper.class))).thenReturn(1);
+        LlmServiceUpdateReqDTO request = new LlmServiceUpdateReqDTO();
+        request.setRpm(60);
+
+        assertTrue(service.updateLlmService(1L, 2L, 3L, request));
+
+        verify(activityRecorder, never()).record(anyLong(), any(TenantActivityDraft.class));
+    }
+
+    @Test
+    void enableDisableAndRemoveUseExistingNameSnapshot() {
+        LlmServiceDO existing = existingService();
+        when(llmServiceMapper.selectOne(any())).thenReturn(existing);
+        when(llmServiceMapper.update(any(Wrapper.class))).thenReturn(1);
+
+        assertTrue(service.disableLlmService(1L, 2L, 3L));
+        ArgumentCaptor<TenantActivityDraft> captor = ArgumentCaptor.forClass(TenantActivityDraft.class);
+        verify(activityRecorder).record(eq(2L), captor.capture());
+        assertEquals(TenantActivityType.LLM_SERVICE_DISABLED, captor.getValue().type());
+        assertEquals("openai.gpt-test", captor.getValue().targetName());
+
+        org.mockito.Mockito.reset(activityRecorder);
+        existing.setStatus(0);
+        assertTrue(service.enableLlmService(1L, 2L, 3L));
+        verify(activityRecorder).record(eq(2L), captor.capture());
+        assertEquals(TenantActivityType.LLM_SERVICE_ENABLED, captor.getValue().type());
+
+        org.mockito.Mockito.reset(activityRecorder);
+        existing.setStatus(1);
+        when(redisTemplate.opsForValue().get(RedisKeyConstant.LLM_REMOVE_TOKEN_KEY + 3L)).thenReturn("remove-token");
+        when(jwtUtil.validateToken("remove-token")).thenReturn(true);
+        LlmServiceRemoveReqDTO remove = new LlmServiceRemoveReqDTO();
+        remove.setToken("remove-token");
+        assertTrue(service.removeLlmService(1L, 2L, 3L, remove));
+        verify(activityRecorder).record(eq(2L), captor.capture());
+        assertEquals(TenantActivityType.LLM_SERVICE_REMOVED, captor.getValue().type());
+        assertEquals("openai.gpt-test", captor.getValue().targetName());
     }
 
     @Test
@@ -159,15 +238,18 @@ class LlmManageServiceDescriptionTest {
     }
 
     private void stubExistingService() {
-        LlmServiceDO existing = LlmServiceDO.builder()
+        when(llmServiceMapper.selectOne(any())).thenReturn(existingService());
+        when(llmServiceMapper.update(any(Wrapper.class))).thenReturn(1);
+    }
+
+    private LlmServiceDO existingService() {
+        return LlmServiceDO.builder()
                 .serviceId(3L)
                 .tenantId(2L)
                 .name("openai.gpt-test")
                 .description("旧介绍")
                 .status(1)
                 .build();
-        when(llmServiceMapper.selectOne(any())).thenReturn(existing);
-        when(llmServiceMapper.update(any(Wrapper.class))).thenReturn(1);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})

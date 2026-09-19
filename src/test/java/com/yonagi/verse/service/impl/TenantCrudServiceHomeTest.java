@@ -3,6 +3,7 @@ package com.yonagi.verse.service.impl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.yonagi.verse.common.security.JwtUtil;
+import com.yonagi.verse.async.activity.TenantActivityRecorder;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.NotificationMapper;
@@ -52,7 +53,8 @@ class TenantCrudServiceHomeTest {
                 mock(TenantValidationHelper.class),
                 mock(NotificationMapper.class),
                 mediaService,
-                mock(CurrentTenantStateService.class));
+                mock(CurrentTenantStateService.class),
+                mock(TenantActivityRecorder.class));
 
         TenantDO tenant = new TenantDO();
         tenant.setTenantId(20L);
@@ -92,7 +94,8 @@ class TenantCrudServiceHomeTest {
                 mock(TenantValidationHelper.class),
                 mock(NotificationMapper.class),
                 mock(TenantMediaService.class),
-                mock(CurrentTenantStateService.class));
+                mock(CurrentTenantStateService.class),
+                mock(TenantActivityRecorder.class));
 
         when(redisTemplate.opsForValue().get(anyString())).thenReturn(
                 "{\"tenantId\":\"20\",\"name\":\"Verse 团队\",\"type\":\"TEAM\",\"role\":\"SUPER_ADMIN\"}");

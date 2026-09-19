@@ -4,6 +4,10 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.async.activity.TenantActivityRecorder;
+import com.yonagi.verse.async.event.TenantActivityDraft;
+import com.yonagi.verse.common.enums.TenantActivityTargetType;
+import com.yonagi.verse.common.enums.TenantActivityType;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
@@ -60,6 +64,7 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
     private final TenantApprovalService approvalService;
     private final CurrentTenantStateService currentTenantStateService;
     private final StringRedisTemplate stringRedisTemplate;
+    private final TenantActivityRecorder activityRecorder;
 
     @Override
     public TenantLeavePrepareRespDTO prepareLeaveTenant(Long userId, Long tenantId) {
@@ -84,6 +89,8 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
             throw new ClientException(TenantErrorCodeEnum.SUPER_ADMIN_LEAVE_TENANT_ERROR);
         }
         Long fallbackTenantId = currentTenantStateService.removeMembershipAndFallback(userId, tenantId);
+        record(tenantId, TenantActivityDraft.of(TenantActivityType.MEMBER_LEFT).actor(userId)
+                .target(TenantActivityTargetType.MEMBER, userId, userDisplayName(userId)));
         stringRedisTemplate.delete(RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId);
         return new TenantLeaveRespDTO(fallbackTenantId);
     }
@@ -151,6 +158,9 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
         }
         userTenantService.updateUserRole(memberId, tenantId, memberRole, targetRole);
+        record(tenantId, TenantActivityDraft.of(TenantActivityType.MEMBER_ROLE_CHANGED).actor(userId)
+                .target(TenantActivityTargetType.MEMBER, memberId, userDisplayName(memberId))
+                .detail("oldRole", memberRole).detail("newRole", targetRole));
 
         String oldRoleName = ROLE_DISPLAY_MAP.getOrDefault(memberRole, memberRole);
         String newRoleName = ROLE_DISPLAY_MAP.getOrDefault(targetRole, targetRole);
@@ -181,6 +191,8 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
         }
         currentTenantStateService.removeMembershipAndFallback(memberId, tenantId);
+        record(tenantId, TenantActivityDraft.of(TenantActivityType.MEMBER_REMOVED).actor(userId)
+                .target(TenantActivityTargetType.MEMBER, memberId, userDisplayName(memberId)));
         stringRedisTemplate.delete(RedisKeyConstant.USER_TENANT_RELATION_KEY + memberId + ":" + tenantId);
 
         notificationService.publishNotification(
@@ -222,6 +234,9 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
         // 直接加入模式
         if (tenantDO.getJoinApprovalMode() == 0) {
             joinMember(userId, tenantId);
+            record(tenantId, TenantActivityDraft.of(TenantActivityType.MEMBER_JOINED).actor(userId)
+                    .target(TenantActivityTargetType.MEMBER, userId, userDisplayName(userId))
+                    .detail("joinSource", "DIRECT_INVITE"));
             inviteService.incrementUsageCount(inviteDO.getId());
             return new TenantJoinRespDTO(false);
         }
@@ -239,5 +254,16 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
             log.error("Join Tenant Error: tenant {}, user {}", tenantId, userId);
             throw new ServerException(TenantErrorCodeEnum.TENANT_JOIN_ERROR);
         }
+    }
+
+    private String userDisplayName(Long userId) {
+        UserDO user = userMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
+                .select(UserDO::getUsername, UserDO::getNickname).eq(UserDO::getUserId, userId));
+        if (user == null) return String.valueOf(userId);
+        return user.getNickname() == null || user.getNickname().isBlank() ? user.getUsername() : user.getNickname();
+    }
+
+    private void record(Long tenantId, TenantActivityDraft draft) {
+        activityRecorder.record(tenantId, draft);
     }
 }

@@ -3,6 +3,10 @@ package com.yonagi.verse.service.impl;
 import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
+import com.yonagi.verse.async.activity.TenantActivityRecorder;
+import com.yonagi.verse.async.event.TenantActivityDraft;
+import com.yonagi.verse.common.enums.TenantActivityTargetType;
+import com.yonagi.verse.common.enums.TenantActivityType;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
@@ -34,6 +38,8 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
     private final StringRedisTemplate stringRedisTemplate;
     private final RateLimiter rateLimiter;
 
+    private final TenantActivityRecorder activityRecorder;
+
     @Override
     public TenantSettingsRespDTO getSettings(Long userId, Long tenantId) {
         UserTenantDO membership = requireMembership(userId, tenantId);
@@ -64,6 +70,11 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
         String description = StrUtil.trimToNull(requestParam.getDescription());
         Integer rpm = normalizeLimit(requestParam.getRateLimitRpm());
         Integer tpm = normalizeLimit(requestParam.getRateLimitTpm());
+        boolean oldActivityEnabled = Integer.valueOf(1).equals(tenant.getActivityRecordingEnabled());
+        boolean newActivityEnabled = requestParam.getActivityRecordingEnabled() == null
+                ? oldActivityEnabled : Boolean.TRUE.equals(requestParam.getActivityRecordingEnabled());
+        java.util.List<String> changedFields = changedFields(tenant, name, description, approvalMode,
+                requestParam.getAuditEnabled(), rpm, tpm, newActivityEnabled);
         int updated = tenantMapper.update(Wrappers.lambdaUpdate(TenantDO.class)
                 .eq(TenantDO::getTenantId, tenantId)
                 .eq(TenantDO::getStatus, 1)
@@ -73,10 +84,23 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
                 .set(TenantDO::getJoinApprovalMode,
                         "PERSONAL".equals(tenant.getType()) ? 0 : approvalMode)
                 .set(TenantDO::getAuditEnabled, Boolean.TRUE.equals(requestParam.getAuditEnabled()) ? 1 : 0)
+                .set(TenantDO::getActivityRecordingEnabled, newActivityEnabled ? 1 : 0)
                 .set(TenantDO::getRateLimitRpm, rpm)
                 .set(TenantDO::getRateLimitTpm, tpm));
         if (updated != 1) {
             throw new ServerException(TenantErrorCodeEnum.TENANT_UPDATE_ERROR);
+        }
+
+        if (!changedFields.isEmpty()) {
+            TenantActivityType type = oldActivityEnabled == newActivityEnabled
+                    ? TenantActivityType.TENANT_SETTINGS_UPDATED
+                    : newActivityEnabled ? TenantActivityType.ACTIVITY_RECORDING_ENABLED
+                    : TenantActivityType.ACTIVITY_RECORDING_DISABLED;
+            TenantActivityDraft draft = TenantActivityDraft.of(type).actor(userId)
+                    .target(TenantActivityTargetType.TENANT, tenantId, name)
+                    .detail("changedFields", changedFields);
+            if (oldActivityEnabled != newActivityEnabled) activityRecorder.recordToggle(tenantId, draft);
+            else activityRecorder.record(tenantId, draft);
         }
 
         // 设置保存后只清租户详情缓存和 RPM 配置；当前分钟 TPM 已用量必须保留。
@@ -123,6 +147,7 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
         response.setDescription(tenant.getDescription());
         response.setJoinApprovalMode(tenant.getJoinApprovalMode());
         response.setAuditEnabled(Integer.valueOf(1).equals(tenant.getAuditEnabled()));
+        response.setActivityRecordingEnabled(Integer.valueOf(1).equals(tenant.getActivityRecordingEnabled()));
         response.setRateLimitRpm(tenant.getRateLimitRpm());
         response.setRateLimitTpm(tenant.getRateLimitTpm());
         response.setRole(role);
@@ -132,5 +157,20 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
 
     private Integer normalizeLimit(Integer value) {
         return value == null || value == 0 ? null : value;
+    }
+
+    private java.util.List<String> changedFields(TenantDO old, String name, String description,
+                                                  Integer approvalMode, Boolean auditEnabled,
+                                                  Integer rpm, Integer tpm, boolean activityEnabled) {
+        java.util.List<String> fields = new java.util.ArrayList<>();
+        if (!java.util.Objects.equals(old.getName(), name)) fields.add("name");
+        if (!java.util.Objects.equals(old.getDescription(), description)) fields.add("description");
+        int effectiveApproval = "PERSONAL".equals(old.getType()) ? 0 : approvalMode;
+        if (!java.util.Objects.equals(old.getJoinApprovalMode(), effectiveApproval)) fields.add("joinApprovalMode");
+        if (!java.util.Objects.equals(Integer.valueOf(1).equals(old.getAuditEnabled()), Boolean.TRUE.equals(auditEnabled))) fields.add("auditEnabled");
+        if (!java.util.Objects.equals(old.getRateLimitRpm(), rpm)) fields.add("rateLimitRpm");
+        if (!java.util.Objects.equals(old.getRateLimitTpm(), tpm)) fields.add("rateLimitTpm");
+        if (Integer.valueOf(1).equals(old.getActivityRecordingEnabled()) != activityEnabled) fields.add("activityRecordingEnabled");
+        return fields;
     }
 }

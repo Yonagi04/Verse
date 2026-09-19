@@ -34,6 +34,10 @@ public class TenantSettingsUpdateReqDTO {
     @NotNull(message = "调用审计开关不能为空")
     private Boolean auditEnabled;
 
+    /** 是否开启租户动态记录 */
+    @NotNull(message = "动态记录开关不能为空")
+    private Boolean activityRecordingEnabled;
+
     /** 租户级 RPM 上限，NULL/0 表示不限 */
     @Min(value = 0, message = "RPM 不能小于0")
     private Integer rateLimitRpm;

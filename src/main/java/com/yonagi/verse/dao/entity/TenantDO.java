@@ -80,4 +80,9 @@ public class TenantDO extends BaseDO {
      * 是否开启模型调用审计：0=关闭, 1=开启
      */
     private Integer auditEnabled;
+
+    /**
+     * 是否开启租户动态记录：0=关闭, 1=开启
+     */
+    private Integer activityRecordingEnabled;
 }

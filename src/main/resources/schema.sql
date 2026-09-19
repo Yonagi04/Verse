@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS `t_tenant` (
     `rate_limit_rpm`   INT      DEFAULT NULL COMMENT '租户级 RPM 上限（NULL=不限）',
     `rate_limit_tpm`   INT      DEFAULT NULL COMMENT '租户级 TPM 上限（NULL=不限）',
     `audit_enabled`    TINYINT  NOT NULL DEFAULT 0 COMMENT '是否开启模型调用审计：0=关闭, 1=开启',
+    `activity_recording_enabled` TINYINT NOT NULL DEFAULT 0 COMMENT '是否开启租户动态记录：0=关闭, 1=开启',
     `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `del_flag`    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
@@ -272,6 +273,58 @@ CREATE TABLE IF NOT EXISTS `t_token_usage_outbox` (
     KEY `idx_usage_outbox_retention` (`status`, `reconciled_at`),
     KEY `idx_usage_outbox_tenant` (`tenant_id`, `event_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='计费用量事件持久化发送表';
+
+-- ============================================
+-- 7.0.2 通用可靠领域事件 Outbox
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_domain_event_outbox` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `event_id` VARCHAR(64) NOT NULL COMMENT '稳定事件ID',
+    `tenant_id` BIGINT NOT NULL COMMENT '租户ID',
+    `event_type` VARCHAR(40) NOT NULL COMMENT 'RocketMQ标签',
+    `message_key` VARCHAR(128) NOT NULL COMMENT 'RocketMQ顺序路由键',
+    `payload_json` JSON NOT NULL COMMENT '不可变事件载荷',
+    `status` VARCHAR(16) NOT NULL DEFAULT 'PENDING' COMMENT 'PENDING/CLAIMED/RETRY/FAILED/PUBLISHED',
+    `attempt_count` INT NOT NULL DEFAULT 0 COMMENT '发送尝试次数',
+    `next_retry_at` DATETIME(3) NOT NULL COMMENT '下次可重试时间',
+    `claim_owner` VARCHAR(64) DEFAULT NULL COMMENT '声明实例',
+    `claim_expires_at` DATETIME(3) DEFAULT NULL COMMENT '声明租约到期时间',
+    `last_error` VARCHAR(2000) DEFAULT NULL COMMENT '最近发送或消费错误摘要',
+    `published_at` DATETIME(3) DEFAULT NULL COMMENT 'Broker确认接收时间',
+    `reconciled_at` DATETIME(3) DEFAULT NULL COMMENT '事实表对账完成时间',
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '创建时间',
+    `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3) COMMENT '更新时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_domain_outbox_event` (`event_id`),
+    KEY `idx_domain_outbox_claim` (`status`, `next_retry_at`, `claim_expires_at`, `id`),
+    KEY `idx_domain_outbox_retention` (`status`, `reconciled_at`),
+    KEY `idx_domain_outbox_tenant` (`tenant_id`, `event_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='通用可靠领域事件Outbox';
+
+-- ============================================
+-- 7.0.3 租户动态事实表
+-- ============================================
+CREATE TABLE IF NOT EXISTS `t_tenant_activity_log` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID及稳定游标',
+    `event_id` VARCHAR(64) NOT NULL COMMENT '幂等事件ID',
+    `tenant_id` BIGINT NOT NULL COMMENT '租户ID',
+    `category` VARCHAR(32) NOT NULL COMMENT '动态分类',
+    `activity_type` VARCHAR(64) NOT NULL COMMENT '动态类型',
+    `actor_user_id` BIGINT NOT NULL COMMENT '操作人用户ID',
+    `actor_username` VARCHAR(64) NOT NULL COMMENT '操作人用户名快照',
+    `actor_nickname` VARCHAR(100) DEFAULT NULL COMMENT '操作人昵称快照',
+    `target_type` VARCHAR(32) DEFAULT NULL COMMENT '目标对象类型',
+    `target_id` VARCHAR(64) DEFAULT NULL COMMENT '目标对象业务ID',
+    `target_name` VARCHAR(255) DEFAULT NULL COMMENT '目标对象名称快照',
+    `detail_json` JSON NOT NULL COMMENT '白名单化结构详情',
+    `schema_version` INT NOT NULL COMMENT '事件结构版本',
+    `occurred_at` DATETIME(3) NOT NULL COMMENT '业务发生时间',
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) COMMENT '消费落库时间',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_tenant_activity_event` (`event_id`),
+    KEY `idx_tenant_activity_timeline` (`tenant_id`, `occurred_at` DESC, `id` DESC),
+    KEY `idx_tenant_activity_type_timeline` (`tenant_id`, `activity_type`, `occurred_at` DESC, `id` DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户动态事实表';
 
 -- ============================================
 -- 7.1 LLM 标签与计费版本

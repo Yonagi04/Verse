@@ -6,6 +6,10 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.async.api.DomainEventPublisher;
+import com.yonagi.verse.async.activity.TenantActivityRecorder;
+import com.yonagi.verse.async.event.TenantActivityDraft;
+import com.yonagi.verse.common.enums.TenantActivityTargetType;
+import com.yonagi.verse.common.enums.TenantActivityType;
 import com.yonagi.verse.async.event.CounterEvent;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
@@ -53,6 +57,7 @@ public class TenantInviteServiceImpl implements TenantInviteService {
     private final StringRedisTemplate stringRedisTemplate;
     private final RBloomFilter<String> inviteCodeFilter;
     private final DomainEventPublisher domainEventPublisher;
+    private final TenantActivityRecorder activityRecorder;
 
     @Value("${verse.tenant.max-invite-code-per-day:10}")
     private Integer maxInviteCodePerDay;
@@ -201,6 +206,7 @@ public class TenantInviteServiceImpl implements TenantInviteService {
             log.error("Deactivate Invite Code Error: tenant {}, inviteCodeId {}", tenantId, inviteCodeId);
             throw new ServerException(TenantErrorCodeEnum.INVITE_CODE_DEACTIVATE_ERROR);
         }
+        record(tenantId, userId, TenantActivityType.INVITE_DISABLED, inviteDO, "DISABLED");
         String cacheKey = RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteDO.getCode();
         stringRedisTemplate.delete(cacheKey);
         return Boolean.TRUE;
@@ -236,6 +242,7 @@ public class TenantInviteServiceImpl implements TenantInviteService {
             log.error("Activate Invite Code Error: tenant {}, inviteCodeId {}", tenantId, inviteCodeId);
             throw new ServerException(TenantErrorCodeEnum.INVITE_CODE_ACTIVATE_ERROR);
         }
+        record(tenantId, userId, TenantActivityType.INVITE_ENABLED, inviteDO, "ENABLED");
         inviteDO.setIsActive(1);
         String cacheKey = RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteDO.getCode();
         stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(inviteDO), 15, TimeUnit.MINUTES);
@@ -280,5 +287,11 @@ public class TenantInviteServiceImpl implements TenantInviteService {
 
     private Date getStartOfToday() {
         return Date.from(LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant());
+    }
+
+    private void record(Long tenantId, Long userId, TenantActivityType type, TenantInviteDO invite, String status) {
+        activityRecorder.record(tenantId, TenantActivityDraft.of(type).actor(userId)
+                .target(TenantActivityTargetType.INVITE, invite.getId(), "邀请")
+                .detail("status", status).detail("expiresAt", invite.getExpiresAt()));
     }
 }

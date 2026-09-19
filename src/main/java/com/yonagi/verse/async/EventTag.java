@@ -13,6 +13,7 @@ public final class EventTag {
     public static final String COUNTER = "COUNTER";
     public static final String TOKEN_USAGE = "TOKEN_USAGE";
     public static final String LLM_AUDIT = "LLM_AUDIT";
+    public static final String TENANT_ACTIVITY = "TENANT_ACTIVITY";
 
     private EventTag() {
     }

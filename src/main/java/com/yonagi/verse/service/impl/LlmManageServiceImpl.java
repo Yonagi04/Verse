@@ -7,6 +7,10 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
+import com.yonagi.verse.async.activity.TenantActivityRecorder;
+import com.yonagi.verse.async.event.TenantActivityDraft;
+import com.yonagi.verse.common.enums.TenantActivityTargetType;
+import com.yonagi.verse.common.enums.TenantActivityType;
 import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -73,6 +77,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     private final RedissonClient redissonClient;
     private final LlmMetadataService metadataService;
     private final PricingConfigurationService pricingConfigurationService;
+    private final TenantActivityRecorder activityRecorder;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -123,6 +128,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                                 .eq(LlmServiceDO::getServiceId, llmServiceId)
                                 .set(LlmServiceDO::getActivePricingId, llmServiceDO.getActivePricingId()));
                     }
+                    record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_CREATED).actor(userId)
+                            .target(TenantActivityTargetType.LLM_SERVICE, llmServiceId, llmServiceDO.getName())
+                            .detail("provider", llmServiceDO.getProvider()).detail("modelName", llmServiceDO.getModelName()));
 
                     // 缓存
                     stringRedisTemplate.opsForValue().set(RedisKeyConstant.LLM_SERVICE_INFO_KEY + llmServiceId,
@@ -263,6 +271,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             throw new ClientException(LlmManageErrorCodeEnum.LLM_CAN_NOT_UPDATE);
         }
         validateTokenLimits(llmServiceDO, requestParam.getContextWindow(), requestParam.getMaxOutputTokens(), false);
+        List<String> oldTagCodes = requestParam.getTagCodes() == null
+                ? null
+                : metadataService.tags(serviceId);
+        List<String> changedFields = llmChangedFields(llmServiceDO, requestParam, oldTagCodes);
 
         String newName = StrUtil.isBlank(requestParam.getName()) ? null : requestParam.getName().trim();
         boolean nameChanged = newName != null && !newName.equals(llmServiceDO.getName());
@@ -297,6 +309,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             );
             stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
         }
+        if (!changedFields.isEmpty()) record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_UPDATED).actor(userId)
+                .target(TenantActivityTargetType.LLM_SERVICE, serviceId, newName == null ? llmServiceDO.getName() : newName)
+                .detail("changedFields", changedFields)
+                .detail("credentialChanged", StrUtil.isNotBlank(requestParam.getApiKey())));
         return Boolean.TRUE;
     }
 
@@ -507,6 +523,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             log.error("disable llm failed: serviceId {}", serviceId);
             throw new ServerException(LlmManageErrorCodeEnum.LLM_DISABLE_FAILED);
         }
+        record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_DISABLED).actor(userId)
+                .target(TenantActivityTargetType.LLM_SERVICE, serviceId, llmServiceDO.getName()));
         // 删缓存
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId);
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
@@ -538,6 +556,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             log.error("enable llm failed: serviceId {}", serviceId);
             throw new ServerException(LlmManageErrorCodeEnum.LLM_ENABLE_FAILED);
         }
+        record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_ENABLED).actor(userId)
+                .target(TenantActivityTargetType.LLM_SERVICE, serviceId, llmServiceDO.getName()));
         llmServiceDO.setStatus(1);
         // 写回缓存
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
@@ -617,6 +637,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                     .eq(LlmServiceDO::getDelFlag, 1)
                     .set(LlmServiceDO::getUpdateTime, new Date()));
         }
+        record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_REMOVED).actor(userId)
+                .target(TenantActivityTargetType.LLM_SERVICE, serviceId, llmServiceDO.getName()));
         // 删除缓存
         stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId);
         stringRedisTemplate.delete(RedisKeyConstant.LLM_REMOVE_TOKEN_KEY + serviceId);
@@ -667,5 +689,34 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
+    }
+
+    private List<String> llmChangedFields(LlmServiceDO old, LlmServiceUpdateReqDTO request,
+                                          List<String> oldTagCodes) {
+        java.util.ArrayList<String> fields = new java.util.ArrayList<>();
+        if (StrUtil.isNotBlank(request.getName()) && !Objects.equals(old.getName(), request.getName().trim())) fields.add("name");
+        if (StrUtil.isNotBlank(request.getApiUrl()) && !Objects.equals(old.getApiUrl(), request.getApiUrl())) fields.add("apiUrl");
+        if (StrUtil.isNotBlank(request.getModelName()) && !Objects.equals(old.getModelName(), request.getModelName())) fields.add("modelName");
+        if (request.getDescription() != null && !Objects.equals(old.getDescription(), normalizeDescription(request.getDescription()))) fields.add("description");
+        if (request.getRpm() != null
+                && !Objects.equals(old.getRateLimitRpm(), request.getRpm() > 0 ? request.getRpm() : null)) fields.add("rateLimitRpm");
+        if (request.getTpm() != null
+                && !Objects.equals(old.getRateLimitTpm(), request.getTpm() > 0 ? request.getTpm() : null)) fields.add("rateLimitTpm");
+        if (request.getFallbackServiceId() != null
+                && !Objects.equals(old.getFallbackServiceId(), request.getFallbackServiceId() > 0 ? request.getFallbackServiceId() : null)) fields.add("fallbackServiceId");
+        if (request.getTagCodes() != null
+                && !new java.util.LinkedHashSet<>(oldTagCodes == null ? List.of() : oldTagCodes)
+                .equals(new java.util.LinkedHashSet<>(request.getTagCodes()))) fields.add("tags");
+        if (request.getContextWindow() != null
+                && !Objects.equals(old.getContextWindow(), request.getContextWindow() == 0 ? null : request.getContextWindow())) fields.add("contextWindow");
+        if (request.getMaxOutputTokens() != null
+                && !Objects.equals(old.getMaxOutputTokens(), request.getMaxOutputTokens() == 0 ? null : request.getMaxOutputTokens())) fields.add("maxOutputTokens");
+        if (request.getPricing() != null) fields.add("pricing");
+        if (StrUtil.isNotBlank(request.getApiKey())) fields.add("credential");
+        return fields;
+    }
+
+    private void record(Long tenantId, TenantActivityDraft draft) {
+        activityRecorder.record(tenantId, draft);
     }
 }

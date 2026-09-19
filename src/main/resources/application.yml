@@ -106,6 +106,19 @@ verse:
       sync-fallback: false
     counter:
       sync-fallback: false
+    domain-outbox:
+      # 仅暂停 Relay；业务事务仍持续暂存可靠事件。
+      relay-enabled: true
+      batch-size: 100
+      relay-delay-ms: 1000
+      claim-lease-ms: 30000
+      max-attempts: 8
+      initial-backoff-ms: 1000
+      max-backoff-ms: 300000
+      reconciliation-threshold-ms: 300000
+      reconciled-retention-days: 30
+      maintenance-delay-ms: 60000
+      details-max-bytes: 8192
   geoip:
     db-path: classpath:geoip/GeoLite2-City.mmdb
     enabled: true

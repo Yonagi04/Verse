@@ -6,6 +6,10 @@ import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
+import com.yonagi.verse.async.activity.TenantActivityRecorder;
+import com.yonagi.verse.async.event.TenantActivityDraft;
+import com.yonagi.verse.common.enums.TenantActivityTargetType;
+import com.yonagi.verse.common.enums.TenantActivityType;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
@@ -44,6 +48,7 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
     private final TenantInviteService inviteService;
     private final UserMapper userMapper;
     private final TenantInviteMapper tenantInviteMapper;
+    private final TenantActivityRecorder activityRecorder;
 
     @Override
     public TenantJoinReqListRespDTO listJoinRequests(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
@@ -88,6 +93,9 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
         }
         // 将申请人加入租户
         realJoinTenant(requestDO.getUserId(), tenantId);
+        record(tenantId, TenantActivityDraft.of(TenantActivityType.MEMBER_JOINED).actor(userId)
+                .target(TenantActivityTargetType.MEMBER, requestDO.getUserId(), userDisplayName(requestDO.getUserId()))
+                .detail("joinSource", "APPROVAL"));
         // 邀请码使用次数+1
         inviteService.incrementUsageCount(requestDO.getInviteId());
         // 通知申请人（事务提交后异步投递）
@@ -120,6 +128,8 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
             log.error("Reject Join Request Error: tenant {}, requestId {}", tenantId, requestId);
             throw new ServerException(TenantErrorCodeEnum.REQUEST_STATUS_UPDATE_ERROR);
         }
+        record(tenantId, TenantActivityDraft.of(TenantActivityType.JOIN_REQUEST_REJECTED).actor(userId)
+                .target(TenantActivityTargetType.MEMBER, tenantJoinRequestDO.getUserId(), userDisplayName(tenantJoinRequestDO.getUserId())));
         notificationService.publishNotification(tenantId, "SYSTEM", "INFO",
                 "申请被拒绝",
                 requestParam.getReviewComment() == null ? "您加入" + tenantDO.getName() + "的申请已被管理员拒绝" : "您加入" + tenantDO.getName() + "的申请已被管理员拒绝，理由：" + requestParam.getReviewComment(),
@@ -209,5 +219,16 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
             log.error("Join Tenant Error: tenant {}, user {}", tenantId, userId);
             throw new ServerException(TenantErrorCodeEnum.TENANT_JOIN_ERROR);
         }
+    }
+
+    private String userDisplayName(Long userId) {
+        UserDO user = userMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
+                .select(UserDO::getUsername, UserDO::getNickname).eq(UserDO::getUserId, userId));
+        if (user == null) return String.valueOf(userId);
+        return user.getNickname() == null || user.getNickname().isBlank() ? user.getUsername() : user.getNickname();
+    }
+
+    private void record(Long tenantId, TenantActivityDraft draft) {
+        activityRecorder.record(tenantId, draft);
     }
 }
