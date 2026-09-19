@@ -19,6 +19,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 import java.util.Optional;
 
@@ -85,6 +86,17 @@ public class GlobalExceptionHandler {
     public Result handleAccessDeniedException(HttpServletRequest request, AccessDeniedException ex) {
         log.warn("[{}] {} 权限不足", request.getMethod(), getUrl(request));
         return Results.failure(BaseErrorCode.TOKEN_INVALID.code(), "权限不足");
+    }
+
+    /**
+     * 拦截查询参数类型不匹配，例如 limit 不是有效整数。
+     */
+    @ExceptionHandler(value = MethodArgumentTypeMismatchException.class)
+    public Result<Void> typeMismatchExceptionHandler(HttpServletRequest request,
+                                                      MethodArgumentTypeMismatchException ex) {
+        String message = "请求参数格式不正确";
+        log.warn("[{}] {} [parameter] {}", request.getMethod(), getUrl(request), ex.getName());
+        return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), message);
     }
 
     /**

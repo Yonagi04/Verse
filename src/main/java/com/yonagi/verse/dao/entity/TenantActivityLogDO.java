@@ -1,5 +1,6 @@
 package com.yonagi.verse.dao.entity;
 
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -16,6 +17,9 @@ public class TenantActivityLogDO {
     /** 操作人用户 ID。 */ private Long actorUserId;
     /** 操作人用户名快照。 */ private String actorUsername;
     /** 操作人昵称快照。 */ private String actorNickname;
+    /** 当前租户成员的实时昵称，仅用于时间线查询投影。 */
+    @TableField(exist = false)
+    private String currentActorNickname;
     /** 目标对象类型。 */ private String targetType;
     /** 目标对象业务 ID。 */ private String targetId;
     /** 目标对象名称快照。 */ private String targetName;

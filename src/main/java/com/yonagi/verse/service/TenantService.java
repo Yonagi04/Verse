@@ -33,6 +33,10 @@ public interface TenantService extends IService<TenantDO> {
     TenantSettingsRespDTO updateTenantSettings(Long userId, Long tenantId,
                                                 TenantSettingsUpdateReqDTO requestParam);
 
+    TenantActivityStatusRespDTO getTenantActivityStatus(Long userId, Long tenantId);
+
+    TenantActivityListRespDTO listTenantActivities(Long userId, Long tenantId, Integer limit, String cursor);
+
     TenantMediaUploadRespDTO uploadLogo(Long userId, Long tenantId, MultipartFile file);
 
     TenantMediaUploadRespDTO uploadBanner(Long userId, Long tenantId, MultipartFile file);

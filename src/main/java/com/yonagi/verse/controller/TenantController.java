@@ -73,6 +73,20 @@ public class TenantController {
         return Results.success(tenantService.updateTenantSettings(userId, tenantId, requestParam));
     }
 
+    @GetMapping("/{tenantId}/activities/status")
+    public Result<TenantActivityStatusRespDTO> getTenantActivityStatus(@CurrentUser Long userId,
+                                                                        @PathVariable Long tenantId) {
+        return Results.success(tenantService.getTenantActivityStatus(userId, tenantId));
+    }
+
+    @GetMapping("/{tenantId}/activities")
+    public Result<TenantActivityListRespDTO> listTenantActivities(@CurrentUser Long userId,
+                                                                   @PathVariable Long tenantId,
+                                                                   @RequestParam(required = false) Integer limit,
+                                                                   @RequestParam(required = false) String cursor) {
+        return Results.success(tenantService.listTenantActivities(userId, tenantId, limit, cursor));
+    }
+
     @PostMapping(value = "/{tenantId}/logo", consumes = "multipart/form-data")
     public Result<TenantMediaUploadRespDTO> uploadTenantLogo(@CurrentUser Long userId,
                                                               @PathVariable Long tenantId,
