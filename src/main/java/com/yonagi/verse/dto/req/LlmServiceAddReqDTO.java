@@ -27,12 +27,19 @@ public class LlmServiceAddReqDTO {
     private String provider;
 
     /** 模型提供方 API 地址。 */
-    @NotBlank(message = "供应商的API地址不能为空")
     private String apiUrl;
 
     /** 模型提供方 API Key。 */
-    @NotBlank(message = "供应商的API Key不能为空")
     private String apiKey;
+
+    /** 凭证模式；省略时使用 API_KEY。 */
+    private String credentialMode;
+
+    /** 协议专用配置，仅允许预定义字段。 */
+    private java.util.Map<String, String> providerSettings;
+
+    /** 显式启用的操作及上游协议；省略时保留旧版 Chat 行为。 */
+    private List<CapabilityBindingReqDTO> capabilities;
 
     /** 模型提供方侧的模型名称。 */
     @NotBlank(message = "供应商提供的模型名称不能为空")

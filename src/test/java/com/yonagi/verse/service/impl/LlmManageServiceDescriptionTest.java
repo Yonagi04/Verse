@@ -13,6 +13,7 @@ import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.mapper.LlmServiceMapper;
+import com.yonagi.verse.dao.mapper.LlmServiceCapabilityMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.req.LlmServiceAddReqDTO;
@@ -58,6 +59,7 @@ class LlmManageServiceDescriptionTest {
     private final AesUtil aesUtil = mock(AesUtil.class);
     private final StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
     private final LlmServiceMapper llmServiceMapper = mock(LlmServiceMapper.class);
+    private final LlmServiceCapabilityMapper capabilityMapper = mock(LlmServiceCapabilityMapper.class);
     private final RedissonClient redissonClient = mock(RedissonClient.class);
     private final LlmMetadataService metadataService = mock(LlmMetadataService.class);
     private final TenantActivityRecorder activityRecorder = mock(TenantActivityRecorder.class);
@@ -80,7 +82,8 @@ class LlmManageServiceDescriptionTest {
                 redissonClient,
                 metadataService,
                 mock(PricingConfigurationService.class),
-                activityRecorder
+                activityRecorder,
+                capabilityMapper
         );
         ReflectionTestUtils.setField(service, "baseMapper", llmServiceMapper);
         when(tenantMapper.selectOne(any())).thenReturn(new TenantDO());
@@ -247,6 +250,9 @@ class LlmManageServiceDescriptionTest {
                 .serviceId(3L)
                 .tenantId(2L)
                 .name("openai.gpt-test")
+                .provider("openai")
+                .apiUrl("https://example.invalid/v1")
+                .apiKey("encrypted")
                 .description("旧介绍")
                 .status(1)
                 .build();

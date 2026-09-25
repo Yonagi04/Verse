@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.forward;
 
 import com.yonagi.verse.common.security.UserContext;
+import com.yonagi.verse.common.enums.ModelOperation;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
@@ -27,6 +28,18 @@ public class InFlightRequestCoalescer {
      * 执行或复用一个仍在进行中的请求；首个请求结束后立即移除，不缓存历史响应。
      */
     public CoalescedResponse execute(UserContext context, String body, String requestId, Supplier<String> action) {
+        return execute(context, ModelOperation.CHAT_COMPLETIONS, "application/json", body, requestId, action);
+    }
+
+    /** 仅对安全、有限的 JSON 请求合并；操作和媒体类型参与键计算。 */
+    public CoalescedResponse execute(UserContext context, ModelOperation operation, String contentType,
+                                     String body, String requestId, Supplier<String> action) {
+        if (operation == ModelOperation.IMAGE_GENERATION || operation == ModelOperation.SPEECH
+                || operation == ModelOperation.TRANSCRIPTION || contentType == null
+                || !contentType.toLowerCase(java.util.Locale.ROOT).endsWith("json")
+                || body != null && body.length() > 1_048_576) {
+            return new CoalescedResponse(requestId, action.get());
+        }
         if (context == null || context.getCurrentTenantId() == null || context.getApiKeyId() == null) {
             return new CoalescedResponse(requestId, action.get());
         }
@@ -34,6 +47,8 @@ public class InFlightRequestCoalescer {
         RequestKey key = new RequestKey(
                 context.getCurrentTenantId(),
                 context.getApiKeyId(),
+                operation,
+                contentType,
                 sha256(body == null ? "" : body)
         );
         InFlightRequest candidate = new InFlightRequest(requestId, new CompletableFuture<>());
@@ -81,7 +96,8 @@ public class InFlightRequestCoalescer {
         }
     }
 
-    private record RequestKey(Long tenantId, Long apiKeyId, String bodyDigest) {
+    private record RequestKey(Long tenantId, Long apiKeyId, ModelOperation operation,
+                              String contentType, String bodyDigest) {
     }
 
     private record InFlightRequest(String requestId, CompletableFuture<String> response) {

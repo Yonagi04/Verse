@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.impl;
 
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.async.api.DomainEventPublisher;
@@ -11,6 +12,7 @@ import com.yonagi.verse.async.event.TokenUsageEvent;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.CostStatus;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
+import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.util.AesUtil;
@@ -25,6 +27,8 @@ import com.yonagi.verse.resilience.api.RateLimiter;
 import com.yonagi.verse.resilience.impl.Resilience4jTimeLimiter;
 import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.forward.ForwardContext;
+import com.yonagi.verse.service.forward.AdapterExchange;
+import com.yonagi.verse.service.forward.MediaOperationAdapter;
 import com.yonagi.verse.service.forward.ModelResolver;
 import com.yonagi.verse.service.forward.ProviderAdapter;
 import com.yonagi.verse.service.forward.StreamResponseAccumulator;
@@ -48,6 +52,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * LLM 转发服务实现 — 非事务同步阻塞编排：解析模型 → 限流 → 熔断 → 转发 → 失败降级 → 结算/发 Token 事件。
@@ -91,6 +96,12 @@ public class LlmForwardServiceImpl implements LlmForwardService {
 
     @Override
     public String chatCompletion(UserContext ctx, String body, String requestId, Instant requestStartedAt) {
+        return jsonCompletion(ctx, ModelOperation.CHAT_COMPLETIONS, body, requestId, requestStartedAt);
+    }
+
+    /** JSON 能力共享 Chat 的租户、限流、熔断、降级和终态编排。 */
+    public String jsonCompletion(UserContext ctx, ModelOperation operation, String body,
+                                 String requestId, Instant requestStartedAt) {
         if (ctx == null || ctx.getCurrentTenantId() == null) {
             throw new ClientException(LlmForwardErrorCodeEnum.API_KEY_INVALID);
         }
@@ -107,6 +118,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         }
 
         LlmServiceDO primary = modelResolver.resolve(tenantId, model);
+        modelResolver.requireBinding(primary, operation);
         RateLimitContext primaryCtx = buildRateContext(ctx, tenant, primary);
 
         LlmServiceDO actualService = primary;
@@ -114,27 +126,41 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         String response;
         long start = requestStartedAt.toEpochMilli();
         try {
-            response = forwardWithResilience(primary, primaryCtx, body);
+            response = forwardWithResilience(primary, primaryCtx, body, operation);
         } catch (UpstreamFailureException e) {
-            if (!e.isRetryable()) {
+            if (!e.isRetryable() || operation == ModelOperation.IMAGE_GENERATION
+                    || operation == ModelOperation.SPEECH) {
                 publishTokenUsage(
                         ctx, tenant.getTenantId(), primary, null,
-                        requestId, LlmAuditEvent.STATUS_FAIL, start
+                        requestId, LlmAuditEvent.STATUS_FAIL, start, operation
                 );
                 publishAudit(ctx, tenant, primary, body, null, requestId, start,
-                        LlmAuditEvent.STATUS_FAIL, e.getErrorCode());
+                        LlmAuditEvent.STATUS_FAIL, e.getErrorCode(), operation);
                 throw e;
             }
             // 主模型可重试失败/熔断打开 → 降级到备用模型
             LlmServiceDO fallbackService = fallbackExecutor.resolveFallback(primary);
+            if (fallbackService != null) {
+                try {
+                    if (!tenantId.equals(fallbackService.getTenantId())
+                            || !Integer.valueOf(1).equals(fallbackService.getStatus())
+                            || Integer.valueOf(1).equals(fallbackService.getDelFlag())) {
+                        fallbackService = null;
+                    } else {
+                        modelResolver.requireBinding(fallbackService, operation);
+                    }
+                } catch (ClientException unsupported) {
+                    fallbackService = null;
+                }
+            }
             if (fallbackService == null) {
                 // 无备用模型：透传主模型真实错误（含上游错误信息/熔断状态），不误报为「模型已熔断」
                 publishTokenUsage(
                         ctx, tenant.getTenantId(), primary, null,
-                        requestId, LlmAuditEvent.STATUS_FAIL, start
+                        requestId, LlmAuditEvent.STATUS_FAIL, start, operation
                 );
                 publishAudit(ctx, tenant, primary, body, null, requestId, start,
-                        LlmAuditEvent.STATUS_FAIL, e.getErrorCode());
+                        LlmAuditEvent.STATUS_FAIL, e.getErrorCode(), operation);
                 throw e;
             }
             log.warn("[llm-forward] 主模型转发失败，降级到备用模型: primary={}, fallback={}, reason={}",
@@ -143,22 +169,22 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             actualCtx = buildRateContext(ctx, tenant, fallbackService);
             try {
                 // 备用模型走完整韧性流程（限流 + 熔断 + 转发）
-                response = forwardWithResilience(fallbackService, actualCtx, body);
+                response = forwardWithResilience(fallbackService, actualCtx, body, operation);
             } catch (UpstreamFailureException e2) {
                 // 备用模型也失败：透传备用模型真实错误
                 log.warn("[llm-forward] 备用模型转发失败: fallback={}, reason={}",
                         fallbackService.getServiceId(), e2.getMessage());
                 publishTokenUsage(
                         ctx, tenant.getTenantId(), fallbackService, null,
-                        requestId, LlmAuditEvent.STATUS_FAIL, start
+                        requestId, LlmAuditEvent.STATUS_FAIL, start, operation
                 );
                 publishAudit(ctx, tenant, fallbackService, body, null, requestId, start,
-                        LlmAuditEvent.STATUS_FAIL, e2.getErrorCode());
+                        LlmAuditEvent.STATUS_FAIL, e2.getErrorCode(), operation);
                 throw e2;
             }
         }
 
-        return settleAndPublish(ctx, tenant, actualService, actualCtx, body, response, requestId, start);
+        return settleAndPublish(ctx, tenant, actualService, actualCtx, body, response, requestId, start, operation);
     }
 
     @Override
@@ -177,6 +203,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         }
 
         LlmServiceDO service = modelResolver.resolve(tenantId, bodyJson.getString("model"));
+        modelResolver.requireBinding(service, ModelOperation.CHAT_COMPLETIONS);
         RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
         rateLimiter.check(rateCtx);
 
@@ -186,12 +213,16 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                     LlmForwardErrorCodeEnum.MODEL_CIRCUIT_OPEN, true);
         }
 
-        String realApiKey = aesUtil.decrypt(service.getApiKey());
+        String realApiKey = service.getApiKey() == null ? null : aesUtil.decrypt(service.getApiKey());
         ForwardContext forwardContext = ForwardContext.builder()
                 .apiUrl(service.getApiUrl())
                 .apiKey(realApiKey)
                 .modelName(service.getModelName())
                 .body(body)
+                .operation(ModelOperation.CHAT_COMPLETIONS)
+                .protocol(modelResolver.protocolFor(service, ModelOperation.CHAT_COMPLETIONS))
+                .provider(service.getProvider())
+                .providerSettings(service.getProviderSettings())
                 .build();
 
         boolean auditEnabled = Integer.valueOf(1).equals(tenant.getAuditEnabled());
@@ -227,10 +258,165 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         });
     }
 
+    @Override
+    public Flux<ServerSentEvent<String>> responsesStream(UserContext ctx, String body,
+                                                          String requestId, Instant requestStartedAt) {
+        if (ctx == null || ctx.getCurrentTenantId() == null) {
+            throw new ClientException(LlmForwardErrorCodeEnum.API_KEY_INVALID);
+        }
+        TenantDO tenant = validateTenant(ctx.getCurrentTenantId());
+        JSONObject json = JSON.parseObject(body);
+        if (json == null || !StringUtils.hasText(json.getString("model"))) {
+            throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_FOUND);
+        }
+        LlmServiceDO service = modelResolver.resolve(tenant.getTenantId(), json.getString("model"));
+        var protocol = modelResolver.protocolFor(service, ModelOperation.RESPONSES);
+        RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
+        rateLimiter.check(rateCtx);
+        String serviceId = String.valueOf(service.getServiceId());
+        if (circuitBreaker.isOpen(serviceId)) {
+            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.MODEL_CIRCUIT_OPEN.message(),
+                    LlmForwardErrorCodeEnum.MODEL_CIRCUIT_OPEN, true);
+        }
+        ForwardContext forwardContext = ForwardContext.builder()
+                .apiUrl(service.getApiUrl())
+                .apiKey(service.getApiKey() == null ? null : aesUtil.decrypt(service.getApiKey()))
+                .modelName(service.getModelName()).body(body)
+                .operation(ModelOperation.RESPONSES).protocol(protocol)
+                .provider(service.getProvider()).providerSettings(service.getProviderSettings()).build();
+
+        return Flux.defer(() -> {
+            AtomicBoolean firstEvent = new AtomicBoolean();
+            AtomicBoolean finalized = new AtomicBoolean();
+            AtomicReference<JSONObject> terminal = new AtomicReference<>();
+            AtomicReference<String> terminalStatus = new AtomicReference<>(LlmAuditEvent.STATUS_ABORTED);
+            long start = requestStartedAt.toEpochMilli();
+            return providerAdapter.stream(forwardContext)
+                    .timeout(Duration.ofMillis(streamIdleTimeoutMs))
+                    .publishOn(Schedulers.boundedElastic())
+                    .doOnNext(event -> {
+                        if (firstEvent.compareAndSet(false, true)) circuitBreaker.recordSuccess(serviceId);
+                        String name = event.event();
+                        if ("response.completed".equals(name) || "response.failed".equals(name)
+                                || "response.incomplete".equals(name)) {
+                            try {
+                                JSONObject envelope = JSON.parseObject(event.data());
+                                terminal.set(envelope == null ? null : envelope.getJSONObject("response"));
+                            } catch (RuntimeException ignored) {
+                                terminal.set(null);
+                            }
+                            terminalStatus.set("response.completed".equals(name) ? LlmAuditEvent.STATUS_SUCCESS
+                                    : "response.failed".equals(name) ? LlmAuditEvent.STATUS_FAIL
+                                    : LlmAuditEvent.STATUS_ABORTED);
+                        }
+                    })
+                    .doOnComplete(() -> finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
+                            body, requestId, start, terminal.get(), terminalStatus.get()))
+                    .doOnCancel(() -> finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
+                            body, requestId, start, terminal.get(), LlmAuditEvent.STATUS_ABORTED))
+                    .doOnError(error -> {
+                        if (!firstEvent.get()) circuitBreaker.recordFailure(serviceId);
+                        finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
+                                body, requestId, start, terminal.get(), LlmAuditEvent.STATUS_FAIL);
+                    });
+        });
+    }
+
+    @Override
+    public AdapterExchange.Result media(UserContext ctx, ModelOperation operation, String modelAlias,
+                                        AdapterExchange.Request request, String requestId,
+                                        Instant requestStartedAt) {
+        if (ctx == null || ctx.getCurrentTenantId() == null) {
+            throw new ClientException(LlmForwardErrorCodeEnum.API_KEY_INVALID);
+        }
+        TenantDO tenant = validateTenant(ctx.getCurrentTenantId());
+        LlmServiceDO service = modelResolver.resolve(tenant.getTenantId(), modelAlias);
+        var protocol = modelResolver.protocolFor(service, operation);
+        RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
+        rateLimiter.check(rateCtx);
+        String serviceId = String.valueOf(service.getServiceId());
+        if (circuitBreaker.isOpen(serviceId)) {
+            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.MODEL_CIRCUIT_OPEN.message(),
+                    LlmForwardErrorCodeEnum.MODEL_CIRCUIT_OPEN, true);
+        }
+        ForwardContext context = ForwardContext.builder().apiUrl(service.getApiUrl())
+                .apiKey(service.getApiKey() == null ? null : aesUtil.decrypt(service.getApiKey()))
+                .modelName(service.getModelName()).operation(operation).protocol(protocol)
+                .provider(service.getProvider()).providerSettings(service.getProviderSettings()).build();
+        if (!(providerAdapter instanceof MediaOperationAdapter mediaAdapter)) {
+            throw new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED);
+        }
+        String safeRequest = mediaPreview(request);
+        long start = requestStartedAt.toEpochMilli();
+        try {
+            AdapterExchange.Result result = mediaAdapter.invoke(context, request);
+            circuitBreaker.recordSuccess(serviceId);
+            JSONObject envelope = new JSONObject();
+            if (result.usage().raw() != null) envelope.put("usage", result.usage().raw());
+            if (result.usage().audioDurationMs() != null) {
+                envelope.put("verse_audio_duration_ms", result.usage().audioDurationMs());
+            }
+            UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), envelope);
+            settleRateLimitSafely(rateCtx, safeTokenCount(normalized.totalTokens()));
+            publishTokenUsage(ctx, tenant.getTenantId(), service, envelope, requestId,
+                    LlmAuditEvent.STATUS_SUCCESS, start, operation);
+            publishAudit(ctx, tenant, service, safeRequest, JSON.toJSONString(result instanceof AdapterExchange.BinaryResult binary
+                    ? binary.auditMetadata() : java.util.Map.of()), requestId, start,
+                    LlmAuditEvent.STATUS_SUCCESS, null, operation);
+            return result;
+        } catch (UpstreamFailureException e) {
+            if (e.isRetryable()) circuitBreaker.recordFailure(serviceId);
+            publishTokenUsage(ctx, tenant.getTenantId(), service, null, requestId,
+                    LlmAuditEvent.STATUS_FAIL, start, operation);
+            publishAudit(ctx, tenant, service, safeRequest, null, requestId, start,
+                    LlmAuditEvent.STATUS_FAIL, e.getErrorCode(), operation);
+            throw e;
+        } catch (RuntimeException e) {
+            publishTokenUsage(ctx, tenant.getTenantId(), service, null, requestId,
+                    LlmAuditEvent.STATUS_FAIL, start, operation);
+            publishAudit(ctx, tenant, service, safeRequest, null, requestId, start,
+                    LlmAuditEvent.STATUS_FAIL, errorCode(e), operation);
+            throw e;
+        }
+    }
+
+    private String mediaPreview(AdapterExchange.Request request) {
+        JSONObject preview = new JSONObject();
+        preview.put("operation", request.operation().name());
+        if (request instanceof AdapterExchange.MultipartRequest multipart) {
+            preview.put("filename", multipart.filename());
+            preview.put("mime", multipart.fileType().toString());
+            preview.put("bytes", multipart.file().length);
+        } else if (request instanceof AdapterExchange.JsonRequest json) {
+            preview.put("voice", json.body().getString("voice"));
+            preview.put("format", json.body().getString("response_format"));
+            preview.put("inputLength", json.body().getString("input") == null
+                    ? 0 : json.body().getString("input").length());
+        }
+        return JSON.toJSONString(preview);
+    }
+
+    private void finalizeResponsesStreamOnce(AtomicBoolean finalized, UserContext ctx, TenantDO tenant,
+                                             LlmServiceDO service, RateLimitContext rateCtx,
+                                             String body, String requestId, long start,
+                                             JSONObject response, String status) {
+        if (!finalized.compareAndSet(false, true)) return;
+        UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), response);
+        settleRateLimitSafely(rateCtx, safeTokenCount(normalized.totalTokens()));
+        String source = usageObject(response) == null ? TokenUsageEvent.SOURCE_UNKNOWN
+                : LlmAuditEvent.STATUS_SUCCESS.equals(status)
+                ? TokenUsageEvent.SOURCE_EXACT : TokenUsageEvent.SOURCE_ESTIMATED;
+        publishTokenUsage(ctx, tenant.getTenantId(), service, response, requestId, status,
+                source, start, ModelOperation.RESPONSES);
+        publishAudit(ctx, tenant, service, body, response == null ? null : response.toJSONString(),
+                requestId, start, status, null, ModelOperation.RESPONSES);
+    }
+
     /**
      * 单次转发 + 韧性包裹：限流检查 → 熔断判断 → 上游调用（超时 + 短重试）→ 记录成功/失败。
      */
-    private String forwardWithResilience(LlmServiceDO service, RateLimitContext rateCtx, String body) {
+    private String forwardWithResilience(LlmServiceDO service, RateLimitContext rateCtx,
+                                         String body, ModelOperation operation) {
         rateLimiter.check(rateCtx);
 
         String serviceId = String.valueOf(service.getServiceId());
@@ -239,15 +425,21 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                     LlmForwardErrorCodeEnum.MODEL_CIRCUIT_OPEN, true);
         }
 
-        String realApiKey = aesUtil.decrypt(service.getApiKey());
+        String realApiKey = service.getApiKey() == null ? null : aesUtil.decrypt(service.getApiKey());
         ForwardContext forwardContext = ForwardContext.builder()
                 .apiUrl(service.getApiUrl())
                 .apiKey(realApiKey)
                 .modelName(service.getModelName())
                 .body(body)
+                .operation(operation)
+                .protocol(modelResolver.protocolFor(service, operation))
+                .provider(service.getProvider())
+                .providerSettings(service.getProviderSettings())
                 .build();
 
-        int maxAttempts = Math.max(1, maxRetries + 1);
+        // 图片和语音生成可能已在上游执行，不能对不确定结果自动重试。
+        int maxAttempts = operation == ModelOperation.IMAGE_GENERATION || operation == ModelOperation.SPEECH
+                ? 1 : Math.max(1, maxRetries + 1);
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
                 String response = timeLimiter.execute(() -> providerAdapter.forward(forwardContext));
@@ -287,16 +479,22 @@ public class LlmForwardServiceImpl implements LlmForwardService {
 
     private String settleAndPublish(UserContext ctx, TenantDO tenant, LlmServiceDO service,
                                     RateLimitContext rateCtx, String body, String response,
-                                    String requestId, long start) {
+                                    String requestId, long start, ModelOperation operation) {
         JSONObject responseEnvelope = parseResponseEnvelope(response);
+        if (operation == ModelOperation.RERANK && responseEnvelope != null) {
+            try {
+                JSONArray documents = JSON.parseObject(body).getJSONArray("documents");
+                if (documents != null) responseEnvelope.put("verse_rerank_document_count", documents.size());
+            } catch (RuntimeException ignored) { /* 请求已由适配器验证。 */ }
+        }
         UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), responseEnvelope);
         int totalTokens = safeTokenCount(normalized.totalTokens());
         // 同步结算，保证「拦后续请求」及时生效；token 归属实际服务 serviceId
         settleRateLimitSafely(rateCtx, totalTokens);
         publishTokenUsage(ctx, tenant.getTenantId(), service, responseEnvelope, requestId,
-                LlmAuditEvent.STATUS_SUCCESS, start);
+                LlmAuditEvent.STATUS_SUCCESS, start, operation);
         publishAudit(ctx, tenant, service, body, response, requestId, start,
-                LlmAuditEvent.STATUS_SUCCESS, null);
+                LlmAuditEvent.STATUS_SUCCESS, null, operation);
         return response;
     }
 
@@ -306,6 +504,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private void publishAudit(UserContext ctx, TenantDO tenant, LlmServiceDO service,
                               String body, String response, String requestId,
                               long start, String status, String errorCode) {
+        publishAudit(ctx, tenant, service, body, response, requestId, start,
+                status, errorCode, ModelOperation.CHAT_COMPLETIONS);
+    }
+
+    private void publishAudit(UserContext ctx, TenantDO tenant, LlmServiceDO service,
+                              String body, String response, String requestId,
+                              long start, String status, String errorCode, ModelOperation operation) {
         if (!Integer.valueOf(1).equals(tenant.getAuditEnabled())) {
             return;
         }
@@ -316,18 +521,38 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         event.setApiKeyId(ctx.getApiKeyId());
         event.setServiceId(service.getServiceId());
         event.setModel(service.getName());
-        event.setPrompt(body);
-        event.setResponse(response);
+        event.setPrompt(boundedAudit(body, operation));
+        event.setResponse(boundedAudit(response, operation));
         event.setLatencyMs((int) (System.currentTimeMillis() - start));
         event.setStatus(status);
         event.setErrorCode(errorCode);
         if (LlmAuditEvent.STATUS_SUCCESS.equals(status)) {
-            JSONObject usage = usageObject(parseResponseEnvelope(response));
-            event.setPromptTokens(getInt(usage, "prompt_tokens"));
-            event.setCompletionTokens(getInt(usage, "completion_tokens"));
-            event.setTotalTokens(getInt(usage, "total_tokens"));
+            // Responses 使用 input/output_tokens；统一解析后写入审计，避免丢失其用量。
+            UsageBreakdown usage = usageNormalizerRegistry.normalize(service.getProvider(),
+                    parseResponseEnvelope(response));
+            event.setPromptTokens(usage.inputTokens() == null ? null : safeTokenCount(usage.inputTokens()));
+            event.setCompletionTokens(usage.outputTokens() == null ? null : safeTokenCount(usage.outputTokens()));
+            event.setTotalTokens(usage.totalTokens() == null ? null : safeTokenCount(usage.totalTokens()));
         }
         publishEventSafely(event);
+    }
+
+    private String boundedAudit(String value, ModelOperation operation) {
+        if (value == null) return null;
+        if (operation == ModelOperation.IMAGE_GENERATION && value.contains("b64_json")) {
+            try {
+                JSONObject json = JSON.parseObject(value);
+                if (json != null && json.getJSONArray("data") != null) {
+                    for (Object item : json.getJSONArray("data")) {
+                        if (item instanceof JSONObject image && image.containsKey("b64_json")) {
+                            image.put("b64_json", "[redacted]");
+                        }
+                    }
+                    value = JSON.toJSONString(json);
+                }
+            } catch (RuntimeException ignored) { return "[unavailable]"; }
+        }
+        return value.length() > 16_384 ? value.substring(0, 16_384) : value;
     }
 
     @Override
@@ -359,10 +584,18 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private void publishTokenUsage(UserContext ctx, Long tenantId, LlmServiceDO service,
                                    JSONObject responseEnvelope, String requestId, String status,
                                    long requestStartedAt) {
-        String usageSource = usageObject(responseEnvelope) == null
-                ? TokenUsageEvent.SOURCE_UNKNOWN : TokenUsageEvent.SOURCE_EXACT;
+        publishTokenUsage(ctx, tenantId, service, responseEnvelope, requestId, status,
+                requestStartedAt, ModelOperation.CHAT_COMPLETIONS);
+    }
+
+    private void publishTokenUsage(UserContext ctx, Long tenantId, LlmServiceDO service,
+                                   JSONObject responseEnvelope, String requestId, String status,
+                                   long requestStartedAt, ModelOperation operation) {
+        UsageBreakdown evidence = usageNormalizerRegistry.normalize(service.getProvider(), responseEnvelope);
+        String usageSource = evidence.valid() ? TokenUsageEvent.SOURCE_EXACT
+                : TokenUsageEvent.SOURCE_UNKNOWN;
         publishTokenUsage(ctx, tenantId, service, responseEnvelope, requestId, status, usageSource,
-                requestStartedAt);
+                requestStartedAt, operation);
     }
 
     /**
@@ -400,6 +633,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private void publishTokenUsage(UserContext ctx, Long tenantId, LlmServiceDO service,
                                    JSONObject responseEnvelope, String requestId, String status,
                                    String usageSource, long requestStartedAt) {
+        publishTokenUsage(ctx, tenantId, service, responseEnvelope, requestId, status, usageSource,
+                requestStartedAt, ModelOperation.CHAT_COMPLETIONS);
+    }
+
+    private void publishTokenUsage(UserContext ctx, Long tenantId, LlmServiceDO service,
+                                   JSONObject responseEnvelope, String requestId, String status,
+                                   String usageSource, long requestStartedAt, ModelOperation operation) {
         if (!costingEnabled) {
             return;
         }
@@ -409,6 +649,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         event.setApiKeyId(ctx.getApiKeyId());
         event.setServiceId(service.getServiceId());
         event.setModel(service.getName());
+        event.setOperation(operation.name());
         event.setRequestId(requestId);
         event.setStatus(status);
         event.setUsageSource(usageSource);
@@ -417,9 +658,21 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         try {
             UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), responseEnvelope);
             event.setNormalizedUsage(normalized);
-            event.setPromptTokens(safeTokenCount(normalized.inputTokens()));
-            event.setCompletionTokens(safeTokenCount(normalized.outputTokens()));
-            event.setTotalTokens(safeTokenCount(normalized.totalTokens()));
+            // 缺失 Token 证据必须保持空值，不能写成精确零消耗。
+            event.setPromptTokens(normalized.inputTokens() == null ? null : safeTokenCount(normalized.inputTokens()));
+            event.setCompletionTokens(normalized.outputTokens() == null ? null : safeTokenCount(normalized.outputTokens()));
+            event.setTotalTokens(normalized.totalTokens() == null ? null : safeTokenCount(normalized.totalTokens()));
+            if (operation == ModelOperation.IMAGE_GENERATION && responseEnvelope != null
+                    && responseEnvelope.getJSONArray("data") != null) {
+                event.setImageCount(responseEnvelope.getJSONArray("data").size());
+            }
+            if (operation == ModelOperation.RERANK && responseEnvelope != null
+                    && responseEnvelope.getInteger("verse_rerank_document_count") != null) {
+                event.setRerankDocumentCount(responseEnvelope.getInteger("verse_rerank_document_count"));
+            }
+            if (operation == ModelOperation.TRANSCRIPTION && responseEnvelope != null) {
+                event.setAudioDurationMs(responseEnvelope.getLong("verse_audio_duration_ms"));
+            }
             event.setUsageDetailsJson(normalized.rawUsage() == null
                     ? null : JSON.toJSONString(normalized.rawUsage()));
             if (LlmAuditEvent.STATUS_SUCCESS.equals(status)) {

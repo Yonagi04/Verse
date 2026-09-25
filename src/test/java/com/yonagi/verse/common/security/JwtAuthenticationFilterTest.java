@@ -20,6 +20,14 @@ import static org.mockito.Mockito.*;
 class JwtAuthenticationFilterTest {
 
     @Test
+    void rerankUsesApiKeyAuthentication() {
+        Fixture fixture = fixture(new CurrentTenantState());
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/rerank");
+        request.setServletPath("/api/v1/rerank");
+        assertTrue(fixture.filter.shouldNotFilter(request));
+    }
+
+    @Test
     void authenticatedUserWithoutTenantKeepsLoginButReceivesNoTenantAuthorities() throws Exception {
         Fixture fixture = fixture(new CurrentTenantState());
         AtomicReference<UserContext> captured = new AtomicReference<>();

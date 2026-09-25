@@ -16,12 +16,15 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.Date;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -55,7 +58,8 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getServletPath().startsWith(OPENAI_PATH_PREFIX);
+        String path = request.getServletPath();
+        return !(path.startsWith(OPENAI_PATH_PREFIX + "/") || "/api/v1/rerank".equals(path));
     }
 
     @Override
@@ -81,6 +85,9 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                 .setApiKeyRateLimitRpm(apiKey.getRateLimitRpm())
                 .setApiKeyRateLimitTpm(apiKey.getRateLimitTpm());
         UserContextHolder.set(ctx);
+        // API Key 路由也建立 Spring Security 认证，供精确路径和后续安全规则统一识别。
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(ctx, null, List.of()));
         // 合法 Key 每次通过鉴权后异步更新最近使用时间，不等待模型响应或计费事件。
         apiKeyUsageRecorder.record(apiKey.getApiKeyId(), new Date());
 
@@ -88,6 +95,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
             filterChain.doFilter(request, response);
         } finally {
             UserContextHolder.clear();
+            SecurityContextHolder.clearContext();
         }
     }
 

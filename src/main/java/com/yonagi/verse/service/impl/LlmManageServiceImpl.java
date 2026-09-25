@@ -22,6 +22,10 @@ import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.common.util.SensitiveUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
+import com.yonagi.verse.dao.entity.LlmServiceCapabilityDO;
+import com.yonagi.verse.dao.mapper.LlmServiceCapabilityMapper;
+import com.yonagi.verse.dto.req.CapabilityBindingReqDTO;
+import com.yonagi.verse.service.forward.CapabilityConfiguration;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.entity.UserDO;
 import com.yonagi.verse.dao.mapper.LlmServiceMapper;
@@ -78,6 +82,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     private final LlmMetadataService metadataService;
     private final PricingConfigurationService pricingConfigurationService;
     private final TenantActivityRecorder activityRecorder;
+    private final LlmServiceCapabilityMapper capabilityMapper;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -97,7 +102,12 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         try {
             if (lock.tryLock(3, 30, TimeUnit.SECONDS)) {
                 try {
-                    String encryptApiKey = aesUtil.encrypt(requestParam.getApiKey());
+                    List<CapabilityBindingReqDTO> bindings = CapabilityConfiguration.normalize(requestParam.getCapabilities());
+                    var credentialMode = CapabilityConfiguration.validate(requestParam.getProvider(),
+                            requestParam.getCredentialMode(), requestParam.getApiUrl(), requestParam.getApiKey(),
+                            requestParam.getProviderSettings(), bindings);
+                    String encryptApiKey = credentialMode.name().equals("API_KEY")
+                            ? aesUtil.encrypt(requestParam.getApiKey()) : null;
                     Long llmServiceId = SnowflakeIdUtil.nextId();
                     LlmServiceDO llmServiceDO = LlmServiceDO.builder()
                             .serviceId(llmServiceId)
@@ -106,6 +116,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                             .provider(requestParam.getProvider())
                             .apiUrl(requestParam.getApiUrl())
                             .apiKey(encryptApiKey)
+                            .credentialMode(credentialMode.name())
+                            .providerSettings(requestParam.getProviderSettings() == null ? null
+                                    : JSON.toJSONString(requestParam.getProviderSettings()))
                             .modelName(requestParam.getModelName())
                             .description(normalizeDescription(requestParam.getDescription()))
                             .status(1)
@@ -128,6 +141,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                                 .eq(LlmServiceDO::getServiceId, llmServiceId)
                                 .set(LlmServiceDO::getActivePricingId, llmServiceDO.getActivePricingId()));
                     }
+                    replaceCapabilities(llmServiceId, bindings);
                     record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_CREATED).actor(userId)
                             .target(TenantActivityTargetType.LLM_SERVICE, llmServiceId, llmServiceDO.getName())
                             .detail("provider", llmServiceDO.getProvider()).detail("modelName", llmServiceDO.getModelName()));
@@ -222,6 +236,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             return JSON.parseArray(json, LlmServiceListRespDTO.LlmServiceInfo.class);
         }
         List<LlmServiceListRespDTO.LlmServiceInfo> list = baseMapper.selectByTenantId(tenantId);
+        list.forEach(info -> info.setCapabilities(getCapabilities(info.getServiceId())));
         stringRedisTemplate.opsForValue().set(key, JSON.toJSONString(list), 30, TimeUnit.MINUTES);
         return list;
     }
@@ -258,7 +273,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 && requestParam.getContextWindow() == null
                 && requestParam.getMaxOutputTokens() == null
                 && requestParam.getPricing() == null) {
+            if (requestParam.getCapabilities() == null && requestParam.getCredentialMode() == null
+                    && requestParam.getProviderSettings() == null) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_UPDATE_PARAM_EMPTY);
+            }
         }
         // 查询对应的服务是否存在 or 是否启用
         LlmServiceDO llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
@@ -269,6 +287,22 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             throw new ClientException(LlmManageErrorCodeEnum.LLM_SERVICE_IS_NOT_EXIST);
         } else if (llmServiceDO.getStatus() == 0) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_CAN_NOT_UPDATE);
+        }
+        List<CapabilityBindingReqDTO> bindings = requestParam.getCapabilities() == null
+                ? getCapabilities(serviceId) : CapabilityConfiguration.normalize(requestParam.getCapabilities());
+        Long fallbackId = requestParam.getFallbackServiceId() == null ? llmServiceDO.getFallbackServiceId()
+                : requestParam.getFallbackServiceId() > 0 ? requestParam.getFallbackServiceId() : null;
+        if (fallbackId != null) validateFallback(tenantId, serviceId, fallbackId, bindings);
+        String mode = requestParam.getCredentialMode() == null ? llmServiceDO.getCredentialMode() : requestParam.getCredentialMode();
+        Map<String, String> settings = requestParam.getProviderSettings() == null
+                ? parseSettings(llmServiceDO.getProviderSettings()) : requestParam.getProviderSettings();
+        if (requestParam.getCapabilities() != null || requestParam.getCredentialMode() != null
+                || requestParam.getProviderSettings() != null || StrUtil.isNotBlank(requestParam.getApiUrl())
+                || StrUtil.isNotBlank(requestParam.getApiKey())) {
+            CapabilityConfiguration.validate(llmServiceDO.getProvider(), mode,
+                    StrUtil.isNotBlank(requestParam.getApiUrl()) ? requestParam.getApiUrl() : llmServiceDO.getApiUrl(),
+                    StrUtil.isNotBlank(requestParam.getApiKey()) ? requestParam.getApiKey() : llmServiceDO.getApiKey(),
+                    settings, bindings);
         }
         validateTokenLimits(llmServiceDO, requestParam.getContextWindow(), requestParam.getMaxOutputTokens(), false);
         List<String> oldTagCodes = requestParam.getTagCodes() == null
@@ -309,6 +343,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             );
             stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
         }
+        if (requestParam.getCapabilities() != null) replaceCapabilities(serviceId, bindings);
         if (!changedFields.isEmpty()) record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_UPDATED).actor(userId)
                 .target(TenantActivityTargetType.LLM_SERVICE, serviceId, newName == null ? llmServiceDO.getName() : newName)
                 .detail("changedFields", changedFields)
@@ -329,7 +364,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 || requestParam.getTpm() != null
                 || requestParam.getFallbackServiceId() != null
                 || requestParam.getContextWindow() != null
-                || requestParam.getMaxOutputTokens() != null;
+                || requestParam.getMaxOutputTokens() != null
+                || requestParam.getCredentialMode() != null
+                || requestParam.getProviderSettings() != null;
     }
 
     /**
@@ -386,6 +423,13 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         if (StrUtil.isNotBlank(requestParam.getApiKey())) {
             updateWrapper.set(LlmServiceDO::getApiKey, aesUtil.encrypt(requestParam.getApiKey()));
         }
+        if (requestParam.getCredentialMode() != null) {
+            updateWrapper.set(LlmServiceDO::getCredentialMode, requestParam.getCredentialMode());
+            if (!"API_KEY".equals(requestParam.getCredentialMode())) updateWrapper.set(LlmServiceDO::getApiKey, null);
+        }
+        if (requestParam.getProviderSettings() != null) {
+            updateWrapper.set(LlmServiceDO::getProviderSettings, JSON.toJSONString(requestParam.getProviderSettings()));
+        }
         if (requestParam.getDescription() != null) {
             updateWrapper.set(LlmServiceDO::getDescription, normalizeDescription(requestParam.getDescription()));
         }
@@ -400,7 +444,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                     ? requestParam.getFallbackServiceId()
                     : null;
             if (fallbackServiceId != null) {
-                validateFallback(tenantId, serviceId, fallbackServiceId);
+                List<CapabilityBindingReqDTO> effectiveBindings = requestParam.getCapabilities() == null
+                        ? getCapabilities(serviceId)
+                        : CapabilityConfiguration.normalize(requestParam.getCapabilities());
+                validateFallback(tenantId, serviceId, fallbackServiceId, effectiveBindings);
             }
             updateWrapper.set(LlmServiceDO::getFallbackServiceId, fallbackServiceId);
         }
@@ -433,6 +480,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         String cacheKey = RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId;
         String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
         LlmServiceDO llmServiceDO = JSON.parseObject(cachedJson, LlmServiceDO.class);
+        if (llmServiceDO != null && (!tenantId.equals(llmServiceDO.getTenantId())
+                || !Integer.valueOf(0).equals(llmServiceDO.getDelFlag()))) {
+            llmServiceDO = null;
+        }
         boolean isReadFromCache = true;
         if (llmServiceDO == null) {
             isReadFromCache = false;
@@ -451,12 +502,15 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 .eq(UserDO::getStatus, 1)
                 .eq(UserDO::getDelFlag, 0));
         String createUsername = createByUser != null ? createByUser.getUsername() : "已注销用户";
-        String maskedApiKey = SensitiveUtil.maskApiKey(aesUtil.decrypt(llmServiceDO.getApiKey()));
+        String maskedApiKey = llmServiceDO.getApiKey() == null ? null
+                : SensitiveUtil.maskApiKey(aesUtil.decrypt(llmServiceDO.getApiKey()));
 
         LlmServiceInfoRespDTO respDTO = new LlmServiceInfoRespDTO();
         BeanUtil.copyProperties(llmServiceDO, respDTO);
         respDTO.setCreatedByUsername(createUsername);
         respDTO.setApiKey(maskedApiKey);
+        respDTO.setProviderSettings(parseSettings(llmServiceDO.getProviderSettings()));
+        respDTO.setCapabilities(getCapabilities(serviceId));
         respDTO.setTagCodes(metadataService.tags(serviceId));
         respDTO.setPricing(pricingConfigurationService.current(serviceId));
         // 如果没命中缓存，就写回
@@ -665,6 +719,11 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
      * 校验备用模型：不能映射到自身，且必须是同租户内启用且未删除的服务。
      */
     private void validateFallback(Long tenantId, Long serviceId, Long fallbackServiceId) {
+        validateFallback(tenantId, serviceId, fallbackServiceId, getCapabilities(serviceId));
+    }
+
+    private void validateFallback(Long tenantId, Long serviceId, Long fallbackServiceId,
+                                  List<CapabilityBindingReqDTO> sourceBindings) {
         if (serviceId.equals(fallbackServiceId)) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_FALLBACK_ID_INVALID);
         }
@@ -675,6 +734,13 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 .eq(LlmServiceDO::getDelFlag, 0));
         if (fallback == null) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_FALLBACK_INVALID);
+        }
+        List<CapabilityBindingReqDTO> targetBindings = getCapabilities(fallbackServiceId);
+        for (CapabilityBindingReqDTO source : sourceBindings) {
+            if (Boolean.FALSE.equals(source.getEnabled())) continue;
+            boolean compatible = targetBindings.stream().anyMatch(target ->
+                    source.getOperation().equals(target.getOperation()) && !Boolean.FALSE.equals(target.getEnabled()));
+            if (!compatible) throw new ClientException(LlmManageErrorCodeEnum.LLM_FALLBACK_INVALID);
         }
     }
 
@@ -689,6 +755,38 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
+    }
+
+    /** 原子替换能力绑定；服务更新事务同时清除路由缓存。 */
+    private void replaceCapabilities(Long serviceId, List<CapabilityBindingReqDTO> bindings) {
+        capabilityMapper.delete(Wrappers.lambdaQuery(LlmServiceCapabilityDO.class)
+                .eq(LlmServiceCapabilityDO::getServiceId, serviceId));
+        for (CapabilityBindingReqDTO binding : bindings) {
+            LlmServiceCapabilityDO row = new LlmServiceCapabilityDO();
+            row.setServiceId(serviceId);
+            row.setOperation(binding.getOperation());
+            row.setUpstreamProtocol(binding.getUpstreamProtocol());
+            row.setEnabled(Boolean.FALSE.equals(binding.getEnabled()) ? 0 : 1);
+            capabilityMapper.insert(row);
+        }
+    }
+
+    private List<CapabilityBindingReqDTO> getCapabilities(Long serviceId) {
+        List<LlmServiceCapabilityDO> rows = capabilityMapper.selectList(Wrappers.lambdaQuery(LlmServiceCapabilityDO.class)
+                .eq(LlmServiceCapabilityDO::getServiceId, serviceId));
+        if (rows.isEmpty()) return CapabilityConfiguration.normalize(null);
+        return rows.stream().map(row -> {
+            CapabilityBindingReqDTO binding = new CapabilityBindingReqDTO();
+            binding.setOperation(row.getOperation());
+            binding.setUpstreamProtocol(row.getUpstreamProtocol());
+            binding.setEnabled(Integer.valueOf(1).equals(row.getEnabled()));
+            return binding;
+        }).toList();
+    }
+
+    private Map<String, String> parseSettings(String json) {
+        if (StrUtil.isBlank(json)) return Map.of();
+        return JSON.parseObject(json, new com.alibaba.fastjson2.TypeReference<Map<String, String>>() {});
     }
 
     private List<String> llmChangedFields(LlmServiceDO old, LlmServiceUpdateReqDTO request,
@@ -713,6 +811,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 && !Objects.equals(old.getMaxOutputTokens(), request.getMaxOutputTokens() == 0 ? null : request.getMaxOutputTokens())) fields.add("maxOutputTokens");
         if (request.getPricing() != null) fields.add("pricing");
         if (StrUtil.isNotBlank(request.getApiKey())) fields.add("credential");
+        if (request.getCredentialMode() != null) fields.add("credentialMode");
+        if (request.getProviderSettings() != null) fields.add("providerSettings");
+        if (request.getCapabilities() != null) fields.add("capabilities");
         return fields;
     }
 

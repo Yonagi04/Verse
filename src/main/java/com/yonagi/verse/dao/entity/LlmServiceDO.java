@@ -57,6 +57,12 @@ public class LlmServiceDO extends BaseDO {
      */
     private String apiKey;
 
+    /** 凭证模式：API_KEY、NONE 或 AWS_CHAIN。 */
+    private String credentialMode;
+
+    /** 校验后的供应商配置 JSON。 */
+    private String providerSettings;
+
     /**
      * 模型名(转发给模型厂商使用)
      */

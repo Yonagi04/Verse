@@ -55,7 +55,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
         // /ws 走 WebSocket 握手认证；/api/v1/openai/** 走 API Key 认证（ApiKeyAuthenticationFilter）
-        return path.startsWith("/ws") || path.startsWith("/api/v1/openai");
+        return path.startsWith("/ws") || path.startsWith("/api/v1/openai/")
+                || "/api/v1/rerank".equals(path);
     }
 
     @Override

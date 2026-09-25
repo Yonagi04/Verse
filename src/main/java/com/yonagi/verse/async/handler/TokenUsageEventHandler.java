@@ -50,6 +50,10 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
         tokenUsage.setApiKeyId(event.getApiKeyId());
         tokenUsage.setServiceId(event.getServiceId());
         tokenUsage.setModel(event.getModel());
+        tokenUsage.setOperation(event.getOperation() == null ? "CHAT_COMPLETIONS" : event.getOperation());
+        tokenUsage.setImageCount(event.getImageCount());
+        tokenUsage.setAudioDurationMs(event.getAudioDurationMs());
+        tokenUsage.setRerankDocumentCount(event.getRerankDocumentCount());
         tokenUsage.setPromptTokens(event.getPromptTokens());
         tokenUsage.setCompletionTokens(event.getCompletionTokens());
         tokenUsage.setTotalTokens(event.getTotalTokens());

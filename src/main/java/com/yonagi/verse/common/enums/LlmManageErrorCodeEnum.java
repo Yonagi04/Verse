@@ -27,6 +27,7 @@ public enum LlmManageErrorCodeEnum implements IErrorCode {
     LLM_PRICING_INCOMPLETE("A000713", "计费方式或必填价格不完整"),
     LLM_PRICE_INVALID("A000714", "价格非法"),
     LLM_PEAK_PERIOD_INVALID("A000715", "高峰期规则非法"),
+    LLM_CAPABILITY_INVALID("A000716", "模型能力或协议配置不合法"),
 
     LLM_ADD_FAILED("B000700", "添加模型失败"),
     LLM_UPDATE_FAILED("B000701", "更新模型失败"),

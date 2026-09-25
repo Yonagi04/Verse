@@ -5,6 +5,9 @@ import com.alibaba.fastjson2.JSONObject;
 import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
+import com.yonagi.verse.common.enums.ModelOperation;
+import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.service.forward.AdapterExchange;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.security.UserContextHolder;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
@@ -16,6 +19,13 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.http.codec.ServerSentEvent;
 import org.reactivestreams.Publisher;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,6 +38,8 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 import java.time.Instant;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * LLM 转发控制器 — OpenAI 兼容端点，不走 Result 包装，直接透传 OpenAI 响应。
@@ -50,6 +62,128 @@ public class LlmForwardController {
 
     private final LlmForwardService llmForwardService;
     private final InFlightRequestCoalescer inFlightRequestCoalescer;
+
+    @Value("${verse.llm.media.max-upload-bytes:26214400}")
+    private long maxUploadBytes = 25L * 1024 * 1024;
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Publisher<String>> oversizedMultipart(MaxUploadSizeExceededException ignored) {
+        String requestId = String.valueOf(SnowflakeIdUtil.nextId());
+        return toOpenAiError(new ClientException(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE), requestId);
+    }
+
+    @PostMapping(value = "/audio/transcriptions", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<?> transcribe(@RequestParam("model") String model,
+                                         @RequestPart("file") MultipartFile file,
+                                         @RequestParam(value = "response_format", required = false) String format,
+                                         @RequestParam(value = "language", required = false) String language,
+                                         @RequestParam(value = "prompt", required = false) String prompt,
+                                         @RequestParam(value = "temperature", required = false) String temperature) {
+        String requestId = String.valueOf(SnowflakeIdUtil.nextId());
+        try {
+            if (file.getSize() > maxUploadBytes) throw new ClientException(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE);
+            if (file.getContentType() == null) throw new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED);
+            Map<String, String> fields = new LinkedHashMap<>();
+            if (format != null) fields.put("response_format", format);
+            if (language != null) fields.put("language", language);
+            if (prompt != null) fields.put("prompt", prompt);
+            if (temperature != null) fields.put("temperature", temperature);
+            AdapterExchange.MultipartRequest request = new AdapterExchange.MultipartRequest(
+                    ModelOperation.TRANSCRIPTION, fields, file.getOriginalFilename(),
+                    MediaType.parseMediaType(file.getContentType()), file.getBytes());
+            AdapterExchange.Result result = llmForwardService.media(UserContextHolder.get(),
+                    ModelOperation.TRANSCRIPTION, model, request, requestId, Instant.now());
+            AdapterExchange.BinaryResult binary = (AdapterExchange.BinaryResult) result;
+            return ResponseEntity.ok().contentType(binary.contentType())
+                    .header(HEADER_REQUEST_ID, requestId).body(binary.body());
+        } catch (AbstractException e) {
+            return toOpenAiMediaError(e, requestId);
+        } catch (Exception e) {
+            log.error("[llm-forward] 转写失败: requestId={}", requestId, e);
+            return toOpenAiMediaError(new ServerException(LlmForwardErrorCodeEnum.FORWARD_FAILED), requestId);
+        }
+    }
+
+    @PostMapping(value = "/audio/speech", produces = {"audio/mpeg", "audio/opus", "audio/aac", "audio/flac", "audio/wav", "audio/pcm", MediaType.APPLICATION_JSON_VALUE})
+    public ResponseEntity<?> speech(@RequestBody String body) {
+        String requestId = String.valueOf(SnowflakeIdUtil.nextId());
+        try {
+            JSONObject json = JSON.parseObject(body);
+            if (json == null || json.getString("model") == null) {
+                throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_FOUND);
+            }
+            AdapterExchange.Result result = llmForwardService.media(UserContextHolder.get(), ModelOperation.SPEECH,
+                    json.getString("model"), new AdapterExchange.JsonRequest(ModelOperation.SPEECH, json),
+                    requestId, Instant.now());
+            AdapterExchange.BinaryResult binary = (AdapterExchange.BinaryResult) result;
+            return ResponseEntity.ok().contentType(binary.contentType())
+                    .header(HEADER_REQUEST_ID, requestId).body(binary.body());
+        } catch (AbstractException e) {
+            return toOpenAiMediaError(e, requestId);
+        } catch (Exception e) {
+            log.error("[llm-forward] 语音生成失败: requestId={}", requestId, e);
+            return toOpenAiMediaError(new ServerException(LlmForwardErrorCodeEnum.FORWARD_FAILED), requestId);
+        }
+    }
+
+    @PostMapping(value = "/responses", produces = {MediaType.APPLICATION_JSON_VALUE, MediaType.TEXT_EVENT_STREAM_VALUE})
+    public ResponseEntity<Publisher<String>> responses(@RequestBody String body) {
+        return jsonOperation(ModelOperation.RESPONSES, body);
+    }
+
+    @PostMapping(value = "/embeddings", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Publisher<String>> embeddings(@RequestBody String body) {
+        return jsonOperation(ModelOperation.EMBEDDINGS, body);
+    }
+
+    @PostMapping(value = "/images/generations", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<Publisher<String>> images(@RequestBody String body) {
+        return jsonOperation(ModelOperation.IMAGE_GENERATION, body);
+    }
+
+    private ResponseEntity<Publisher<String>> jsonOperation(ModelOperation operation, String body) {
+        UserContext ctx = UserContextHolder.get();
+        String requestId = String.valueOf(SnowflakeIdUtil.nextId());
+        Instant started = Instant.now();
+        try {
+            if (operation == ModelOperation.RESPONSES && isStreamRequest(body)) {
+                Flux<String> events = llmForwardService.responsesStream(ctx, body, requestId, started)
+                        .map(this::toNamedSse);
+                return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM)
+                        .header(HttpHeaders.CACHE_CONTROL, "no-cache")
+                        .header(HEADER_REQUEST_ID, requestId).body(events);
+            }
+            String response;
+            String responseId = requestId;
+            if (operation == ModelOperation.IMAGE_GENERATION) {
+                response = llmForwardService.jsonCompletion(ctx, operation, body, requestId, started);
+            } else {
+                InFlightRequestCoalescer.CoalescedResponse result = inFlightRequestCoalescer.execute(
+                        ctx, operation, MediaType.APPLICATION_JSON_VALUE, body, requestId,
+                        () -> llmForwardService.jsonCompletion(ctx, operation, body, requestId, started));
+                response = result.body();
+                responseId = result.requestId();
+            }
+            return ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON)
+                    .header(HEADER_REQUEST_ID, responseId).body(Mono.just(response));
+        } catch (AbstractException e) {
+            return toOpenAiError(e, requestId);
+        } catch (Exception e) {
+            log.error("[llm-forward] JSON 能力转发失败: requestId={}", requestId, e);
+            return toOpenAiError(new ServerException(LlmForwardErrorCodeEnum.FORWARD_FAILED), requestId);
+        }
+    }
+
+    private String toNamedSse(ServerSentEvent<String> sse) {
+        StringBuilder frame = new StringBuilder();
+        if (sse.id() != null) frame.append("id: ").append(sse.id()).append('\n');
+        if (sse.event() != null) frame.append("event: ").append(sse.event()).append('\n');
+        if (sse.data() != null) {
+            String normalized = sse.data().replace("\r\n", "\n").replace('\r', '\n');
+            frame.append("data: ").append(normalized.replace("\n", "\ndata: ")).append('\n');
+        }
+        return frame.append('\n').toString();
+    }
 
     @PostMapping(
             value = "/chat/completions",
@@ -154,20 +288,34 @@ public class LlmForwardController {
     private ResponseEntity<Publisher<String>> toOpenAiError(AbstractException e, String requestId) {
         String code = e.getErrorCode();
         HttpStatus status = statusFor(code);
-        JSONObject error = new JSONObject();
-        error.put("message", e.getErrorMessage());
-        error.put("type", typeFor(code));
-        error.put("code", code);
-        JSONObject body = new JSONObject();
-        body.put("error", error);
+        ResponseEntity.BodyBuilder builder = errorHeaders(status, requestId);
+        return builder.body(Mono.just(openAiErrorJson(e)));
+    }
 
+    /** 二进制接口的错误体必须是实际 JSON 字符串，不能把 Mono 交给 Jackson 序列化。 */
+    private ResponseEntity<String> toOpenAiMediaError(AbstractException e, String requestId) {
+        return errorHeaders(statusFor(e.getErrorCode()), requestId).body(openAiErrorJson(e));
+    }
+
+    private ResponseEntity.BodyBuilder errorHeaders(HttpStatus status, String requestId) {
         ResponseEntity.BodyBuilder builder = ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_JSON)
                 .header(HEADER_REQUEST_ID, requestId);
         if (status == HttpStatus.TOO_MANY_REQUESTS) {
             builder.header(HttpHeaders.RETRY_AFTER, String.valueOf(RETRY_AFTER_SECONDS));
         }
-        return builder.body(Mono.just(JSON.toJSONString(body)));
+        return builder;
+    }
+
+    private String openAiErrorJson(AbstractException e) {
+        String code = e.getErrorCode();
+        JSONObject error = new JSONObject();
+        error.put("message", e.getErrorMessage());
+        error.put("type", typeFor(code));
+        error.put("code", code);
+        JSONObject body = new JSONObject();
+        body.put("error", error);
+        return JSON.toJSONString(body);
     }
 
     private String typeFor(String code) {

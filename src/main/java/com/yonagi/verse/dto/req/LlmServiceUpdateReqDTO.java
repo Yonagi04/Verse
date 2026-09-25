@@ -43,6 +43,15 @@ public class LlmServiceUpdateReqDTO {
      */
     private String apiKey;
 
+    /** 凭证模式；空值表示不修改。 */
+    private String credentialMode;
+
+    /** 协议专用配置；空值表示不修改。 */
+    private java.util.Map<String, String> providerSettings;
+
+    /** 替换全部能力绑定；空值表示不修改。 */
+    private List<CapabilityBindingReqDTO> capabilities;
+
     /**
      * 供应商侧记录的模型名称。留空表示不修改。
      */

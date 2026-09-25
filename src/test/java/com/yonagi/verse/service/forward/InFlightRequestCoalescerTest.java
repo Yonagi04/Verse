@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.forward;
 
 import com.yonagi.verse.common.security.UserContext;
+import com.yonagi.verse.common.enums.ModelOperation;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CountDownLatch;
@@ -73,6 +74,55 @@ class InFlightRequestCoalescerTest {
         assertEquals("2", second.body());
         assertEquals("request-2", second.requestId());
         assertEquals(2, executions.get());
+    }
+
+    @Test
+    void operationAndContentTypeSeparateOtherwiseIdenticalRequests() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<InFlightRequestCoalescer.CoalescedResponse> first = executor.submit(() -> coalescer.execute(
+                    context, ModelOperation.CHAT_COMPLETIONS, "application/json", "same-body", "chat", () -> {
+                        started.countDown();
+                        await(release);
+                        return "chat-result";
+                    }));
+            assertTrue(started.await(1, TimeUnit.SECONDS));
+            var second = coalescer.execute(context, ModelOperation.EMBEDDINGS,
+                    "application/json", "same-body", "embedding", () -> "embedding-result");
+            var third = coalescer.execute(context, ModelOperation.CHAT_COMPLETIONS,
+                    "application/vnd.api+json", "same-body", "other-type", () -> "other-result");
+            assertEquals("embedding-result", second.body());
+            assertEquals("other-result", third.body());
+            release.countDown();
+            assertEquals("chat-result", first.get(1, TimeUnit.SECONDS).body());
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void multipartAndBinaryOperationsNeverCoalesce() throws Exception {
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        try {
+            Future<InFlightRequestCoalescer.CoalescedResponse> first = executor.submit(() -> coalescer.execute(
+                    context, ModelOperation.TRANSCRIPTION, "multipart/form-data", "same", "first", () -> {
+                        started.countDown();
+                        await(release);
+                        return "first-result";
+                    }));
+            assertTrue(started.await(1, TimeUnit.SECONDS));
+            var second = coalescer.execute(context, ModelOperation.TRANSCRIPTION,
+                    "multipart/form-data", "same", "second", () -> "second-result");
+            assertEquals("second-result", second.body());
+            release.countDown();
+            assertEquals("first-result", first.get(1, TimeUnit.SECONDS).body());
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     private void await(CountDownLatch latch) {

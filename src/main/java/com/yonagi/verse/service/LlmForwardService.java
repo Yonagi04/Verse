@@ -1,6 +1,8 @@
 package com.yonagi.verse.service;
 
 import com.yonagi.verse.common.security.UserContext;
+import com.yonagi.verse.common.enums.ModelOperation;
+import com.yonagi.verse.service.forward.AdapterExchange;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 
@@ -24,6 +26,25 @@ public interface LlmForwardService {
      * @return 上游响应体（OpenAI 兼容格式，含 usage）
      */
     String chatCompletion(UserContext ctx, String body, String requestId, Instant requestStartedAt);
+
+    /** 按显式能力绑定转发非流式 JSON 操作。 */
+    default String jsonCompletion(UserContext ctx, ModelOperation operation, String body,
+                                  String requestId, Instant requestStartedAt) {
+        throw new UnsupportedOperationException("operation unavailable");
+    }
+
+    /** Responses 保留原始命名 SSE 事件。 */
+    default Flux<ServerSentEvent<String>> responsesStream(UserContext ctx, String body,
+                                                           String requestId, Instant requestStartedAt) {
+        throw new UnsupportedOperationException("responses stream unavailable");
+    }
+
+    /** 音频能力使用有类型的 multipart/JSON 输入与二进制输出。 */
+    default AdapterExchange.Result media(UserContext ctx, ModelOperation operation, String modelAlias,
+                                         AdapterExchange.Request request, String requestId,
+                                         Instant requestStartedAt) {
+        throw new UnsupportedOperationException("media unavailable");
+    }
 
     /**
      * 处理一次流式（stream=true）chat/completions 转发请求，返回上游 SSE 事件流。

@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.experimental.Accessors;
 
 import java.util.List;
+import com.yonagi.verse.dto.req.CapabilityBindingReqDTO;
 
 /**
  * @author Yonagi
@@ -87,5 +88,8 @@ public class LlmServiceListRespDTO {
 
         /** 计费币种。 */
         private String currency;
+
+        /** 显式启用的模型能力绑定。 */
+        private List<CapabilityBindingReqDTO> capabilities;
     }
 }

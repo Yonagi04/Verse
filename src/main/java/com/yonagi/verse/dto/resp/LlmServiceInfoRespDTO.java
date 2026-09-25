@@ -3,6 +3,7 @@ package com.yonagi.verse.dto.resp;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
+import com.yonagi.verse.dto.req.CapabilityBindingReqDTO;
 
 import java.util.Date;
 import java.util.List;
@@ -42,6 +43,15 @@ public class LlmServiceInfoRespDTO {
      * 脱敏后的API Key
      */
     private String apiKey;
+
+    /** 凭证模式。 */
+    private String credentialMode;
+
+    /** 无敏感信息的供应商配置。 */
+    private java.util.Map<String, String> providerSettings;
+
+    /** 服务的能力绑定。 */
+    private List<CapabilityBindingReqDTO> capabilities;
 
     /**
      * 模型服务提供商上记录的模型名称

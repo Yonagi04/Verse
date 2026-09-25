@@ -3,10 +3,13 @@ package com.yonagi.verse.service.impl;
 import com.yonagi.verse.async.api.DomainEventPublisher;
 import com.yonagi.verse.async.api.TokenUsageEventPublisher;
 import com.yonagi.verse.async.event.TokenUsageEvent;
+import com.yonagi.verse.async.event.LlmAuditEvent;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import com.yonagi.verse.common.enums.BillingMode;
 import com.yonagi.verse.common.enums.PricePeriodType;
 import com.yonagi.verse.common.enums.CostStatus;
+import com.yonagi.verse.common.enums.ModelOperation;
+import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
@@ -43,23 +46,26 @@ class LlmForwardUsagePublicationTest {
     private ModelResolver modelResolver;
     private ProviderAdapter providerAdapter;
     private TokenUsageEventPublisher usagePublisher;
+    private DomainEventPublisher eventPublisher;
     private FallbackExecutor fallbackExecutor;
     private Resilience4jTimeLimiter timeLimiter;
     private PricingResolver pricingResolver;
+    private RateLimiter rateLimiter;
     private LlmForwardServiceImpl service;
     private LlmServiceDO primary;
     private UserContext context;
+    private TenantDO tenant;
 
     @BeforeEach
     void setUp() {
         modelResolver = mock(ModelResolver.class);
         providerAdapter = mock(ProviderAdapter.class);
         AesUtil aesUtil = mock(AesUtil.class);
-        DomainEventPublisher eventPublisher = mock(DomainEventPublisher.class);
+        eventPublisher = mock(DomainEventPublisher.class);
         usagePublisher = mock(TokenUsageEventPublisher.class);
         TenantMapper tenantMapper = mock(TenantMapper.class);
         LlmServiceMapper serviceMapper = mock(LlmServiceMapper.class);
-        RateLimiter rateLimiter = mock(RateLimiter.class);
+        rateLimiter = mock(RateLimiter.class);
         CircuitBreaker circuitBreaker = mock(CircuitBreaker.class);
         fallbackExecutor = mock(FallbackExecutor.class);
         timeLimiter = mock(Resilience4jTimeLimiter.class);
@@ -77,7 +83,7 @@ class LlmForwardUsagePublicationTest {
         ReflectionTestUtils.setField(service, "streamIdleTimeoutMs", 5000L);
         ReflectionTestUtils.setField(service, "costingEnabled", true);
 
-        TenantDO tenant = new TenantDO();
+        tenant = new TenantDO();
         tenant.setTenantId(2L);
         tenant.setStatus(1);
         tenant.setAuditEnabled(0);
@@ -209,6 +215,108 @@ class LlmForwardUsagePublicationTest {
         ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
         verify(usagePublisher).publish(captor.capture());
         assertEquals(CostStatus.UNCALCULABLE, captor.getValue().getCostResult().status());
+    }
+
+    @Test
+    void imageWithoutTokensRecordsCountAndDoesNotFabricateZeroTokens() {
+        when(timeLimiter.execute(any())).thenReturn("{\"data\":[{\"url\":\"a\"},{\"url\":\"b\"}]}");
+        service.jsonCompletion(context, ModelOperation.IMAGE_GENERATION,
+                "{\"model\":\"alias\",\"prompt\":\"cat\"}", "image-1", Instant.now());
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher).publish(captor.capture());
+        assertEquals(ModelOperation.IMAGE_GENERATION.name(), captor.getValue().getOperation());
+        assertEquals(2, captor.getValue().getImageCount());
+        assertNull(captor.getValue().getTotalTokens());
+        assertEquals(TokenUsageEvent.SOURCE_UNKNOWN, captor.getValue().getUsageSource());
+        assertEquals(CostStatus.UNPRICED, captor.getValue().getCostResult().status());
+        verify(rateLimiter).settle(any(), eq(0));
+    }
+
+    @Test
+    void nonTokenImageCanUseRequestPricingWithoutInventingTokens() {
+        when(pricingResolver.resolve(anyLong(), anyLong(), any())).thenReturn(new PricingSnapshot(
+                99L, BillingMode.REQUEST, "CNY", PricePeriodType.BASE, null,
+                null, null, null, new BigDecimal("25"), Instant.EPOCH, null));
+        when(timeLimiter.execute(any())).thenReturn("{\"data\":[{\"url\":\"a\"}]}");
+        service.jsonCompletion(context, ModelOperation.IMAGE_GENERATION,
+                "{\"model\":\"alias\",\"prompt\":\"cat\"}", "image-priced", Instant.now());
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher).publish(captor.capture());
+        assertNull(captor.getValue().getTotalTokens());
+        assertEquals(CostStatus.CALCULATED, captor.getValue().getCostResult().status());
+        assertEquals(0, new BigDecimal("25").compareTo(captor.getValue().getCostResult().estimatedCostFen()));
+    }
+
+    @Test
+    void responsesAuditUsesInputOutputTokensOnlyWhenEnabled() {
+        when(timeLimiter.execute(any())).thenReturn(
+                "{\"id\":\"r1\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}");
+        String body = "{\"model\":\"alias\",\"input\":\"hello\"}";
+        service.jsonCompletion(context, ModelOperation.RESPONSES, body, "response-off", Instant.now());
+        verifyNoInteractions(eventPublisher);
+
+        tenant.setAuditEnabled(1);
+        service.jsonCompletion(context, ModelOperation.RESPONSES, body, "response-on", Instant.now());
+        ArgumentCaptor<com.yonagi.verse.async.api.DomainEvent> captor =
+                ArgumentCaptor.forClass(com.yonagi.verse.async.api.DomainEvent.class);
+        verify(eventPublisher).publish(captor.capture());
+        LlmAuditEvent audit = (LlmAuditEvent) captor.getValue();
+        assertEquals(4, audit.getPromptTokens());
+        assertEquals(2, audit.getCompletionTokens());
+        assertEquals(6, audit.getTotalTokens());
+    }
+
+    @Test
+    void imageAuditRedactsBase64AndBoundsPreview() {
+        tenant.setAuditEnabled(1);
+        when(timeLimiter.execute(any())).thenReturn(
+                "{\"data\":[{\"b64_json\":\"secret-image-bytes\"}]}");
+        service.jsonCompletion(context, ModelOperation.IMAGE_GENERATION,
+                "{\"model\":\"alias\",\"prompt\":\"cat\"}", "image-audit", Instant.now());
+        ArgumentCaptor<com.yonagi.verse.async.api.DomainEvent> captor =
+                ArgumentCaptor.forClass(com.yonagi.verse.async.api.DomainEvent.class);
+        verify(eventPublisher).publish(captor.capture());
+        LlmAuditEvent audit = (LlmAuditEvent) captor.getValue();
+        assertFalse(audit.getResponse().contains("secret-image-bytes"));
+        assertTrue(audit.getResponse().contains("[redacted]"));
+        assertTrue(audit.getResponse().length() <= 16_384);
+    }
+
+    @Test
+    void embeddingsFallbackKeepsOperationAndActualService() {
+        LlmServiceDO fallback = llm(11L, "fallback", "custom-vendor");
+        when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
+        when(timeLimiter.execute(any())).thenThrow(retryableFailure()).thenReturn(
+                "{\"data\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":0,\"total_tokens\":3}}");
+        service.jsonCompletion(context, ModelOperation.EMBEDDINGS,
+                "{\"model\":\"alias\",\"input\":\"hi\"}", "embed-1", Instant.now());
+        ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher).publish(captor.capture());
+        assertEquals(11L, captor.getValue().getServiceId());
+        assertEquals(ModelOperation.EMBEDDINGS.name(), captor.getValue().getOperation());
+        assertEquals(3, captor.getValue().getTotalTokens());
+    }
+
+    @Test
+    void incompatibleFallbackIsNotInvokedAndImageIsNeverRetried() {
+        LlmServiceDO fallback = llm(11L, "fallback", "openai");
+        when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
+        doThrow(new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED))
+                .when(modelResolver).requireBinding(fallback, ModelOperation.EMBEDDINGS);
+        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        assertThrows(UpstreamFailureException.class, () -> service.jsonCompletion(context,
+                ModelOperation.EMBEDDINGS, "{\"model\":\"alias\",\"input\":\"hi\"}",
+                "embed-2", Instant.now()));
+        verify(timeLimiter, times(1)).execute(any());
+
+        reset(timeLimiter, fallbackExecutor, usagePublisher);
+        ReflectionTestUtils.setField(service, "maxRetries", 3);
+        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        assertThrows(UpstreamFailureException.class, () -> service.jsonCompletion(context,
+                ModelOperation.IMAGE_GENERATION, "{\"model\":\"alias\",\"prompt\":\"cat\"}",
+                "image-2", Instant.now()));
+        verify(timeLimiter, times(1)).execute(any());
+        verifyNoInteractions(fallbackExecutor);
     }
 
     private LlmServiceDO llm(Long id, String name, String provider) {

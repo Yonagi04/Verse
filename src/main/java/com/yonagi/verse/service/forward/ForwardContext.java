@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.forward;
 
+import com.yonagi.verse.common.enums.ModelOperation;
+import com.yonagi.verse.common.enums.UpstreamProtocol;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -35,4 +37,16 @@ public class ForwardContext {
      * 原始请求体（OpenAI 兼容 JSON）
      */
     private String body;
+
+    /** 客户端操作。 */
+    private ModelOperation operation;
+
+    /** 显式绑定的上游协议。 */
+    private UpstreamProtocol protocol;
+
+    /** 服务供应商标识。 */
+    private String provider;
+
+    /** 已验证的供应商设置 JSON。 */
+    private String providerSettings;
 }

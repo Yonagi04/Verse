@@ -16,6 +16,7 @@ public enum LlmForwardErrorCodeEnum implements IErrorCode {
     MODEL_NOT_CONFIGURED("A000804", "模型未配置"),
     UPSTREAM_TIMEOUT("A000805", "上游超时"),
     REQUEST_TOO_LARGE("A000806", "请求体过大"),
+    CAPABILITY_UNSUPPORTED("A000807", "模型不支持该操作"),
 
     FORWARD_FAILED("B000800", "转发失败"),
     ROUTER_FAILED("B000801", "路由判定失败"),

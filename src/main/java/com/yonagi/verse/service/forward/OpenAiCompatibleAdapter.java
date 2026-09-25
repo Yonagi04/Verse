@@ -31,7 +31,22 @@ import reactor.netty.http.client.HttpClient;
  */
 @Slf4j
 @Component
-public class OpenAiCompatibleAdapter implements ProviderAdapter {
+public class OpenAiCompatibleAdapter implements ProviderAdapter, AdapterRegistration {
+
+    @Override
+    public com.yonagi.verse.common.enums.ModelOperation operation() {
+        return com.yonagi.verse.common.enums.ModelOperation.CHAT_COMPLETIONS;
+    }
+
+    @Override
+    public com.yonagi.verse.common.enums.UpstreamProtocol protocol() {
+        return com.yonagi.verse.common.enums.UpstreamProtocol.OPENAI_COMPAT;
+    }
+
+    @Override
+    public String provider() {
+        return null;
+    }
 
     private final RestClient restClient;
 

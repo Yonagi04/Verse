@@ -123,8 +123,10 @@ CREATE TABLE IF NOT EXISTS `t_llm_service` (
     `tenant_id`   BIGINT       NOT NULL COMMENT '租户ID（业务ID）',
     `name`        VARCHAR(50)  NOT NULL COMMENT '服务别名',
     `provider`    VARCHAR(50)  NOT NULL COMMENT '提供商（如openai, anthropic）',
-    `api_url`     VARCHAR(255) NOT NULL COMMENT 'API地址',
-    `api_key`     VARCHAR(512) NOT NULL COMMENT '真实的LLM API Key（AES加密存储）',
+    `api_url`     VARCHAR(255) DEFAULT NULL COMMENT 'API基础地址；Bedrock可为空',
+    `api_key`     VARCHAR(512) DEFAULT NULL COMMENT 'AES加密的API Key；无密钥或IAM模式可为空',
+    `credential_mode` VARCHAR(32) NOT NULL DEFAULT 'API_KEY' COMMENT '凭证模式',
+    `provider_settings` JSON DEFAULT NULL COMMENT '经过校验的供应商协议配置',
     `model_name`  VARCHAR(100) DEFAULT NULL COMMENT '默认模型名',
     `description` VARCHAR(255) DEFAULT NULL COMMENT '模型介绍',
     `status`      TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=禁用, 1=启用',
@@ -144,10 +146,25 @@ CREATE TABLE IF NOT EXISTS `t_llm_service` (
     KEY `idx_tenant_id` (`tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM服务配置表';
 
+CREATE TABLE IF NOT EXISTS `t_llm_service_capability` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    `service_id` BIGINT NOT NULL COMMENT '模型服务业务ID',
+    `operation` VARCHAR(40) NOT NULL COMMENT '客户端操作',
+    `upstream_protocol` VARCHAR(40) NOT NULL COMMENT '上游协议',
+    `enabled` TINYINT NOT NULL DEFAULT 1 COMMENT '是否启用',
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_service_operation` (`service_id`, `operation`),
+    KEY `idx_capability_operation` (`operation`, `enabled`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型服务能力绑定';
+
 -- ============================================
 -- 7. Token 消耗记录表
 -- ============================================
 CREATE TABLE IF NOT EXISTS `t_token_usage` (
+    `operation` VARCHAR(40) NOT NULL DEFAULT 'CHAT_COMPLETIONS' COMMENT '客户端操作',
+    `image_count` INT DEFAULT NULL COMMENT '实际生成图片数量',
+    `audio_duration_ms` BIGINT DEFAULT NULL COMMENT '实际音频时长，毫秒',
+    `rerank_document_count` INT DEFAULT NULL COMMENT '实际参与重排的文档数量',
     `id`                BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `user_id`           BIGINT       NOT NULL COMMENT '用户ID（业务ID）',
     `tenant_id`         BIGINT       NOT NULL COMMENT '租户ID（业务ID）',

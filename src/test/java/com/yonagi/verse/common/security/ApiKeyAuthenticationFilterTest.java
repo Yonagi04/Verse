@@ -9,6 +9,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.Date;
 
@@ -20,6 +21,58 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class ApiKeyAuthenticationFilterTest {
+
+    @Test
+    void rerankRequiresApiKeyBeforeController() throws Exception {
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(redis(), mock(ApiKeyMapper.class),
+                mock(ApiKeyUsageRecorder.class));
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/rerank");
+        request.setServletPath("/api/v1/rerank");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        assertEquals(false, filter.shouldNotFilter(request));
+        filter.doFilter(request, response, (req, resp) -> {
+            throw new AssertionError("missing key reached controller");
+        });
+        assertEquals(401, response.getStatus());
+    }
+
+    @Test
+    void rerankValidKeyUsesKeyTenant() throws Exception {
+        ApiKeyMapper mapper = mock(ApiKeyMapper.class);
+        ApiKeyDO key = new ApiKeyDO();
+        key.setApiKeyId(30L);
+        key.setTenantId(20L);
+        key.setUserId(10L);
+        key.setStatus(1);
+        when(mapper.selectOne(any())).thenReturn(key);
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(redis(), mapper,
+                mock(ApiKeyUsageRecorder.class));
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/rerank");
+        request.setServletPath("/api/v1/rerank");
+        request.addHeader("Authorization", "Bearer sk_valid");
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) ->
+        {
+            assertEquals(20L, UserContextHolder.get().getCurrentTenantId());
+            assertNotNull(SecurityContextHolder.getContext().getAuthentication());
+            assertEquals(true, SecurityContextHolder.getContext().getAuthentication().isAuthenticated());
+        });
+        assertNull(UserContextHolder.get());
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+    }
+
+    @Test
+    void rerankInvalidKeyDoesNotReachController() throws Exception {
+        ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(redis(), mock(ApiKeyMapper.class),
+                mock(ApiKeyUsageRecorder.class));
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/rerank");
+        request.setServletPath("/api/v1/rerank");
+        request.addHeader("Authorization", "Bearer sk_invalid");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(request, response, (req, resp) -> {
+            throw new AssertionError("invalid key reached controller");
+        });
+        assertEquals(401, response.getStatus());
+    }
 
     @Test
     void validKeySchedulesUsageBeforeForwarding() throws Exception {

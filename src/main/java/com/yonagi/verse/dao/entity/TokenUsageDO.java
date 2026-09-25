@@ -47,6 +47,18 @@ public class TokenUsageDO {
      */
     private String model;
 
+    /** 客户端操作。 */
+    private String operation;
+
+    /** 实际生成的图片数量。 */
+    private Integer imageCount;
+
+    /** 实际音频时长，毫秒。 */
+    private Long audioDurationMs;
+
+    /** 实际参与重排的文档数。 */
+    private Integer rerankDocumentCount;
+
     /**
      * 输入Token数
      */

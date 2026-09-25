@@ -42,6 +42,18 @@ public class TokenUsageEvent extends DomainEvent {
      */
     private String model;
 
+    /** 客户端操作，旧事件默认为 Chat Completions。 */
+    private String operation = "CHAT_COMPLETIONS";
+
+    /** 实际生成的图片数量；未知时为空。 */
+    private Integer imageCount;
+
+    /** 实际音频时长，毫秒；未知时为空。 */
+    private Long audioDurationMs;
+
+    /** 实际参与重排的文档数；未知时为空。 */
+    private Integer rerankDocumentCount;
+
     /** 原始输入 Token 数。 */
     private Integer promptTokens;
 

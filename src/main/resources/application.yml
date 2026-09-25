@@ -3,9 +3,9 @@ spring:
     name: Verse
   servlet:
     multipart:
-      # 与前端图片上传限制保持一致；请求上限额外预留 multipart 协议开销。
-      max-file-size: 5MB
-      max-request-size: 6MB
+      # 音频转写允许 25 MiB；租户图片仍由业务层执行 5 MiB 上限。
+      max-file-size: 25MB
+      max-request-size: 26MB
   datasource:
     username: root
     password: 20040401
@@ -69,6 +69,11 @@ verse:
       time-limit-ms: 120000
       # 流式 chunk 间空闲超时（毫秒），区别于 time-limit-ms 的总耗时硬超时
       stream-idle-timeout-ms: 120000
+    media:
+      # 请求与响应上限均在调用上游前后强制执行。
+      max-upload-bytes: 26214400
+      max-output-bytes: 26214400
+      max-image-json-bytes: 8388608
     circuit-breaker:
       failure-rate-threshold: 50
       sliding-window-size: 20
@@ -94,7 +99,7 @@ verse:
       aes-key: ${AES_KEY:8EbY4aJDfFyuf2Vg1on5tQQvZZst+uy0p3evu04CvJc=}
       hash-pepper: ${HASH_PEPPER:kCtFFuFhJn+V8SGqCiXlJg==}
     # JWT 认证白名单（不走 JWT 鉴权，如 LLM 调用接口使用 API Key 独立认证）
-    ignore-paths: /api/v1/user/hasUsername,/api/v1/users/register,/api/v1/users/login,/api/v1/users/password/**,/api/v1/tenants/invites/**/info,/api/v1/openai/**,/ws/**
+    ignore-paths: /api/v1/user/hasUsername,/api/v1/users/register,/api/v1/users/login,/api/v1/users/password/**,/api/v1/tenants/invites/**/info,/api/v1/openai/**,/api/v1/rerank,/ws/**
   tenant:
     max-invite-code-per-day: 10
     max-notification-send-per-day: 5

@@ -53,6 +53,26 @@ class TokenUsageEventHandlerTest {
     }
 
     @Test
+    void preservesTypedNonTokenMeasurementsWithoutInventingTokens() {
+        TokenUsageMapper mapper = mock(TokenUsageMapper.class);
+        TokenUsageEvent event = validEvent();
+        event.setOperation("IMAGE_GENERATION");
+        event.setImageCount(2);
+        event.setPromptTokens(null);
+        event.setCompletionTokens(null);
+        event.setTotalTokens(null);
+        event.setNormalizedUsage(null);
+        event.setUsageSource("UNKNOWN");
+        event.setCostResult(CostResult.of(CostStatus.UNPRICED));
+        new TokenUsageEventHandler(mapper, null).onEvent(event);
+        ArgumentCaptor<TokenUsageDO> captor = ArgumentCaptor.forClass(TokenUsageDO.class);
+        verify(mapper).insert(captor.capture());
+        assertEquals("IMAGE_GENERATION", captor.getValue().getOperation());
+        assertEquals(2, captor.getValue().getImageCount());
+        assertNull(captor.getValue().getTotalTokens());
+    }
+
+    @Test
     void persistsUsageAndCostAsACompletePair() {
         TokenUsageMapper usageMapper=mock(TokenUsageMapper.class);
         TokenUsageCostMapper costMapper=mock(TokenUsageCostMapper.class);
