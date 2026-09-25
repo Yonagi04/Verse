@@ -8,6 +8,7 @@ import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import com.yonagi.verse.dao.entity.ApiKeyDO;
 import com.yonagi.verse.dao.mapper.ApiKeyMapper;
+import com.yonagi.verse.service.impl.ApiKeyUsageRecorder;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -50,6 +51,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private final StringRedisTemplate stringRedisTemplate;
     private final ApiKeyMapper apiKeyMapper;
+    private final ApiKeyUsageRecorder apiKeyUsageRecorder;
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -79,6 +81,8 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                 .setApiKeyRateLimitRpm(apiKey.getRateLimitRpm())
                 .setApiKeyRateLimitTpm(apiKey.getRateLimitTpm());
         UserContextHolder.set(ctx);
+        // 合法 Key 每次通过鉴权后异步更新最近使用时间，不等待模型响应或计费事件。
+        apiKeyUsageRecorder.record(apiKey.getApiKeyId(), new Date());
 
         try {
             filterChain.doFilter(request, response);
