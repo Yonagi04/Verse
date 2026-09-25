@@ -3,6 +3,7 @@ package com.yonagi.verse.service;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.service.forward.AdapterExchange;
+import com.yonagi.verse.service.forward.ChatMessage;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 
@@ -56,6 +57,12 @@ public interface LlmForwardService {
      */
     Flux<ServerSentEvent<String>> chatCompletionStream(UserContext ctx, String body,
                                                         String requestId, Instant requestStartedAt);
+
+    /** 受信任的 PlayGround 调用：按服务 ID 解析，消息只由会话服务组装。 */
+    default Flux<ServerSentEvent<String>> playgroundChatStream(UserContext ctx, Long serviceId,
+            List<ChatMessage> messages, String requestId, Instant requestStartedAt) {
+        throw new UnsupportedOperationException("PlayGround stream unavailable");
+    }
 
     /**
      * 列出当前租户下启用的模型别名（OpenAI /models 兼容）。

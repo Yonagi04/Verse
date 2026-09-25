@@ -52,6 +52,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final CurrentTenantStateService currentTenantStateService;
 
     @Override
+    protected boolean shouldNotFilterAsyncDispatch() {
+        // SSE 完成时会异步重新派发；该派发仍需重建 JWT 认证上下文。
+        return false;
+    }
+
+    @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
         // /ws 走 WebSocket 握手认证；/api/v1/openai/** 走 API Key 认证（ApiKeyAuthenticationFilter）
@@ -71,9 +77,24 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
+        Claims claims;
+        Long userId;
+        String username;
         try {
-            Claims claims = jwtUtil.parseToken(token);
+            claims = jwtUtil.parseToken(token);
+            userId = Long.parseLong(claims.getSubject());
+            username = claims.get("username", String.class);
+        } catch (ExpiredJwtException e) {
+            log.debug("Token 已过期: {}", e.getMessage());
+            writeErrorResponse(response, BaseErrorCode.TOKEN_EXPIRED);
+            return;
+        } catch (JwtException | IllegalArgumentException e) {
+            log.debug("Token 无效: {}", e.getMessage());
+            writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
+            return;
+        }
 
+        try {
             // 校验 Token 是否已被登出（从 Redis 反向索引中查询）
             String tokenHash = DigestUtil.md5Hex(token);
             String userIdFromRedis = stringRedisTemplate.opsForValue()
@@ -82,9 +103,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                 writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
                 return;
             }
-
-            Long userId = Long.parseLong(claims.getSubject());
-            String username = claims.get("username", String.class);
 
             // 每次请求均以数据库状态服务为权威来源，切换租户后无需重新签发 JWT。
             CurrentTenantState tenantState = currentTenantStateService.resolveCurrentTenant(userId);
@@ -116,12 +134,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
             filterChain.doFilter(request, response);
-        } catch (ExpiredJwtException e) {
-            log.debug("Token 已过期: {}", e.getMessage());
-            writeErrorResponse(response, BaseErrorCode.TOKEN_EXPIRED);
-        } catch (JwtException | IllegalArgumentException e) {
-            log.debug("Token 无效: {}", e.getMessage());
-            writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
         } finally {
             UserContextHolder.clear();
             SecurityContextHolder.clearContext();

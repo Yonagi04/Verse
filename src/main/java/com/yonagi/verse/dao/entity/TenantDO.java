@@ -85,4 +85,9 @@ public class TenantDO extends BaseDO {
      * 是否开启租户动态记录：0=关闭, 1=开启
      */
     private Integer activityRecordingEnabled;
+
+    /**
+     * 是否开启 Playground 功能：0=关闭, 1=开启
+     */
+    private Integer playgroundEnabled;
 }

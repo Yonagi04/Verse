@@ -31,6 +31,9 @@ public class TenantSettingsRespDTO {
     /** 是否开启租户动态记录 */
     private Boolean activityRecordingEnabled;
 
+    /** 是否开启 Playground 功能 */
+    private Boolean playgroundEnabled;
+
     /** 租户级 RPM 上限，NULL 表示不限 */
     private Integer rateLimitRpm;
 

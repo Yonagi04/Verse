@@ -75,8 +75,8 @@ public class LlmAuditServiceImpl implements LlmAuditService {
                         .setUserId(log.getUserId())
                         .setUsername(usernameMap.get(log.getUserId()))
                         .setModel(log.getModel())
-                        .setPromptPreview(log.getPromptPreview())
-                        .setResponsePreview(log.getResponsePreview())
+                        .setPromptPreview("PLAYGROUND".equals(log.getSource()) ? null : log.getPromptPreview())
+                        .setResponsePreview("PLAYGROUND".equals(log.getSource()) ? null : log.getResponsePreview())
                         .setPromptTokens(log.getPromptTokens())
                         .setCompletionTokens(log.getCompletionTokens())
                         .setTotalTokens(log.getTotalTokens())
@@ -117,8 +117,9 @@ public class LlmAuditServiceImpl implements LlmAuditService {
         dto.setUserId(log.getUserId());
         dto.setUsername(resolveUsername(log.getUserId()));
         dto.setModel(log.getModel());
-        dto.setPromptPreview(log.getPromptPreview());
-        dto.setResponsePreview(log.getResponsePreview());
+        boolean privateCall = "PLAYGROUND".equals(log.getSource());
+        dto.setPromptPreview(privateCall ? null : log.getPromptPreview());
+        dto.setResponsePreview(privateCall ? null : log.getResponsePreview());
         dto.setPromptTokens(log.getPromptTokens());
         dto.setCompletionTokens(log.getCompletionTokens());
         dto.setTotalTokens(log.getTotalTokens());
@@ -126,8 +127,8 @@ public class LlmAuditServiceImpl implements LlmAuditService {
         dto.setStatus(log.getStatus());
         dto.setErrorCode(log.getErrorCode());
         dto.setCreateTime(log.getCreateTime());
-        dto.setPrompt(readContent(log.getPromptObjectKey()));
-        dto.setResponse(readContent(log.getResponseObjectKey()));
+        dto.setPrompt(privateCall ? null : readContent(log.getPromptObjectKey()));
+        dto.setResponse(privateCall ? null : readContent(log.getResponseObjectKey()));
         return dto;
     }
 

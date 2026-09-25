@@ -38,7 +38,7 @@ public interface TokenUsageHourlyAggMapper extends BaseMapper<TokenUsageHourlyAg
           SUM(c.cost_status='CALCULATED'),SUM(c.cost_status='UNPRICED'),SUM(c.cost_status='UNCALCULABLE'),
           SUM(c.cost_status='NOT_CHARGEABLE')
         FROM t_token_usage u JOIN t_token_usage_cost c ON c.usage_id=u.id
-        WHERE COALESCE(u.request_started_at,u.create_time)>=#{from}
+        WHERE u.source='API_KEY' AND COALESCE(u.request_started_at,u.create_time)>=#{from}
           AND COALESCE(u.request_started_at,u.create_time)<#{to}
         GROUP BY u.tenant_id,u.user_id,u.api_key_id,u.service_id,u.model,
           DATE_FORMAT(COALESCE(u.request_started_at,u.create_time),'%Y-%m-%d %H:00:00')

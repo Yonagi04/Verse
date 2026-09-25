@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS `t_tenant` (
     `rate_limit_tpm`   INT      DEFAULT NULL COMMENT '租户级 TPM 上限（NULL=不限）',
     `audit_enabled`    TINYINT  NOT NULL DEFAULT 0 COMMENT '是否开启模型调用审计：0=关闭, 1=开启',
     `activity_recording_enabled` TINYINT NOT NULL DEFAULT 0 COMMENT '是否开启租户动态记录：0=关闭, 1=开启',
+    `playground_enabled` TINYINT NOT NULL DEFAULT 0 COMMENT '是否开启 PlayGround',
     `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     `update_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     `del_flag`    TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除',
@@ -168,7 +169,8 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     `id`                BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `user_id`           BIGINT       NOT NULL COMMENT '用户ID（业务ID）',
     `tenant_id`         BIGINT       NOT NULL COMMENT '租户ID（业务ID）',
-    `api_key_id`        BIGINT       NOT NULL COMMENT 'API Key ID（业务ID）',
+    `api_key_id`        BIGINT       NULL COMMENT 'API Key ID；PlayGround 为空',
+    `source`            VARCHAR(16)  NOT NULL DEFAULT 'API_KEY' COMMENT 'API_KEY/PLAYGROUND',
     `service_id`        BIGINT       NOT NULL COMMENT 'LLM服务ID（业务ID）',
     `model`             VARCHAR(100) NOT NULL COMMENT '实际调用的模型名',
     `prompt_tokens`     INT          NOT NULL DEFAULT 0 COMMENT '输入Token数',
@@ -544,7 +546,8 @@ CREATE TABLE IF NOT EXISTS `t_llm_audit_log` (
     `request_id`          VARCHAR(64)  NOT NULL COMMENT '请求追踪ID',
     `tenant_id`           BIGINT       NOT NULL COMMENT '租户ID（业务ID）',
     `user_id`             BIGINT       NOT NULL COMMENT '用户ID（业务ID）',
-    `api_key_id`          BIGINT       NOT NULL COMMENT 'API Key ID（业务ID）',
+    `api_key_id`          BIGINT       NULL COMMENT 'API Key ID；PlayGround 为空',
+    `source`              VARCHAR(16)  NOT NULL DEFAULT 'API_KEY' COMMENT 'API_KEY/PLAYGROUND',
     `service_id`          BIGINT       NOT NULL COMMENT 'LLM服务ID（业务ID）',
     `model`               VARCHAR(100) NOT NULL COMMENT '实际调用模型别名',
     `prompt_preview`      VARCHAR(512) DEFAULT NULL COMMENT '输入 prompt 概略',
@@ -563,3 +566,42 @@ CREATE TABLE IF NOT EXISTS `t_llm_audit_log` (
     KEY `idx_tenant_time` (`tenant_id`, `create_time`),
     KEY `idx_user_time` (`user_id`, `create_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型调用审计索引表';
+
+CREATE TABLE IF NOT EXISTS `t_playground_session` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    `session_id` BIGINT NOT NULL,
+    `tenant_id` BIGINT NOT NULL,
+    `owner_user_id` BIGINT NOT NULL,
+    `service_id` BIGINT NOT NULL,
+    `model_name` VARCHAR(100) NOT NULL,
+    `title` VARCHAR(100) NOT NULL DEFAULT '新会话',
+    `turn_count` INT NOT NULL DEFAULT 0,
+    `generating` TINYINT NOT NULL DEFAULT 0,
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `del_flag` TINYINT NOT NULL DEFAULT 0,
+    UNIQUE KEY `uk_playground_session_id` (`session_id`),
+    KEY `idx_playground_owner_recent` (`tenant_id`, `owner_user_id`, `del_flag`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='PlayGround 私有会话';
+
+CREATE TABLE IF NOT EXISTS `t_playground_turn` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    `turn_id` BIGINT NOT NULL,
+    `tenant_id` BIGINT NOT NULL,
+    `owner_user_id` BIGINT NOT NULL,
+    `session_id` BIGINT NOT NULL,
+    `turn_no` INT NOT NULL,
+    `idempotency_key` VARCHAR(64) NOT NULL,
+    `request_id` VARCHAR(64) NOT NULL,
+    `prompt` LONGTEXT NOT NULL,
+    `reply` LONGTEXT NULL,
+    `status` VARCHAR(16) NOT NULL,
+    `create_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `update_time` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+    `finished_at` DATETIME(3) NULL,
+    UNIQUE KEY `uk_playground_turn_id` (`turn_id`),
+    UNIQUE KEY `uk_playground_turn_no` (`session_id`, `turn_no`),
+    UNIQUE KEY `uk_playground_idempotency` (`tenant_id`, `owner_user_id`, `idempotency_key`),
+    KEY `idx_playground_turn_owner` (`tenant_id`, `owner_user_id`, `session_id`, `turn_no`),
+    KEY `idx_playground_pending` (`status`, `update_time`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='PlayGround 聊天轮次';

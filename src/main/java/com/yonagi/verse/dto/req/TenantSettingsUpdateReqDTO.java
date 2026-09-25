@@ -38,6 +38,11 @@ public class TenantSettingsUpdateReqDTO {
     @NotNull(message = "动态记录开关不能为空")
     private Boolean activityRecordingEnabled;
 
+    /**
+     * 是否开启 Playground 功能
+     */
+    private Boolean playgroundEnabled;
+
     /** 租户级 RPM 上限，NULL/0 表示不限 */
     @Min(value = 0, message = "RPM 不能小于0")
     private Integer rateLimitRpm;

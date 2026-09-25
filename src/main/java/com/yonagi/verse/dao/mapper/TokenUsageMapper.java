@@ -30,7 +30,7 @@ public interface TokenUsageMapper extends BaseMapper<TokenUsageDO> {
     @Select("""
         <script>
         SELECT COUNT(*) FROM t_token_usage u
-        WHERE u.tenant_id=#{tenantId}
+        WHERE u.tenant_id=#{tenantId} AND u.source='API_KEY'
           AND COALESCE(u.request_started_at,u.create_time) &gt;= #{from}
           AND COALESCE(u.request_started_at,u.create_time) &lt; #{to}
         <if test='userId != null'>AND u.user_id=#{userId}</if>
@@ -63,7 +63,7 @@ public interface TokenUsageMapper extends BaseMapper<TokenUsageDO> {
         LEFT JOIN t_user usr ON usr.user_id=u.user_id
         LEFT JOIN t_api_key k ON k.api_key_id=u.api_key_id AND k.tenant_id=u.tenant_id
         LEFT JOIN t_llm_service s ON s.service_id=u.service_id AND s.tenant_id=u.tenant_id
-        WHERE u.tenant_id=#{tenantId}
+        WHERE u.tenant_id=#{tenantId} AND u.source='API_KEY'
           AND COALESCE(u.request_started_at,u.create_time) &gt;= #{from}
           AND COALESCE(u.request_started_at,u.create_time) &lt; #{to}
         <if test='userId != null'>AND u.user_id=#{userId}</if>

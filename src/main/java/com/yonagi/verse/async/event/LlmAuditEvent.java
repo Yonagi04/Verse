@@ -28,6 +28,9 @@ public class LlmAuditEvent extends DomainEvent {
 
     private Long apiKeyId;
 
+    /** API_KEY 或 PLAYGROUND。 */
+    private String source = "API_KEY";
+
     private Long serviceId;
 
     /**

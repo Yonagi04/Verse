@@ -73,8 +73,12 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
         boolean oldActivityEnabled = Integer.valueOf(1).equals(tenant.getActivityRecordingEnabled());
         boolean newActivityEnabled = requestParam.getActivityRecordingEnabled() == null
                 ? oldActivityEnabled : Boolean.TRUE.equals(requestParam.getActivityRecordingEnabled());
+
+        boolean oldPlaygroundEnabled = Integer.valueOf(1).equals(tenant.getPlaygroundEnabled());
+        boolean newPlaygroundEnabled = requestParam.getPlaygroundEnabled() == null
+                ? oldPlaygroundEnabled : Boolean.TRUE.equals(requestParam.getPlaygroundEnabled());
         java.util.List<String> changedFields = changedFields(tenant, name, description, approvalMode,
-                requestParam.getAuditEnabled(), rpm, tpm, newActivityEnabled);
+                requestParam.getAuditEnabled(), rpm, tpm, newActivityEnabled, newPlaygroundEnabled);
         int updated = tenantMapper.update(Wrappers.lambdaUpdate(TenantDO.class)
                 .eq(TenantDO::getTenantId, tenantId)
                 .eq(TenantDO::getStatus, 1)
@@ -85,6 +89,7 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
                         "PERSONAL".equals(tenant.getType()) ? 0 : approvalMode)
                 .set(TenantDO::getAuditEnabled, Boolean.TRUE.equals(requestParam.getAuditEnabled()) ? 1 : 0)
                 .set(TenantDO::getActivityRecordingEnabled, newActivityEnabled ? 1 : 0)
+                .set(TenantDO::getPlaygroundEnabled, newPlaygroundEnabled ? 1 : 0)
                 .set(TenantDO::getRateLimitRpm, rpm)
                 .set(TenantDO::getRateLimitTpm, tpm));
         if (updated != 1) {
@@ -148,6 +153,7 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
         response.setJoinApprovalMode(tenant.getJoinApprovalMode());
         response.setAuditEnabled(Integer.valueOf(1).equals(tenant.getAuditEnabled()));
         response.setActivityRecordingEnabled(Integer.valueOf(1).equals(tenant.getActivityRecordingEnabled()));
+        response.setPlaygroundEnabled(Integer.valueOf(1).equals(tenant.getPlaygroundEnabled()));
         response.setRateLimitRpm(tenant.getRateLimitRpm());
         response.setRateLimitTpm(tenant.getRateLimitTpm());
         response.setRole(role);
@@ -161,7 +167,7 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
 
     private java.util.List<String> changedFields(TenantDO old, String name, String description,
                                                   Integer approvalMode, Boolean auditEnabled,
-                                                  Integer rpm, Integer tpm, boolean activityEnabled) {
+                                                  Integer rpm, Integer tpm, boolean activityEnabled, boolean playgroundEnabled) {
         java.util.List<String> fields = new java.util.ArrayList<>();
         if (!java.util.Objects.equals(old.getName(), name)) fields.add("name");
         if (!java.util.Objects.equals(old.getDescription(), description)) fields.add("description");
@@ -171,6 +177,7 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
         if (!java.util.Objects.equals(old.getRateLimitRpm(), rpm)) fields.add("rateLimitRpm");
         if (!java.util.Objects.equals(old.getRateLimitTpm(), tpm)) fields.add("rateLimitTpm");
         if (Integer.valueOf(1).equals(old.getActivityRecordingEnabled()) != activityEnabled) fields.add("activityRecordingEnabled");
+        if (Integer.valueOf(1).equals(old.getPlaygroundEnabled()) != playgroundEnabled) fields.add("playgroundEnabled");
         return fields;
     }
 }

@@ -48,6 +48,7 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
         tokenUsage.setUserId(event.getUserId());
         tokenUsage.setTenantId(event.getTenantId());
         tokenUsage.setApiKeyId(event.getApiKeyId());
+        tokenUsage.setSource(event.getSource() == null ? "API_KEY" : event.getSource());
         tokenUsage.setServiceId(event.getServiceId());
         tokenUsage.setModel(event.getModel());
         tokenUsage.setOperation(event.getOperation() == null ? "CHAT_COMPLETIONS" : event.getOperation());
@@ -141,9 +142,13 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
     }
 
     private void validate(TokenUsageEvent event) {
+        String source = event == null || event.getSource() == null ? "API_KEY" : event.getSource();
         if (event == null || event.getEventId() == null || event.getEventId().isBlank()
                 || event.getTenantId() == null || event.getUserId() == null
-                || event.getApiKeyId() == null || event.getServiceId() == null
+                || ("API_KEY".equals(source) && event.getApiKeyId() == null)
+                || ("PLAYGROUND".equals(source) && event.getApiKeyId() != null)
+                || (!"API_KEY".equals(source) && !"PLAYGROUND".equals(source))
+                || event.getServiceId() == null
                 || event.getModel() == null || event.getModel().isBlank()
                 || event.getStatus() == null || event.getUsageSource() == null
                 || event.getRequestStartedAt() == null) {

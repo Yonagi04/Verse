@@ -21,6 +21,7 @@ import com.yonagi.verse.resilience.api.FallbackExecutor;
 import com.yonagi.verse.resilience.api.RateLimiter;
 import com.yonagi.verse.resilience.impl.Resilience4jTimeLimiter;
 import com.yonagi.verse.service.forward.ModelResolver;
+import com.yonagi.verse.service.forward.ChatMessage;
 import com.yonagi.verse.service.forward.ProviderAdapter;
 import com.yonagi.verse.service.forward.UpstreamFailureException;
 import com.yonagi.verse.service.pricing.CostCalculator;
@@ -51,6 +52,7 @@ class LlmForwardUsagePublicationTest {
     private Resilience4jTimeLimiter timeLimiter;
     private PricingResolver pricingResolver;
     private RateLimiter rateLimiter;
+    private LlmServiceMapper serviceMapper;
     private LlmForwardServiceImpl service;
     private LlmServiceDO primary;
     private UserContext context;
@@ -64,7 +66,7 @@ class LlmForwardUsagePublicationTest {
         eventPublisher = mock(DomainEventPublisher.class);
         usagePublisher = mock(TokenUsageEventPublisher.class);
         TenantMapper tenantMapper = mock(TenantMapper.class);
-        LlmServiceMapper serviceMapper = mock(LlmServiceMapper.class);
+        serviceMapper = mock(LlmServiceMapper.class);
         rateLimiter = mock(RateLimiter.class);
         CircuitBreaker circuitBreaker = mock(CircuitBreaker.class);
         fallbackExecutor = mock(FallbackExecutor.class);
@@ -168,6 +170,30 @@ class LlmForwardUsagePublicationTest {
                 "request-4", Instant.now()).blockLast();
 
         verify(usagePublisher, times(1)).publish(any(TokenUsageEvent.class));
+    }
+
+    @Test
+    void playgroundStreamUsesTrustedMessagesAndStagesPrivateSource() {
+        context.setApiKeyId(null);
+        tenant.setAuditEnabled(1);
+        when(serviceMapper.selectOne(any())).thenReturn(primary);
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(
+                ServerSentEvent.builder("{\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}").build(),
+                ServerSentEvent.builder("{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}").build(),
+                ServerSentEvent.builder("[DONE]").build()));
+
+        service.playgroundChatStream(context, 10L,
+                List.of(new ChatMessage("user", "private question")), "playground-1", Instant.now()).blockLast();
+
+        ArgumentCaptor<TokenUsageEvent> usage = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher).publish(usage.capture());
+        assertEquals("PLAYGROUND", usage.getValue().getSource());
+        assertNull(usage.getValue().getApiKeyId());
+        ArgumentCaptor<LlmAuditEvent> audit = ArgumentCaptor.forClass(LlmAuditEvent.class);
+        verify(eventPublisher).publish(audit.capture());
+        assertEquals("PLAYGROUND", audit.getValue().getSource());
+        assertNull(audit.getValue().getPrompt());
+        assertNull(audit.getValue().getResponse());
     }
 
     @Test

@@ -73,6 +73,31 @@ class TokenUsageEventHandlerTest {
     }
 
     @Test
+    void playgroundUsageKeepsTenantAndUserWithoutInventingApiKey() {
+        TokenUsageMapper mapper = mock(TokenUsageMapper.class);
+        TokenUsageEvent event = validEvent();
+        event.setSource("PLAYGROUND");
+        event.setApiKeyId(null);
+
+        new TokenUsageEventHandler(mapper, null).onEvent(event);
+
+        ArgumentCaptor<TokenUsageDO> captor = ArgumentCaptor.forClass(TokenUsageDO.class);
+        verify(mapper).insert(captor.capture());
+        assertEquals("PLAYGROUND", captor.getValue().getSource());
+        assertNull(captor.getValue().getApiKeyId());
+        assertEquals(2L, captor.getValue().getTenantId());
+        assertEquals(1L, captor.getValue().getUserId());
+    }
+
+    @Test
+    void rejectsSourceAndApiKeyMismatch() {
+        TokenUsageEvent event = validEvent();
+        event.setSource("PLAYGROUND");
+        assertThrows(IllegalArgumentException.class,
+                () -> new TokenUsageEventHandler(mock(TokenUsageMapper.class), null).onEvent(event));
+    }
+
+    @Test
     void persistsUsageAndCostAsACompletePair() {
         TokenUsageMapper usageMapper=mock(TokenUsageMapper.class);
         TokenUsageCostMapper costMapper=mock(TokenUsageCostMapper.class);

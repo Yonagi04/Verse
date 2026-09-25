@@ -13,6 +13,7 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.CostStatus;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import com.yonagi.verse.common.enums.ModelOperation;
+import com.yonagi.verse.common.enums.InvocationSource;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.util.AesUtil;
@@ -27,6 +28,7 @@ import com.yonagi.verse.resilience.api.RateLimiter;
 import com.yonagi.verse.resilience.impl.Resilience4jTimeLimiter;
 import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.forward.ForwardContext;
+import com.yonagi.verse.service.forward.ChatMessage;
 import com.yonagi.verse.service.forward.AdapterExchange;
 import com.yonagi.verse.service.forward.MediaOperationAdapter;
 import com.yonagi.verse.service.forward.ModelResolver;
@@ -203,6 +205,45 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         }
 
         LlmServiceDO service = modelResolver.resolve(tenantId, bodyJson.getString("model"));
+        return streamChatCore(ctx, tenant, service, body, requestId, requestStartedAt, InvocationSource.API_KEY);
+    }
+
+    @Override
+    public Flux<ServerSentEvent<String>> playgroundChatStream(UserContext ctx, Long serviceId,
+            List<ChatMessage> messages, String requestId, Instant requestStartedAt) {
+        if (ctx == null || ctx.getCurrentTenantId() == null || ctx.getUserId() == null
+                || ctx.getApiKeyId() != null || serviceId == null || messages == null || messages.isEmpty()) {
+            throw new IllegalArgumentException("PlayGround 调用参数无效");
+        }
+        TenantDO tenant = validateTenant(ctx.getCurrentTenantId());
+        LlmServiceDO service = llmServiceMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
+                .eq(LlmServiceDO::getTenantId, tenant.getTenantId())
+                .eq(LlmServiceDO::getServiceId, serviceId)
+                .eq(LlmServiceDO::getStatus, 1)
+                .eq(LlmServiceDO::getDelFlag, 0));
+        if (service == null) throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_CONFIGURED);
+        JSONArray safeMessages = new JSONArray();
+        for (ChatMessage message : messages) {
+            if (message == null || !("user".equals(message.role()) || "assistant".equals(message.role()))
+                    || message.content() == null) throw new IllegalArgumentException("PlayGround 消息无效");
+            JSONObject safe = new JSONObject();
+            safe.put("role", message.role());
+            safe.put("content", message.content());
+            safeMessages.add(safe);
+        }
+        JSONObject body = new JSONObject();
+        body.put("model", service.getName());
+        body.put("messages", safeMessages);
+        body.put("stream", true);
+        body.put("stream_options", JSONObject.of("include_usage", true));
+        return streamChatCore(ctx, tenant, service, body.toJSONString(), requestId,
+                requestStartedAt, InvocationSource.PLAYGROUND);
+    }
+
+    /** 两种来源共用模型协议、共享限额、上游流及终态计量。 */
+    private Flux<ServerSentEvent<String>> streamChatCore(UserContext ctx, TenantDO tenant,
+            LlmServiceDO service, String body, String requestId, Instant requestStartedAt,
+            InvocationSource source) {
         modelResolver.requireBinding(service, ModelOperation.CHAT_COMPLETIONS);
         RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
         rateLimiter.check(rateCtx);
@@ -245,15 +286,15 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                         accumulator.accept(sse.data());
                     })
                     .doOnComplete(() -> finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, body,
-                            requestId, start, accumulator, LlmAuditEvent.STATUS_SUCCESS, null))
+                            requestId, start, accumulator, LlmAuditEvent.STATUS_SUCCESS, null, source))
                     .doOnCancel(() -> finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, body,
-                            requestId, start, accumulator, LlmAuditEvent.STATUS_ABORTED, null))
+                            requestId, start, accumulator, LlmAuditEvent.STATUS_ABORTED, null, source))
                     .doOnError(e -> {
                         if (!firstChunk.get()) {
                             circuitBreaker.recordFailure(serviceId);
                         }
                         finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, body, requestId,
-                                start, accumulator, LlmAuditEvent.STATUS_FAIL, errorCode(e));
+                                start, accumulator, LlmAuditEvent.STATUS_FAIL, errorCode(e), source);
                     });
         });
     }
@@ -604,7 +645,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private void finalizeStream(UserContext ctx, TenantDO tenant, LlmServiceDO service,
                                 RateLimitContext rateCtx, String body, String requestId,
                                 long start, StreamResponseAccumulator accumulator,
-                                String status, String errorCode) {
+                                String status, String errorCode, InvocationSource source) {
         JSONObject responseEnvelope = accumulator.usageEnvelope();
         JSONObject usage = accumulator.usage();
         String response = accumulator.buildResponseJson();
@@ -617,16 +658,19 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 : LlmAuditEvent.STATUS_SUCCESS.equals(status)
                 ? TokenUsageEvent.SOURCE_EXACT
                 : TokenUsageEvent.SOURCE_ESTIMATED;
-        publishTokenUsage(ctx, tenant.getTenantId(), service, responseEnvelope, requestId, status, usageSource, start);
-        publishAuditStream(ctx, tenant, service, body, response, requestId, start, usage, status, errorCode);
+        publishTokenUsage(ctx, tenant.getTenantId(), service, responseEnvelope, requestId, status,
+                usageSource, start, ModelOperation.CHAT_COMPLETIONS, source);
+        publishAuditStream(ctx, tenant, service, body, response, requestId, start, usage, status,
+                errorCode, source);
     }
 
     private void finalizeStreamOnce(AtomicBoolean finalized, UserContext ctx, TenantDO tenant,
                                     LlmServiceDO service, RateLimitContext rateCtx, String body,
                                     String requestId, long start, StreamResponseAccumulator accumulator,
-                                    String status, String errorCode) {
+                                    String status, String errorCode, InvocationSource source) {
         if (finalized.compareAndSet(false, true)) {
-            finalizeStream(ctx, tenant, service, rateCtx, body, requestId, start, accumulator, status, errorCode);
+            finalizeStream(ctx, tenant, service, rateCtx, body, requestId, start, accumulator,
+                    status, errorCode, source);
         }
     }
 
@@ -640,6 +684,14 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private void publishTokenUsage(UserContext ctx, Long tenantId, LlmServiceDO service,
                                    JSONObject responseEnvelope, String requestId, String status,
                                    String usageSource, long requestStartedAt, ModelOperation operation) {
+        publishTokenUsage(ctx, tenantId, service, responseEnvelope, requestId, status,
+                usageSource, requestStartedAt, operation, InvocationSource.API_KEY);
+    }
+
+    private void publishTokenUsage(UserContext ctx, Long tenantId, LlmServiceDO service,
+                                   JSONObject responseEnvelope, String requestId, String status,
+                                   String usageSource, long requestStartedAt, ModelOperation operation,
+                                   InvocationSource source) {
         if (!costingEnabled) {
             return;
         }
@@ -647,6 +699,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         event.setUserId(ctx.getUserId());
         event.setTenantId(tenantId);
         event.setApiKeyId(ctx.getApiKeyId());
+        event.setSource(source.name());
         event.setServiceId(service.getServiceId());
         event.setModel(service.getName());
         event.setOperation(operation.name());
@@ -675,10 +728,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             }
             event.setUsageDetailsJson(normalized.rawUsage() == null
                     ? null : JSON.toJSONString(normalized.rawUsage()));
-            if (LlmAuditEvent.STATUS_SUCCESS.equals(status)) {
+            if (LlmAuditEvent.STATUS_SUCCESS.equals(status)
+                    || (source == InvocationSource.PLAYGROUND && normalized.valid())) {
                 PricingSnapshot pricing = pricingResolver.resolve(tenantId, service.getServiceId(), started);
                 event.setPricingSnapshot(pricing);
-                event.setCostResult(costCalculator.calculate(status, normalized, pricing));
+                event.setCostResult(costCalculator.calculate(LlmAuditEvent.STATUS_SUCCESS, normalized, pricing));
+            } else if (source == InvocationSource.PLAYGROUND) {
+                event.setCostResult(CostResult.of(CostStatus.UNCALCULABLE));
             } else {
                 event.setCostResult(CostResult.of(CostStatus.NOT_CHARGEABLE));
             }
@@ -694,7 +750,8 @@ public class LlmForwardServiceImpl implements LlmForwardService {
 
     private void publishAuditStream(UserContext ctx, TenantDO tenant, LlmServiceDO service,
                                     String body, String response, String requestId, long start,
-                                    JSONObject usage, String status, String errorCode) {
+                                    JSONObject usage, String status, String errorCode,
+                                    InvocationSource source) {
         if (!Integer.valueOf(1).equals(tenant.getAuditEnabled())) {
             return;
         }
@@ -703,10 +760,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         event.setUserId(ctx.getUserId());
         event.setTenantId(tenant.getTenantId());
         event.setApiKeyId(ctx.getApiKeyId());
+        event.setSource(source.name());
         event.setServiceId(service.getServiceId());
         event.setModel(service.getName());
-        event.setPrompt(body);
-        event.setResponse(response);
+        if (source == InvocationSource.API_KEY) {
+            event.setPrompt(body);
+            event.setResponse(response);
+        }
         event.setLatencyMs((int) (System.currentTimeMillis() - start));
         event.setStatus(status);
         event.setErrorCode(errorCode);

@@ -34,6 +34,9 @@ public class TokenUsageEvent extends DomainEvent {
     /** API Key ID。 */
     private Long apiKeyId;
 
+    /** 受信任的调用来源；旧事件缺省为 API_KEY。 */
+    private String source = "API_KEY";
+
     /** 服务 ID。 */
     private Long serviceId;
 

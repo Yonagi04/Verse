@@ -3,6 +3,7 @@ package com.yonagi.verse.common.security;
 import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.service.CurrentTenantStateService;
 import io.jsonwebtoken.Claims;
+import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -18,6 +19,29 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class JwtAuthenticationFilterTest {
+
+    @Test
+    void asyncDispatchStillRunsJwtAuthentication() {
+        Fixture fixture = fixture(new CurrentTenantState());
+        MockHttpServletRequest request = request();
+        request.setDispatcherType(DispatcherType.ASYNC);
+        AtomicReference<UserContext> captured = new AtomicReference<>();
+        assertDoesNotThrow(() -> fixture.filter.doFilter(request, new MockHttpServletResponse(),
+                (req, res) -> captured.set(UserContextHolder.get())));
+        assertNotNull(captured.get());
+        assertEquals(10L, captured.get().getUserId());
+    }
+
+    @Test
+    void downstreamArgumentErrorDoesNotInvalidateToken() {
+        Fixture fixture = fixture(state(20L, "MEMBER"));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        assertThrows(IllegalArgumentException.class, () -> fixture.filter.doFilterInternal(
+                request(), response, (req, res) -> { throw new IllegalArgumentException("业务参数错误"); }));
+        assertEquals(200, response.getStatus());
+        assertNull(UserContextHolder.get());
+    }
 
     @Test
     void rerankUsesApiKeyAuthentication() {

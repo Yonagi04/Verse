@@ -37,6 +37,9 @@ public class TokenUsageDO {
      */
     private Long apiKeyId;
 
+    /** API_KEY 或 PLAYGROUND。 */
+    private String source;
+
     /**
      * LLM服务ID（业务ID）
      */

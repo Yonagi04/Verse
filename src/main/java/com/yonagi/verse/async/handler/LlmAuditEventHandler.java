@@ -51,18 +51,21 @@ public class LlmAuditEventHandler implements DomainEventHandler<LlmAuditEvent> {
 
     @Override
     public void onEvent(LlmAuditEvent event) {
-        String promptKey = uploadJson(event.getPrompt(), buildKey(event, "prompt.json"));
-        String responseKey = uploadJson(event.getResponse(), buildKey(event, "response.json"));
+        // 即使生产者误带正文，PlayGround 审计消费者也不能上传或生成预览。
+        boolean privateCall = "PLAYGROUND".equals(event.getSource());
+        String promptKey = privateCall ? null : uploadJson(event.getPrompt(), buildKey(event, "prompt.json"));
+        String responseKey = privateCall ? null : uploadJson(event.getResponse(), buildKey(event, "response.json"));
 
         LlmAuditLogDO auditLog = new LlmAuditLogDO();
         auditLog.setRequestId(event.getRequestId());
         auditLog.setTenantId(event.getTenantId());
         auditLog.setUserId(event.getUserId());
         auditLog.setApiKeyId(event.getApiKeyId());
+        auditLog.setSource(privateCall ? "PLAYGROUND" : "API_KEY");
         auditLog.setServiceId(event.getServiceId());
         auditLog.setModel(event.getModel());
-        auditLog.setPromptPreview(extractPromptPreview(event.getPrompt()));
-        auditLog.setResponsePreview(extractResponsePreview(event.getResponse()));
+        auditLog.setPromptPreview(privateCall ? null : extractPromptPreview(event.getPrompt()));
+        auditLog.setResponsePreview(privateCall ? null : extractResponsePreview(event.getResponse()));
         auditLog.setPromptObjectKey(promptKey);
         auditLog.setResponseObjectKey(responseKey);
         auditLog.setPromptTokens(event.getPromptTokens());
