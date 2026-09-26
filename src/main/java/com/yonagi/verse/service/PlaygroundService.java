@@ -9,6 +9,7 @@ import reactor.core.publisher.Flux;
 public interface PlaygroundService {
     PlaygroundDtos.Status status(UserContext actor, Long tenantId);
     PlaygroundDtos.Models models(UserContext actor, Long tenantId);
+    PlaygroundDtos.Prompts prompts(UserContext actor, Long tenantId);
     PlaygroundDtos.Summary create(UserContext actor, Long tenantId, Long serviceId);
     PlaygroundDtos.Sessions sessions(UserContext actor, Long tenantId, int pageNum, int pageSize, String keyword);
     PlaygroundDtos.Detail detail(UserContext actor, Long tenantId, Long sessionId);

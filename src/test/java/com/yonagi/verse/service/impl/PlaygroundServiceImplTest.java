@@ -110,6 +110,29 @@ class PlaygroundServiceImplTest {
     }
 
     @Test
+    void starterPromptsAreOrderedAndRespectTenantAccess() {
+        var prompts = service.prompts(actor, 2L).items();
+        assertEquals(List.of("intro-capabilities", "explain-concept", "organize-requirements", "rewrite-copy"),
+                prompts.stream().map(prompt -> prompt.id()).toList());
+        assertTrue(prompts.stream().allMatch(prompt -> !prompt.prompt().isBlank()));
+
+        tenant.setPlaygroundEnabled(0);
+        ClientException disabled = assertThrows(ClientException.class,
+                () -> service.prompts(actor, 2L));
+        assertEquals("A001000", disabled.getErrorCode());
+
+        tenant.setPlaygroundEnabled(1);
+        ClientException mismatch = assertThrows(ClientException.class,
+                () -> service.prompts(actor, 3L));
+        assertEquals("B000338", mismatch.getErrorCode());
+
+        when(membershipMapper.selectOne(any())).thenReturn(null);
+        ClientException left = assertThrows(ClientException.class,
+                () -> service.prompts(actor, 2L));
+        assertEquals("B000308", left.getErrorCode());
+    }
+
+    @Test
     void currentTenantAndActiveMembershipAreCheckedOnEveryRead() {
         ClientException mismatch = assertThrows(ClientException.class,
                 () -> service.status(actor, 3L));

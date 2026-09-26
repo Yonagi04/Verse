@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.alibaba.fastjson2.JSON;
 import com.yonagi.verse.async.api.DomainEventPublisher;
 import com.yonagi.verse.async.api.TokenUsageEventPublisher;
 import com.yonagi.verse.async.event.TokenUsageEvent;
@@ -22,6 +23,7 @@ import com.yonagi.verse.resilience.api.RateLimiter;
 import com.yonagi.verse.resilience.impl.Resilience4jTimeLimiter;
 import com.yonagi.verse.service.forward.ModelResolver;
 import com.yonagi.verse.service.forward.ChatMessage;
+import com.yonagi.verse.service.forward.ForwardContext;
 import com.yonagi.verse.service.forward.ProviderAdapter;
 import com.yonagi.verse.service.forward.UpstreamFailureException;
 import com.yonagi.verse.service.pricing.CostCalculator;
@@ -184,6 +186,16 @@ class LlmForwardUsagePublicationTest {
 
         service.playgroundChatStream(context, 10L,
                 List.of(new ChatMessage("user", "private question")), "playground-1", Instant.now()).blockLast();
+
+        ArgumentCaptor<ForwardContext> forwarded = ArgumentCaptor.forClass(ForwardContext.class);
+        verify(providerAdapter).stream(forwarded.capture());
+        assertEquals("https://example.invalid", forwarded.getValue().getApiUrl());
+        assertEquals("plain-key", forwarded.getValue().getApiKey());
+        assertEquals("upstream", forwarded.getValue().getModelName());
+        var forwardedBody = JSON.parseObject(forwarded.getValue().getBody());
+        assertEquals("private question", forwardedBody.getJSONArray("messages")
+                .getJSONObject(0).getString("content"));
+        assertTrue(forwardedBody.getBooleanValue("stream"));
 
         ArgumentCaptor<TokenUsageEvent> usage = ArgumentCaptor.forClass(TokenUsageEvent.class);
         verify(usagePublisher).publish(usage.capture());

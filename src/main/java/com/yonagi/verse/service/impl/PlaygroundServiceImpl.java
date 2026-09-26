@@ -50,6 +50,16 @@ import java.util.concurrent.atomic.AtomicInteger;
 @RequiredArgsConstructor
 public class PlaygroundServiceImpl implements PlaygroundService {
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
+    /** 一期提示词由服务端统一维护，顺序即前端展示顺序。 */
+    private static final List<PlaygroundDtos.Prompt> STARTER_PROMPTS = List.of(
+            new PlaygroundDtos.Prompt("intro-capabilities", "了解模型能力", "用三句话快速认识当前模型",
+                    "请用三句话介绍你的主要能力，并分别给出一个适合向你提问的例子。"),
+            new PlaygroundDtos.Prompt("explain-concept", "解释一个概念", "用简单例子讲清楚复杂术语",
+                    "请解释 RPM 和 TPM 的区别，并各举一个实际使用中的例子。"),
+            new PlaygroundDtos.Prompt("organize-requirements", "整理需求清单", "梳理目标、功能与验收点",
+                    "请帮我把下面的需求整理成目标、功能清单和验收标准：\n\n"),
+            new PlaygroundDtos.Prompt("rewrite-copy", "改写一段文字", "让表达更简洁、清晰、友好",
+                    "请将下面的文字改写得更简洁、清晰、友好，保留原意：\n\n"));
 
     private final TenantMapper tenantMapper;
     private final UserTenantMapper membershipMapper;
@@ -82,6 +92,12 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                         s.getDescription(), s.getContextWindow()))
                 .toList();
         return new PlaygroundDtos.Models(items);
+    }
+
+    @Override
+    public PlaygroundDtos.Prompts prompts(UserContext actor, Long tenantId) {
+        requireEnabled(actor, tenantId);
+        return new PlaygroundDtos.Prompts(STARTER_PROMPTS);
     }
 
     @Override

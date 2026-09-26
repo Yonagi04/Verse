@@ -51,6 +51,11 @@ public class PlaygroundController {
         return Results.success(playgroundService.models(UserContextHolder.get(), tenantId));
     }
 
+    @GetMapping("/prompts")
+    public Result<PlaygroundDtos.Prompts> prompts(@PathVariable Long tenantId) {
+        return Results.success(playgroundService.prompts(UserContextHolder.get(), tenantId));
+    }
+
     @PostMapping("/sessions")
     public Result<PlaygroundDtos.Summary> create(@PathVariable Long tenantId,
             @RequestBody Map<String, Object> body) {

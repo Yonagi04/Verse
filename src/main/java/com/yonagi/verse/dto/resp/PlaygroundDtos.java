@@ -10,6 +10,12 @@ public final class PlaygroundDtos {
     public record Model(String serviceId, String name, String provider, String description,
                         Long contextWindow) { }
     public record Models(List<Model> items) { }
+    public record Prompt(
+            /** 提示词的稳定标识。 */ String id,
+            /** 卡片标题。 */ String title,
+            /** 卡片简述。 */ String description,
+            /** 回填输入框的完整内容。 */ String prompt) { }
+    public record Prompts(/** 有序的新会话提示词列表。 */ List<Prompt> items) { }
     public record Summary(String sessionId, String title, String serviceId, String modelName,
                           int turnCount, String createdAt, String updatedAt) { }
     public record Sessions(List<Summary> sessions, long total, long totalPages,
