@@ -103,6 +103,8 @@ public class TenantCrudServiceImpl implements TenantCrudService {
                     dto.setCurrent(ut.getTenantId().equals(currentTenantId));
                     dto.setJoinedAt(ut.getJoinedAt());
                     dto.setLastAccessedAt(ut.getLastAccessedAt());
+                    dto.setFavorite(Boolean.TRUE.equals(ut.getFavorite()));
+                    dto.setPinned(Boolean.TRUE.equals(ut.getPinned()));
                     return dto;
                 })
                 .toList();
@@ -188,7 +190,19 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         } else if (userId == null) {
             throw new ClientException(TenantErrorCodeEnum.USER_ID_IS_NULL);
         }
-        if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
+        // 跨租户只读详情每次从数据库复核目标状态与有效成员关系，旧缓存不能延续已撤销的访问资格。
+        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
+                .eq(TenantDO::getTenantId, tenantId)
+                .eq(TenantDO::getStatus, 1)
+                .eq(TenantDO::getDelFlag, 0));
+        if (tenantDO == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        }
+        UserTenantDO membership = userTenantService.getOne(Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId)
+                .eq(UserTenantDO::getTenantId, tenantId)
+                .isNull(UserTenantDO::getLeftAt));
+        if (membership == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
         String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
@@ -197,14 +211,6 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         if (cachedJson != null) {
             resp = JSON.parseObject(cachedJson, TenantInfoRespDTO.class);
         } else {
-            TenantDO tenantDO = tenantMapper.selectOne(
-                    Wrappers.lambdaQuery(TenantDO.class)
-                            .eq(TenantDO::getTenantId, tenantId)
-                            .eq(TenantDO::getStatus, 1)
-                            .eq(TenantDO::getDelFlag, 0));
-            if (tenantDO == null) {
-                throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-            }
             resp = new TenantInfoRespDTO();
             BeanUtil.copyProperties(tenantDO, resp);
             resp.setLogoUrl(tenantMediaService.resolveUrl(tenantDO.getLogo()));
@@ -213,7 +219,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         }
 
         // 角色和成员数是动态数据，不写入租户公共缓存，避免不同用户之间串角色。
-        resp.setRole(userTenantService.getRoleByUserIdAndTenantId(userId, tenantId));
+        resp.setRole(membership.getRole());
         resp.setMemberCount(userTenantService.count(
                 Wrappers.lambdaQuery(UserTenantDO.class)
                         .eq(UserTenantDO::getTenantId, tenantId)

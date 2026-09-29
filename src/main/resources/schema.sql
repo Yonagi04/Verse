@@ -70,6 +70,8 @@ CREATE TABLE IF NOT EXISTS `t_user_tenant` (
     `joined_at`        DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '加入时间',
     `last_accessed_at` DATETIME    DEFAULT NULL COMMENT '最近一次切换至该租户的时间',
     `left_at`          DATETIME    DEFAULT NULL COMMENT '离开时间（NULL=仍在租户内）',
+    `favorite`         TINYINT     NOT NULL DEFAULT 0 COMMENT '用户是否收藏租户：0=否, 1=是',
+    `pinned`           TINYINT     NOT NULL DEFAULT 0 COMMENT '用户是否置顶租户：0=否, 1=是',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_user_tenant` (`user_id`, `tenant_id`),
     KEY `idx_tenant_id` (`tenant_id`)

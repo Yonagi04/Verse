@@ -49,4 +49,10 @@ public class UserTenantDO {
      * 离开时间（NULL=仍在租户内）
      */
     private Date leftAt;
+
+    /** 用户是否收藏该租户。 */
+    private Boolean favorite;
+
+    /** 用户是否置顶该租户。 */
+    private Boolean pinned;
 }

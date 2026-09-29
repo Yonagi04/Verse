@@ -58,6 +58,8 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
                     .eq(UserTenantDO::getTenantId, tenantId)
                     .set(UserTenantDO::getLeftAt, null)
                     .set(UserTenantDO::getRole, role)
+                    .set(UserTenantDO::getFavorite, false)
+                    .set(UserTenantDO::getPinned, false)
                     .set(UserTenantDO::getJoinedAt, new Date());
             int update = baseMapper.update(updateWrapper);
             if (update < 1) {
@@ -68,6 +70,8 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
             lastLeftUserTenant.setLeftAt(null);
             lastLeftUserTenant.setRole(role);
             lastLeftUserTenant.setJoinedAt(new Date());
+            lastLeftUserTenant.setFavorite(false);
+            lastLeftUserTenant.setPinned(false);
             String userTenantCacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
             stringRedisTemplate.opsForValue().set(userTenantCacheKey, JSON.toJSONString(lastLeftUserTenant), 15, TimeUnit.MINUTES);
             return Boolean.TRUE;
@@ -78,6 +82,8 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
         userTenantDO.setUserId(userId);
         userTenantDO.setRole(role);
         userTenantDO.setJoinedAt(new Date());
+        userTenantDO.setFavorite(false);
+        userTenantDO.setPinned(false);
         int userTenantInserted = baseMapper.insert(userTenantDO);
         if (userTenantInserted < 1) {
             log.error("Failed to create user-tenant association for userId: {}, tenantId: {}", userId, tenantId);
@@ -201,6 +207,8 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
                 .eq(UserTenantDO::getTenantId, tenantId)
                 .isNull(UserTenantDO::getLeftAt)
                 .set(UserTenantDO::getLeftAt, new Date());
+        updateWrapper.set(UserTenantDO::getFavorite, false)
+                .set(UserTenantDO::getPinned, false);
         int update = baseMapper.update(updateWrapper);
         if (update < 1) {
             throw new ServerException(UserTenantErrorCodeEnum.USER_REMOVE_FAILED);

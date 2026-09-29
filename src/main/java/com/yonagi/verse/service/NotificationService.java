@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.NotificationDO;
 import com.yonagi.verse.dto.resp.NotificationInfoRespDTO;
 import com.yonagi.verse.dto.resp.NotificationListRespDTO;
+import com.yonagi.verse.dto.resp.NotificationRecentListRespDTO;
 import com.yonagi.verse.dto.resp.NotificationUnreadCountRespDTO;
 
 import java.util.List;
@@ -24,6 +25,8 @@ public interface NotificationService extends IService<NotificationDO> {
     NotificationUnreadCountRespDTO getUnreadNotificationCount(Long userId);
 
     Integer readAllUnreadNotifications(Long userId);
+
+    NotificationRecentListRespDTO getRecentNotifications(Long userId, Long tenantId);
 
     /**
      * 创建通知并推送给指定用户（同步）。

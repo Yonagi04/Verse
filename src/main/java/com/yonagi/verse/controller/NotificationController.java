@@ -4,9 +4,11 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.enums.NotificationErrorCodeEnum;
+import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.resp.NotificationInfoRespDTO;
 import com.yonagi.verse.dto.resp.NotificationListRespDTO;
+import com.yonagi.verse.dto.resp.NotificationRecentListRespDTO;
 import com.yonagi.verse.dto.resp.NotificationUnreadCountRespDTO;
 import com.yonagi.verse.service.NotificationService;
 import jakarta.validation.Valid;
@@ -53,5 +55,14 @@ public class NotificationController {
     @PostMapping("/read-all")
     public Result<Integer> readAllUnreadNotifications(@CurrentUser Long userId) {
         return Results.success(notificationService.readAllUnreadNotifications(userId));
+    }
+
+    @GetMapping("/recent")
+    public Result<NotificationRecentListRespDTO> getRecentNotifications(@CurrentUser Long userId,
+                                                                        @RequestParam Long tenantId) {
+        if (tenantId == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        return Results.success(notificationService.getRecentNotifications(userId, tenantId));
     }
 }

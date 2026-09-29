@@ -136,4 +136,9 @@ public class RedisKeyConstant {
      * TPM 软限流计数（String INCRBY）：{dimension}:{id}:{epochMinute}
      */
     public static final String RATE_LIMIT_TPM_KEY = "verse:ratelimit:tpm:";
+
+    /**
+     * 通知信息缓存key（{notificationId} → NotificationDO JSON），用于缓存
+     */
+    public static final String NOTIFICATION_INFO_KEY = "verse:notification:info:";
 }

@@ -52,6 +52,7 @@ public class TenantController {
     }
 
     @GetMapping("/{tenantId}/info")
+    @TenantContextExempt(reason = "已加入租户的详情查看不改变当前租户，成员身份由服务层校验")
     public Result<TenantInfoRespDTO> getTenantInfo(@CurrentUser Long userId,
                                   @PathVariable Long tenantId) {
         if (tenantId == null) {

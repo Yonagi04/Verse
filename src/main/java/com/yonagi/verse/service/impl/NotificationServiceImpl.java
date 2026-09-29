@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -8,24 +9,32 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.async.api.DomainEventPublisher;
 import com.yonagi.verse.async.event.NotificationEvent;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.NotificationErrorCodeEnum;
+import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.NotificationDO;
 import com.yonagi.verse.dao.entity.NotificationRecipientDO;
+import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.mapper.NotificationMapper;
 import com.yonagi.verse.dao.mapper.NotificationRecipientMapper;
+import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dto.resp.NotificationInfoRespDTO;
 import com.yonagi.verse.dto.resp.NotificationListRespDTO;
+import com.yonagi.verse.dto.resp.NotificationRecentListRespDTO;
 import com.yonagi.verse.dto.resp.NotificationUnreadCountRespDTO;
 import com.yonagi.verse.service.NotificationService;
+import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
@@ -44,6 +53,10 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     private final NotificationRecipientMapper notificationRecipientMapper;
     private final SimpMessagingTemplate messagingTemplate;
     private final DomainEventPublisher domainEventPublisher;
+    private final TenantMapper tenantMapper;
+    private final UserTenantService userTenantService;
+    private final NotificationMapper notificationMapper;
+    private final StringRedisTemplate stringRedisTemplate;
 
     @Override
     public NotificationListRespDTO getNotificationList(Long userId, Integer pageNum, Integer pageSize) {
@@ -67,10 +80,20 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
         }
 
         // 查询通知表
-        NotificationDO notificationDO = baseMapper.selectOne(Wrappers.lambdaQuery(NotificationDO.class)
-                .eq(NotificationDO::getNotificationId, notificationId));
-        if (notificationDO == null) {
-            throw new ClientException(NotificationErrorCodeEnum.NOTIFICATION_NOT_FOUND);
+        String cacheKey = RedisKeyConstant.NOTIFICATION_INFO_KEY + notificationId;
+        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
+        NotificationDO notificationDO;
+        if (cachedJson != null) {
+            notificationDO = JSON.parseObject(cachedJson, NotificationDO.class);
+        } else {
+            notificationDO = baseMapper.selectOne(Wrappers.lambdaQuery(NotificationDO.class)
+                    .eq(NotificationDO::getNotificationId, notificationId));
+            if (notificationDO == null) {
+                throw new ClientException(NotificationErrorCodeEnum.NOTIFICATION_NOT_FOUND);
+            }
+            // 通知内容写回cache
+            stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(notificationDO));
+            stringRedisTemplate.expire(cacheKey, Duration.ofHours(12));
         }
         NotificationInfoRespDTO notificationInfoRespDTO = new NotificationInfoRespDTO();
         BeanUtil.copyProperties(notificationDO, notificationInfoRespDTO);
@@ -117,6 +140,35 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
             throw new ClientException(NotificationErrorCodeEnum.NOTIFICATION_READ_FAILED);
         }
         return updatedRows;
+    }
+
+    /**
+     * 获取最近一天的通知列表
+     * @param userId
+     * @param tenantId
+     * @return
+     */
+    @Override
+    public NotificationRecentListRespDTO getRecentNotifications(Long userId, Long tenantId) {
+        validateTenantAndMembership(tenantId, userId);
+        long startTime = System.currentTimeMillis() - Duration.ofDays(1).toMillis();
+        List<NotificationRecentListRespDTO.NotificationInfo> notificationInfos = notificationRecipientMapper.selectListByUserIdAndTenantIdAndStartTime(userId, tenantId, startTime);
+        NotificationRecentListRespDTO notificationRecentListRespDTO = new NotificationRecentListRespDTO(new ArrayList<>());
+        notificationRecentListRespDTO.setRecords(notificationInfos == null ? new ArrayList<>() : notificationInfos);
+        return notificationRecentListRespDTO;
+    }
+
+    private void validateTenantAndMembership(Long tenantId, Long userId) {
+        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
+                .eq(TenantDO::getTenantId, tenantId)
+                .eq(TenantDO::getStatus, 1)
+                .eq(TenantDO::getDelFlag, 0));
+        if (tenantDO == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        }
+        if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        }
     }
 
     @Override

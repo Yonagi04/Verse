@@ -43,6 +43,28 @@ public interface UserTenantMapper extends BaseMapper<UserTenantDO> {
     UserTenantDO selectActiveMembershipForUpdate(@Param("userId") Long userId,
                                                   @Param("tenantId") Long tenantId);
 
+    /** 从数据库读取目标有效成员关系和实时角色，不使用成员缓存。 */
+    @Select("""
+            SELECT ut.* FROM t_user_tenant ut
+            JOIN t_tenant t ON t.tenant_id = ut.tenant_id
+             AND t.status = 1 AND t.del_flag = 0
+            WHERE ut.user_id = #{userId} AND ut.tenant_id = #{tenantId}
+              AND ut.left_at IS NULL
+            """)
+    UserTenantDO selectActiveMembership(@Param("userId") Long userId,
+                                        @Param("tenantId") Long tenantId);
+
+    /** 仅更新本人仍有效的成员关系偏好；目标租户停用后不会写入。 */
+    @Update("""
+            UPDATE t_user_tenant ut JOIN t_tenant t ON t.tenant_id = ut.tenant_id
+             AND t.status = 1 AND t.del_flag = 0
+            SET ut.favorite = #{favorite}, ut.pinned = #{pinned}
+            WHERE ut.user_id = #{userId} AND ut.tenant_id = #{tenantId}
+              AND ut.left_at IS NULL
+            """)
+    int updatePreference(@Param("userId") Long userId, @Param("tenantId") Long tenantId,
+                         @Param("favorite") boolean favorite, @Param("pinned") boolean pinned);
+
     /** 原子刷新成员关系最近访问时间。 */
     @Update("""
             UPDATE t_user_tenant SET last_accessed_at = CURRENT_TIMESTAMP
@@ -56,7 +78,7 @@ public interface UserTenantMapper extends BaseMapper<UserTenantDO> {
 
     /** 在锁定成员关系后将其标记为已离开。 */
     @Update("""
-            UPDATE t_user_tenant SET left_at = CURRENT_TIMESTAMP
+            UPDATE t_user_tenant SET left_at = CURRENT_TIMESTAMP, favorite = 0, pinned = 0
             WHERE user_id = #{userId} AND tenant_id = #{tenantId} AND left_at IS NULL
             """)
     int markMembershipLeft(@Param("userId") Long userId, @Param("tenantId") Long tenantId);
