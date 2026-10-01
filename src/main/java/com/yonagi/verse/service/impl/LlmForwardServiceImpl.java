@@ -183,6 +183,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 publishAudit(ctx, tenant, fallbackService, body, null, requestId, start,
                         LlmAuditEvent.STATUS_FAIL, e2.getErrorCode(), operation);
                 throw e2;
+            } catch (ClientException e2) {
+                // 备用服务输出限额拒绝时也保留唯一失败终态，不再请求上游。
+                publishTokenUsage(ctx, tenant.getTenantId(), fallbackService, null,
+                        requestId, LlmAuditEvent.STATUS_FAIL, start, operation);
+                publishAudit(ctx, tenant, fallbackService, body, null, requestId, start,
+                        LlmAuditEvent.STATUS_FAIL, e2.getErrorCode(), operation);
+                throw e2;
             }
         }
 
@@ -211,6 +218,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     @Override
     public Flux<ServerSentEvent<String>> playgroundChatStream(UserContext ctx, Long serviceId,
             List<ChatMessage> messages, String requestId, Instant requestStartedAt) {
+        return playgroundChatStream(ctx, serviceId, messages, java.util.Map.of(), requestId, requestStartedAt);
+    }
+
+    @Override
+    public Flux<ServerSentEvent<String>> playgroundChatStream(UserContext ctx, Long serviceId,
+            List<ChatMessage> messages, java.util.Map<String, Object> parameters,
+            String requestId, Instant requestStartedAt) {
         if (ctx == null || ctx.getCurrentTenantId() == null || ctx.getUserId() == null
                 || ctx.getApiKeyId() != null || serviceId == null || messages == null || messages.isEmpty()) {
             throw new IllegalArgumentException("PlayGround 调用参数无效");
@@ -224,7 +238,8 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         if (service == null) throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_CONFIGURED);
         JSONArray safeMessages = new JSONArray();
         for (ChatMessage message : messages) {
-            if (message == null || !("user".equals(message.role()) || "assistant".equals(message.role()))
+            if (message == null || !("user".equals(message.role()) || "assistant".equals(message.role())
+                    || "system".equals(message.role()))
                     || message.content() == null) throw new IllegalArgumentException("PlayGround 消息无效");
             JSONObject safe = new JSONObject();
             safe.put("role", message.role());
@@ -235,7 +250,22 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         body.put("model", service.getName());
         body.put("messages", safeMessages);
         body.put("stream", true);
-        body.put("stream_options", JSONObject.of("include_usage", true));
+        if (parameters == null || !java.util.Set.of("temperature", "top_p", "max_tokens")
+                .containsAll(parameters.keySet())) throw new IllegalArgumentException("PlayGround 参数无效");
+        // PlayGround 独立校验自己的参数范围，不复用普通 API 的输出限额。
+        JSONObject config = new JSONObject();
+        if (parameters.containsKey("temperature")) config.put("temperature", parameters.get("temperature"));
+        if (parameters.containsKey("top_p")) config.put("topP", parameters.get("top_p"));
+        if (parameters.containsKey("max_tokens")) config.put("maxTokens", parameters.get("max_tokens"));
+        body.putAll(PlaygroundConfiguration.parameters(config, PlaygroundConfiguration.capabilities(service,
+                modelResolver.protocolFor(service, ModelOperation.CHAT_COMPLETIONS))));
+        // 原生适配器有严格字段白名单，不能携带 OpenAI 专用 stream_options。
+        var protocol = modelResolver.protocolFor(service, ModelOperation.CHAT_COMPLETIONS);
+        if (protocol == null || protocol == com.yonagi.verse.common.enums.UpstreamProtocol.OPENAI_COMPAT
+                || protocol == com.yonagi.verse.common.enums.UpstreamProtocol.AZURE_OPENAI_V1
+                || protocol == com.yonagi.verse.common.enums.UpstreamProtocol.AZURE_OPENAI_DEPLOYMENT) {
+            body.put("stream_options", JSONObject.of("include_usage", true));
+        }
         return streamChatCore(ctx, tenant, service, body.toJSONString(), requestId,
                 requestStartedAt, InvocationSource.PLAYGROUND);
     }
@@ -245,6 +275,8 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             LlmServiceDO service, String body, String requestId, Instant requestStartedAt,
             InvocationSource source) {
         modelResolver.requireBinding(service, ModelOperation.CHAT_COMPLETIONS);
+        String requestBody = source == InvocationSource.API_KEY
+                ? apiOutputBody(service, body, ModelOperation.CHAT_COMPLETIONS) : body;
         RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
         rateLimiter.check(rateCtx);
 
@@ -259,7 +291,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 .apiUrl(service.getApiUrl())
                 .apiKey(realApiKey)
                 .modelName(service.getModelName())
-                .body(body)
+                .body(requestBody)
                 .operation(ModelOperation.CHAT_COMPLETIONS)
                 .protocol(modelResolver.protocolFor(service, ModelOperation.CHAT_COMPLETIONS))
                 .provider(service.getProvider())
@@ -285,15 +317,15 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                         }
                         accumulator.accept(sse.data());
                     })
-                    .doOnComplete(() -> finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, body,
+                    .doOnComplete(() -> finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, requestBody,
                             requestId, start, accumulator, LlmAuditEvent.STATUS_SUCCESS, null, source))
-                    .doOnCancel(() -> finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, body,
+                    .doOnCancel(() -> finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, requestBody,
                             requestId, start, accumulator, LlmAuditEvent.STATUS_ABORTED, null, source))
                     .doOnError(e -> {
                         if (!firstChunk.get()) {
                             circuitBreaker.recordFailure(serviceId);
                         }
-                        finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, body, requestId,
+                        finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, requestBody, requestId,
                                 start, accumulator, LlmAuditEvent.STATUS_FAIL, errorCode(e), source);
                     });
         });
@@ -312,6 +344,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         }
         LlmServiceDO service = modelResolver.resolve(tenant.getTenantId(), json.getString("model"));
         var protocol = modelResolver.protocolFor(service, ModelOperation.RESPONSES);
+        String requestBody = apiOutputBody(service, body, ModelOperation.RESPONSES);
         RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
         rateLimiter.check(rateCtx);
         String serviceId = String.valueOf(service.getServiceId());
@@ -322,7 +355,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         ForwardContext forwardContext = ForwardContext.builder()
                 .apiUrl(service.getApiUrl())
                 .apiKey(service.getApiKey() == null ? null : aesUtil.decrypt(service.getApiKey()))
-                .modelName(service.getModelName()).body(body)
+                .modelName(service.getModelName()).body(requestBody)
                 .operation(ModelOperation.RESPONSES).protocol(protocol)
                 .provider(service.getProvider()).providerSettings(service.getProviderSettings()).build();
 
@@ -352,13 +385,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                         }
                     })
                     .doOnComplete(() -> finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
-                            body, requestId, start, terminal.get(), terminalStatus.get()))
+                            requestBody, requestId, start, terminal.get(), terminalStatus.get()))
                     .doOnCancel(() -> finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
-                            body, requestId, start, terminal.get(), LlmAuditEvent.STATUS_ABORTED))
+                            requestBody, requestId, start, terminal.get(), LlmAuditEvent.STATUS_ABORTED))
                     .doOnError(error -> {
                         if (!firstEvent.get()) circuitBreaker.recordFailure(serviceId);
                         finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
-                                body, requestId, start, terminal.get(), LlmAuditEvent.STATUS_FAIL);
+                                requestBody, requestId, start, terminal.get(), LlmAuditEvent.STATUS_FAIL);
                     });
         });
     }
@@ -458,6 +491,8 @@ public class LlmForwardServiceImpl implements LlmForwardService {
      */
     private String forwardWithResilience(LlmServiceDO service, RateLimitContext rateCtx,
                                          String body, ModelOperation operation) {
+        // 降级到备用服务时也按实际服务的 API 限额校验，不沿用主服务限额。
+        body = apiOutputBody(service, body, operation);
         rateLimiter.check(rateCtx);
 
         String serviceId = String.valueOf(service.getServiceId());
@@ -502,6 +537,32 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         // 理论不可达：循环内每次失败要么重试、要么抛出
         throw new UpstreamFailureException(LlmForwardErrorCodeEnum.FORWARD_FAILED.message(),
                 LlmForwardErrorCodeEnum.FORWARD_FAILED, true);
+    }
+
+    /** 普通文本生成 API 的输出限额；未配置时保留原请求与上游默认行为。 */
+    private String apiOutputBody(LlmServiceDO service, String body, ModelOperation operation) {
+        Long limit = service.getMaxOutputTokens();
+        if (limit == null || (operation != ModelOperation.CHAT_COMPLETIONS && operation != ModelOperation.RESPONSES)) {
+            return body;
+        }
+        JSONObject request = JSON.parseObject(body);
+        String[] fields = operation == ModelOperation.RESPONSES
+                ? new String[]{"max_output_tokens"} : new String[]{"max_tokens", "max_completion_tokens"};
+        boolean specified = false;
+        for (String field : fields) {
+            Object value = request.get(field);
+            if (value == null) continue;
+            specified = true;
+            // 同时检查两种 Chat 参数名，避免换字段名绕过 API 限额。
+            if (!(value instanceof Number number) || !Double.isFinite(number.doubleValue())
+                    || number.doubleValue() != number.longValue() || number.longValue() < 1 || number.longValue() > limit) {
+                throw new ClientException("参数 " + field + " 必须为正整数且不能超过 API 转发输出上限 " + limit,
+                        LlmForwardErrorCodeEnum.OUTPUT_TOKEN_LIMIT_INVALID);
+            }
+        }
+        if (specified) return body;
+        request.put(fields[0], limit);
+        return request.toJSONString();
     }
 
     private RateLimitContext buildRateContext(UserContext ctx, TenantDO tenant, LlmServiceDO service) {

@@ -64,8 +64,8 @@ public class LlmServiceAddReqDTO {
     @Min(value = 1, message = "上下文窗口必须大于0")
     private Long contextWindow;
 
-    /** 最大输出 Token 数。 */
-    @Min(value = 1, message = "最大输出 Token 数必须大于0")
+    /** 普通 API 转发输出 Token 上限，与 PlayGround 独立；空值表示不限制。 */
+    @Min(value = 1, message = "API 转发输出上限必须大于0")
     private Long maxOutputTokens;
 
     /** 完整定价配置。 */

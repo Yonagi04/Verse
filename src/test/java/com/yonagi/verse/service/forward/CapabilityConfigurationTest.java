@@ -58,6 +58,17 @@ class CapabilityConfigurationTest {
     }
 
     @Test
+    void explicitPlaygroundCapabilitiesKeepProviderSettingsContractAndRejectUnsafeFields() {
+        var bindings = List.of(binding("CHAT_COMPLETIONS", "OPENAI_COMPAT"));
+        assertEquals(CredentialMode.API_KEY, CapabilityConfiguration.validate("custom", "API_KEY", "https://example.invalid", "secret",
+                Map.of("playground", "{\"temperature\":{\"min\":0,\"max\":2},\"maxTokens\":4096}"), bindings));
+        assertThrows(ClientException.class, () -> CapabilityConfiguration.validate("custom", "API_KEY", "https://example.invalid", "secret",
+                Map.of("playground", "{\"apiKey\":\"injected\"}"), bindings));
+        assertThrows(ClientException.class, () -> CapabilityConfiguration.validate("custom", "API_KEY", "https://example.invalid", "secret",
+                Map.of("playground", "{\"temperature\":{\"min\":2,\"max\":1}}"), bindings));
+    }
+
+    @Test
     void invalidOperationAndRerankCompatibilityAreRejected() {
         assertThrows(ClientException.class, () -> CapabilityConfiguration.normalize(
                 List.of(binding("BOGUS", "OPENAI_COMPAT"))));

@@ -103,6 +103,11 @@ public class PlaygroundController {
         response.setContentType("text/event-stream;charset=UTF-8");
         response.setHeader(HttpHeaders.CACHE_CONTROL, "no-cache");
         response.setHeader("X-Request-Id", prepared.requestId());
+        return emitter(prepared.events());
+    }
+
+    /** 一、二期共用 Servlet 断连取消规则。 */
+    public static SseEmitter emitter(reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> events) {
         SseEmitter emitter = new SseEmitter(130_000L);
         AtomicReference<Disposable> subscription = new AtomicReference<>();
         AtomicBoolean cancelled = new AtomicBoolean();
@@ -115,7 +120,7 @@ public class PlaygroundController {
         emitter.onCompletion(cancel);
         emitter.onTimeout(cancel);
         emitter.onError(error -> cancel.run());
-        Disposable current = prepared.events().subscribe(event -> {
+        Disposable current = events.subscribe(event -> {
             try {
                 emitter.send(SseEmitter.event().name(event.event()).data(event.data(), MediaType.APPLICATION_JSON));
             } catch (IOException | IllegalStateException disconnected) {
@@ -142,10 +147,14 @@ public class PlaygroundController {
     /** 流式前置错误显式返回 JSON 和 HTTP 状态。 */
     @ExceptionHandler(AbstractException.class)
     public ResponseEntity<Result<?>> handle(AbstractException error) {
+        return failure(error);
+    }
+
+    public static ResponseEntity<Result<?>> failure(AbstractException error) {
         HttpStatus status = switch (error.getErrorCode()) {
             case "A001000" -> HttpStatus.FORBIDDEN;
             case "A001001" -> HttpStatus.NOT_FOUND;
-            case "A001002", "A001004", "A001010", "A001013" -> HttpStatus.CONFLICT;
+            case "A001002", "A001004", "A001010", "A001013", "A001015" -> HttpStatus.CONFLICT;
             case "A001005", "A001006", "A001007" -> HttpStatus.TOO_MANY_REQUESTS;
             case "A001011" -> HttpStatus.UNPROCESSABLE_ENTITY;
             case "C001000" -> HttpStatus.BAD_GATEWAY;

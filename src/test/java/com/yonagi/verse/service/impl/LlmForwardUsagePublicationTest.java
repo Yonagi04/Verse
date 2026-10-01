@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.impl;
 
 import com.alibaba.fastjson2.JSON;
+import com.alibaba.fastjson2.JSONObject;
 import com.yonagi.verse.async.api.DomainEventPublisher;
 import com.yonagi.verse.async.api.TokenUsageEventPublisher;
 import com.yonagi.verse.async.event.TokenUsageEvent;
@@ -32,6 +33,8 @@ import com.yonagi.verse.service.pricing.PricingSnapshot;
 import com.yonagi.verse.service.usage.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -40,6 +43,8 @@ import reactor.core.publisher.Flux;
 import java.time.Instant;
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.Callable;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -355,6 +360,117 @@ class LlmForwardUsagePublicationTest {
                 "image-2", Instant.now()));
         verify(timeLimiter, times(1)).execute(any());
         verifyNoInteractions(fallbackExecutor);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1025", "0", "-1", "1.5", "\"1024\"", "true", "1e100"})
+    void apiRejectsInvalidOrExcessiveOutputBeforeRateLimitAndUpstream(String value) {
+        primary.setMaxOutputTokens(1024L);
+        for (String field : List.of("max_tokens", "max_completion_tokens")) {
+            String body = "{\"model\":\"alias\",\"" + field + "\":" + value + "}";
+            ClientException blocking = assertThrows(ClientException.class,
+                    () -> service.chatCompletion(context, body, "limit-blocking", Instant.now()));
+            assertEquals(LlmForwardErrorCodeEnum.OUTPUT_TOKEN_LIMIT_INVALID.code(), blocking.getErrorCode());
+            assertThrows(ClientException.class,
+                    () -> service.chatCompletionStream(context, body, "limit-stream", Instant.now()));
+        }
+        verifyNoInteractions(rateLimiter, timeLimiter, providerAdapter, fallbackExecutor);
+    }
+
+    @Test
+    void chatApiDefaultsToItsLimitAndPreservesExplicitCompletionTokenAlias() {
+        primary.setMaxOutputTokens(1024L);
+        when(timeLimiter.execute(any())).thenAnswer(i -> ((Callable<?>) i.getArgument(0)).call());
+        when(providerAdapter.forward(any())).thenReturn("{}");
+        service.chatCompletion(context, "{\"model\":\"alias\"}", "limit-default", Instant.now());
+        service.chatCompletion(context, "{\"model\":\"alias\",\"max_completion_tokens\":1024}", "limit-explicit", Instant.now());
+        ArgumentCaptor<ForwardContext> forwarded = ArgumentCaptor.forClass(ForwardContext.class);
+        verify(providerAdapter, times(2)).forward(forwarded.capture());
+        JSONObject defaultBody = JSON.parseObject(forwarded.getAllValues().get(0).getBody());
+        assertEquals(1024L, defaultBody.getLongValue("max_tokens"));
+        JSONObject explicitBody = JSON.parseObject(forwarded.getAllValues().get(1).getBody());
+        assertEquals(1024L, explicitBody.getLongValue("max_completion_tokens"));
+        assertFalse(explicitBody.containsKey("max_tokens"));
+    }
+
+    @Test
+    void apiCannotBypassLimitBySendingBothChatTokenFields() {
+        primary.setMaxOutputTokens(1024L);
+        assertThrows(ClientException.class, () -> service.chatCompletion(context,
+                "{\"model\":\"alias\",\"max_tokens\":1,\"max_completion_tokens\":8192}", "limit-both", Instant.now()));
+        verifyNoInteractions(timeLimiter, providerAdapter);
+    }
+
+    @Test
+    void streamingApiAndPlaygroundUseIndependentLimitsAndDefaults() {
+        primary.setMaxOutputTokens(1024L);
+        primary.setProviderSettings("{\"playground\":\"{\\\"maxTokens\\\":8192}\"}");
+        when(serviceMapper.selectOne(any())).thenReturn(primary);
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(ServerSentEvent.builder("[DONE]").build()));
+        service.chatCompletionStream(context, "{\"model\":\"alias\"}", "api-default", Instant.now()).blockLast();
+        context.setApiKeyId(null);
+        service.playgroundChatStream(context, 10L, List.of(new ChatMessage("user", "hi")),
+                Map.of("max_tokens", 8192), "pg-explicit", Instant.now()).blockLast();
+        service.playgroundChatStream(context, 10L, List.of(new ChatMessage("user", "hi")),
+                Map.of(), "pg-default", Instant.now()).blockLast();
+        assertThrows(ClientException.class, () -> service.playgroundChatStream(context, 10L,
+                List.of(new ChatMessage("user", "hi")), Map.of("max_tokens", 8193), "pg-excess", Instant.now()));
+        ArgumentCaptor<ForwardContext> forwarded = ArgumentCaptor.forClass(ForwardContext.class);
+        verify(providerAdapter, times(3)).stream(forwarded.capture());
+        assertEquals(List.of(1024L, 8192L, 8192L), forwarded.getAllValues().stream()
+                .map(f -> JSON.parseObject(f.getBody()).getLong("max_tokens")).toList());
+    }
+
+    @Test
+    void responsesApiUsesOutputTokenLimitInBothModes() {
+        primary.setMaxOutputTokens(1024L);
+        String excessive = "{\"model\":\"alias\",\"max_output_tokens\":1025}";
+        assertThrows(ClientException.class, () -> service.jsonCompletion(context, ModelOperation.RESPONSES,
+                excessive, "responses-excess", Instant.now()));
+        assertThrows(ClientException.class, () -> service.responsesStream(context,
+                excessive, "responses-stream-excess", Instant.now()));
+        when(timeLimiter.execute(any())).thenAnswer(i -> ((Callable<?>) i.getArgument(0)).call());
+        when(providerAdapter.forward(any())).thenReturn("{}");
+        when(providerAdapter.stream(any())).thenReturn(Flux.empty());
+        service.jsonCompletion(context, ModelOperation.RESPONSES,
+                "{\"model\":\"alias\"}", "responses-default", Instant.now());
+        service.responsesStream(context, "{\"model\":\"alias\"}", "responses-stream-default", Instant.now()).blockLast();
+        ArgumentCaptor<ForwardContext> blocking = ArgumentCaptor.forClass(ForwardContext.class);
+        ArgumentCaptor<ForwardContext> streaming = ArgumentCaptor.forClass(ForwardContext.class);
+        verify(providerAdapter).forward(blocking.capture());
+        verify(providerAdapter).stream(streaming.capture());
+        for (ForwardContext forwarded : List.of(blocking.getValue(), streaming.getValue())) {
+            JSONObject body = JSON.parseObject(forwarded.getBody());
+            assertEquals(1024L, body.getLongValue("max_output_tokens"));
+            assertFalse(body.containsKey("max_tokens"));
+        }
+    }
+
+    @Test
+    void fallbackRevalidatesItsOwnLimitAndStagesOneFailure() {
+        primary.setMaxOutputTokens(8192L);
+        LlmServiceDO fallback = llm(11L, "fallback", "openai"); fallback.setMaxOutputTokens(1024L);
+        when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
+        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        assertThrows(ClientException.class, () -> service.chatCompletion(context,
+                "{\"model\":\"alias\",\"max_tokens\":4096}", "fallback-limit", Instant.now()));
+        verify(timeLimiter, times(1)).execute(any());
+        ArgumentCaptor<TokenUsageEvent> usage = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher).publish(usage.capture());
+        assertEquals(11L, usage.getValue().getServiceId());
+        assertEquals("FAIL", usage.getValue().getStatus());
+    }
+
+    @Test
+    void outputLimitDoesNotInjectTokenFieldsIntoEmbeddings() {
+        primary.setMaxOutputTokens(1024L);
+        when(timeLimiter.execute(any())).thenAnswer(i -> ((Callable<?>) i.getArgument(0)).call());
+        when(providerAdapter.forward(any())).thenReturn("{}");
+        String body = "{\"model\":\"alias\",\"input\":\"hi\"}";
+        service.jsonCompletion(context, ModelOperation.EMBEDDINGS, body, "embedding-limit", Instant.now());
+        ArgumentCaptor<ForwardContext> forwarded = ArgumentCaptor.forClass(ForwardContext.class);
+        verify(providerAdapter).forward(forwarded.capture());
+        assertEquals(body, forwarded.getValue().getBody());
     }
 
     private LlmServiceDO llm(Long id, String name, String provider) {

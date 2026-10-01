@@ -506,7 +506,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 : SensitiveUtil.maskApiKey(aesUtil.decrypt(llmServiceDO.getApiKey()));
 
         LlmServiceInfoRespDTO respDTO = new LlmServiceInfoRespDTO();
-        BeanUtil.copyProperties(llmServiceDO, respDTO);
+        // 供应商配置在实体中是 JSON 字符串，跳过自动复制，随后显式解析为 Map。
+        BeanUtil.copyProperties(llmServiceDO, respDTO, "providerSettings");
         respDTO.setCreatedByUsername(createUsername);
         respDTO.setApiKey(maskedApiKey);
         respDTO.setProviderSettings(parseSettings(llmServiceDO.getProviderSettings()));

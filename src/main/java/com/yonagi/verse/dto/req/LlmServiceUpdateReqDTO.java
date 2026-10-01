@@ -88,8 +88,8 @@ public class LlmServiceUpdateReqDTO {
     @Min(value = 0, message = "上下文窗口不能为负数")
     private Long contextWindow;
 
-    /** {@code null} 表示不修改；零表示清除；正数表示设置最大输出 Token 数。 */
-    @Min(value = 0, message = "最大输出 Token 数不能为负数")
+    /** 普通 API 转发输出上限，与 PlayGround 独立；{@code null} 不修改，零清除，正数设置。 */
+    @Min(value = 0, message = "API 转发输出上限不能为负数")
     private Long maxOutputTokens;
 
     /** {@code null} 表示不修改；禁用时关闭计费；启用时创建完整的新定价版本。 */

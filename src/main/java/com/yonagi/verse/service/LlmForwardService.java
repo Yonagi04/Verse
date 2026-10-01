@@ -64,6 +64,13 @@ public interface LlmForwardService {
         throw new UnsupportedOperationException("PlayGround stream unavailable");
     }
 
+    /** 二期可信参数只允许 temperature、top_p 和 max_tokens。 */
+    default Flux<ServerSentEvent<String>> playgroundChatStream(UserContext ctx, Long serviceId,
+            List<ChatMessage> messages, java.util.Map<String, Object> parameters,
+            String requestId, Instant requestStartedAt) {
+        throw new UnsupportedOperationException("PlayGround configured stream unavailable");
+    }
+
     /**
      * 列出当前租户下启用的模型别名（OpenAI /models 兼容）。
      *

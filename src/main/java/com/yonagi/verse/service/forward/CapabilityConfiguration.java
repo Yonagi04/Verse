@@ -54,7 +54,9 @@ public final class CapabilityConfiguration {
             throw invalid();
         }
         Map<String, String> options = settings == null ? Map.of() : settings;
-        if (!Set.of("deployment", "apiVersion", "region").containsAll(options.keySet())) throw invalid();
+        if (!Set.of("deployment", "apiVersion", "region", "playground").containsAll(options.keySet())) throw invalid();
+        // 细分模型能力以 JSON 字符串保存，保持已有 providerSettings 的字符串值契约。
+        if (options.containsKey("playground")) validatePlayground(options.get("playground"));
         if (StringUtils.hasText(apiUrl)) {
             try {
                 java.net.URI uri = java.net.URI.create(apiUrl);
@@ -120,5 +122,23 @@ public final class CapabilityConfiguration {
 
     private static ClientException invalid() {
         return new ClientException(LlmManageErrorCodeEnum.LLM_CAPABILITY_INVALID);
+    }
+
+    private static void validatePlayground(String value) {
+        try {
+            com.alibaba.fastjson2.JSONObject p = com.alibaba.fastjson2.JSON.parseObject(value);
+            if (p == null || !Set.of("system", "temperature", "topP", "maxTokens").containsAll(p.keySet())) throw invalid();
+            if (p.containsKey("system") && !(p.get("system") instanceof Boolean)) throw invalid();
+            for (String name : Set.of("temperature", "topP")) {
+                if (!p.containsKey(name)) continue;
+                com.alibaba.fastjson2.JSONObject range = p.getJSONObject(name);
+                if (range == null || !Set.of("min", "max").equals(range.keySet())
+                        || !(range.get("min") instanceof Number) || !(range.get("max") instanceof Number)) throw invalid();
+                double min = range.getDoubleValue("min"), max = range.getDoubleValue("max");
+                if (!Double.isFinite(min) || !Double.isFinite(max) || min < 0 || max < min || max > (name.equals("topP") ? 1 : 2)) throw invalid();
+            }
+            if (p.containsKey("maxTokens") && (!(p.get("maxTokens") instanceof Number n)
+                    || n.doubleValue() != n.longValue() || n.longValue() < 1 || n.longValue() > Integer.MAX_VALUE)) throw invalid();
+        } catch (RuntimeException ex) { throw invalid(); }
     }
 }

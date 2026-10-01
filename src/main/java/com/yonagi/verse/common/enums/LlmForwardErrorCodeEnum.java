@@ -17,6 +17,7 @@ public enum LlmForwardErrorCodeEnum implements IErrorCode {
     UPSTREAM_TIMEOUT("A000805", "上游超时"),
     REQUEST_TOO_LARGE("A000806", "请求体过大"),
     CAPABILITY_UNSUPPORTED("A000807", "模型不支持该操作"),
+    OUTPUT_TOKEN_LIMIT_INVALID("A000808", "输出 Token 数必须为正整数且不能超过 API 转发输出上限"),
 
     FORWARD_FAILED("B000800", "转发失败"),
     ROUTER_FAILED("B000801", "路由判定失败"),

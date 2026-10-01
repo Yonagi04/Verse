@@ -100,7 +100,7 @@ public class LlmServiceInfoRespDTO {
     /** 上下文窗口大小。 */
     private Long contextWindow;
 
-    /** 最大输出 Token 数。 */
+    /** 普通 API 转发输出 Token 上限，与 PlayGround 独立；空值表示不限制。 */
     private Long maxOutputTokens;
 
     /** 当前定价配置。 */

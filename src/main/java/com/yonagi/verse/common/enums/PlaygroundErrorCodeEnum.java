@@ -19,7 +19,9 @@ public enum PlaygroundErrorCodeEnum implements IErrorCode {
     INVALID_PAGE("A001012", "分页参数非法"),
     MODEL_LOCKED("A001013", "已有轮次的会话不能改模型"),
     UPSTREAM_ERROR("C001000", "上游模型调用失败"),
-    INTERNAL_ERROR("B001000", "PlayGround 内部处理失败");
+    INTERNAL_ERROR("B001000", "PlayGround 内部处理失败"),
+    INVALID_CONFIG("A001014", "模型配置非法、参数不支持或超出范围"),
+    RESOURCE_CONFLICT("A001015", "配置已变更，请刷新后再试");
 
     private final String code;
     private final String message;

@@ -104,7 +104,7 @@ public class LlmServiceDO extends BaseDO {
     private Long contextWindow;
 
     /**
-     * 最大输出 Token 数
+     * 普通 API 转发输出 Token 上限，NULL 表示不限制；与 PlayGround 独立
      */
     private Long maxOutputTokens;
 
