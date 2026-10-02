@@ -23,6 +23,8 @@ public class UserContext {
      * 用户名
      */
     private String username;
+    /** 当前JWT反向索引指纹，用于安全写入时再次检查会话 */
+    private String tokenHash;
 
     /**
      * 当前活跃租户 ID

@@ -38,6 +38,9 @@ public class LoginHistoryDO {
 
     private String failReason;
 
+    /** 登录来源，旧事件默认密码 */
+    private String loginSource;
+
     /**
      * 事件唯一 ID（幂等键）
      */

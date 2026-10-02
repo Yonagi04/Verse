@@ -99,7 +99,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String tokenHash = DigestUtil.md5Hex(token);
             String userIdFromRedis = stringRedisTemplate.opsForValue()
                     .get(RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash);
-            if (userIdFromRedis == null) {
+            if (!userId.toString().equals(userIdFromRedis)) {
                 writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
                 return;
             }
@@ -116,6 +116,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             UserContext ctx = new UserContext()
                     .setUserId(userId)
                     .setUsername(username)
+                    .setTokenHash(tokenHash)
                     .setCurrentTenantId(activeTenantId)
                     .setRole(role != null ? role.name() : null)
                     .setAuthorities(permissions.stream().map(PermissionEnum::getCode).toList());

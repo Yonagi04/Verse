@@ -96,6 +96,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final GeoIpUtil geoIpUtil;
     private final UserPrivacyMapper userPrivacyMapper;
     private final DomainEventPublisher domainEventPublisher;
+    private final UserLoginSessionService loginSessions;
+    private final EmailQuotaService emailQuota;
+    private final com.yonagi.verse.dao.mapper.UserSecurityGuardMapper securityGuards;
+    private final com.yonagi.verse.dao.mapper.ExternalIdentityMapper externalIdentities;
+    private final com.yonagi.verse.dao.mapper.UserExternalBindingMapper externalBindings;
+    private final com.yonagi.verse.async.api.ReliableDomainEventPublisher reliableEvents;
+    private final com.yonagi.verse.common.security.UserSecurityLocks securityLocks;
 
     @Lazy
     @Autowired
@@ -144,12 +151,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                     // 通过代理调用以触发 @Transactional
                     UserDO userDO = self.realRegister(requestParam, phoneHash, emailHash);
 
-                    usernameBloomFilter.add(requestParam.getUsername());
-                    stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_PHONE_KEY + phoneHash,
-                            userDO.getUserId().toString());
-                    stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + emailHash,
-                            userDO.getUserId().toString());
-
                     UserRegisterRespDTO resp = new UserRegisterRespDTO();
                     BeanUtil.copyProperties(userDO, resp);
                     return resp;
@@ -166,8 +167,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         }
     }
 
-    @Transactional(rollbackFor = Exception.class)
-    protected UserDO realRegister(UserRegisterReqDTO requestParam, String phoneHash, String emailHash) {
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+    public UserDO realRegister(UserRegisterReqDTO requestParam, String phoneHash, String emailHash) {
+        emailQuota.lock(emailHash);
+        emailQuota.check(emailHash);
+        if (baseMapper.selectCount(Wrappers.lambdaQuery(UserDO.class).eq(UserDO::getUsername, requestParam.getUsername())) > 0)
+            throw new ClientException(UserErrorCodeEnum.USERNAME_EXIST);
+        if (baseMapper.selectCount(Wrappers.lambdaQuery(UserDO.class).eq(UserDO::getPhoneHash, phoneHash)) > 0)
+            throw new ClientException(UserErrorCodeEnum.USER_PHONE_EXIST);
         Long userId = SnowflakeIdUtil.nextId();
         String encodedPassword = passwordEncoder.encode(requestParam.getPassword());
 
@@ -193,9 +200,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (inserted < 1) {
             throw new ServerException(UserErrorCodeEnum.USER_SAVED_ERROR);
         }
+        securityGuards.ensure(userId);
 
         Long tenantId = tenantService.createPersonalTenant(userId,
-                requestParam.getUsername() + "的个人空间");
+                requestParam.getUsername() + "的个人租户");
 
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId)
@@ -210,13 +218,27 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 .build();
         int insert = userPrivacyMapper.insert(userPrivacyDO);
         if (insert < 1) {
-            // 不阻塞
-            log.error("register user {} created privacy error", userId);
+            throw new ServerException(UserErrorCodeEnum.USER_SAVED_ERROR);
         }
 
         // 给注册完的用户异步推送一条系统通知（事务提交后投递）
-        notificationService.publishNotification(tenantId, "SYSTEM", "INFO",
-                WELCOME_MESSAGE_TITLE, String.format(WELCOME_MESSAGE_CONTENT, userDO.getNickname()), null, List.of(userDO.getUserId()));
+        com.yonagi.verse.async.event.NotificationEvent welcome = new com.yonagi.verse.async.event.NotificationEvent();
+        welcome.setNotificationId(SnowflakeIdUtil.nextId()); welcome.setTenantId(tenantId);
+        welcome.setType("SYSTEM"); welcome.setSeverity("INFO"); welcome.setTitle(WELCOME_MESSAGE_TITLE);
+        welcome.setContent(String.format(WELCOME_MESSAGE_CONTENT, userDO.getNickname()));
+        welcome.setRecipientUserIds(List.of(userId)); welcome.setKey(userId.toString());
+        reliableEvents.publish(welcome, tenantId);
+        // 缓存不是注册成功的前提，提交后失败由数据库查询兜底。
+        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    public void afterCommit() {
+                        try {
+                            usernameBloomFilter.add(userDO.getUsername());
+                            stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_PHONE_KEY + phoneHash, userId.toString());
+                            stringRedisTemplate.opsForSet().add(RedisKeyConstant.USER_EMAIL_COUNT_KEY + emailHash, userId.toString());
+                        } catch (RuntimeException e) { log.warn("注册缓存更新失败，使用数据库兜底: userId={}", userId); }
+                    }
+                });
 
         return userDO;
     }
@@ -263,57 +285,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             throw new ClientException(UserErrorCodeEnum.PASSWORD_ERROR);
         }
 
-        // 登录和 JWT 请求复用同一状态解析逻辑，避免两套回退规则产生分歧。
-        CurrentTenantState tenantState = currentTenantStateService.resolveCurrentTenant(userDO.getUserId());
-
-        // 生成 JWT Token
-        String token = jwtUtil.generateToken(userDO.getUserId(), userDO.getUsername());
-        Date expiresAt = new Date(System.currentTimeMillis() + 86400000);
-
-        // 构建含设备字段的会话信息
-        long ttl = expiresAt.getTime() - System.currentTimeMillis();
-        LoginSessionVO session = LoginSessionVO.builder()
-                .userId(userDO.getUserId())
-                .username(userDO.getUsername())
-                .token(token)
-                .expiresAt(expiresAt)
-                .lastActiveTenantId(tenantState.getTenantId())
-                .loginTime(new Date())
-                .deviceId(deviceId)
-                .deviceName(deviceName)
-                .ip(ip)
-                .region(region)
-                .build();
-
-        // 写入 Redis 多设备 Hash
-        String hashKey = RedisKeyConstant.USER_DEVICES_KEY + userDO.getUserId();
-        stringRedisTemplate.opsForHash().put(hashKey, deviceId, JSON.toJSONString(session));
-        stringRedisTemplate.expire(hashKey, ttl, TimeUnit.MILLISECONDS);
-
-        // Token 反向索引
-        String tokenHash = DigestUtil.md5Hex(token);
-        stringRedisTemplate.opsForValue().set(
-                RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash,
-                userDO.getUserId().toString(),
-                ttl, TimeUnit.MILLISECONDS);
-
-        // 异步投递登录事件（成功→历史+设备，由消费者落库）
-        publishLoginLog(userDO.getUserId(), deviceId, deviceName, ip, region, LOGIN_RESULTS.getFirst(), null);
-
-        UserLoginRespDTO resp = new UserLoginRespDTO();
-        BeanUtil.copyProperties(userDO, resp);
-        resp.setToken(token);
-        resp.setExpiresAt(expiresAt);
-
-        if (tenantState.isValid()) {
-            resp.setCurrentTenant(new UserLoginRespDTO.TenantInfo()
-                    .setTenantId(tenantState.getTenantId())
-                    .setName(tenantState.getName())
-                    .setType(tenantState.getType())
-                    .setRole(tenantState.getRole()));
-        }
-
-        return resp;
+        return loginSessions.create(userDO, "PASSWORD", request);
     }
 
     @Override
@@ -392,8 +364,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean updateProfile(Long userId, UserUpdateReqDTO requestParam) {
+        securityGuards.ensure(userId);
+        securityGuards.lock(userId);
         // 查询当前用户记录，用于判断邮箱/手机号是否变更
         UserDO currentUser = queryActiveUserFromUserId(userId);
         if (currentUser == null) {
@@ -408,6 +382,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         String newPhone = requestParam.getPhone();
         boolean emailChanged = !newEmail.equals(oldEmail);
         boolean phoneChanged = !newPhone.equals(oldPhone);
+
+        emailQuota.lock(oldEmailHash, aesUtil.hashForLookup(newEmail));
+        securityGuards.lockUser(userId);
 
         // 邮箱变更时，校验新邮箱绑定数是否已达上限
         if (emailChanged) {
@@ -519,6 +496,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Boolean updatePassword(Long userId, UserUpdatePasswordReqDTO requestParam) {
+        securityGuards.ensure(userId);
+        securityGuards.lock(userId);
         UserDO userDO = queryActiveUserFromUserId(userId);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
@@ -534,6 +513,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         LambdaUpdateWrapper<UserDO> updateWrapper = Wrappers.lambdaUpdate(UserDO.class)
                 .eq(UserDO::getUserId, userId);
         int update = baseMapper.update(BeanUtil.toBean(requestParam, UserDO.class), updateWrapper);
+        if (update > 0) securityGuards.invalidate(userId);
         return update > 0;
     }
 
@@ -593,12 +573,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
-        UserUpdatePasswordReqDTO dto = new UserUpdatePasswordReqDTO();
-        dto.setPassword(requestParam.getPassword());
-        self.updatePassword(userDO.getUserId(), dto);
+        securityLocks.withUser(userDO.getUserId(), () -> self.resetPasswordCore(userDO.getUserId(), requestParam.getPassword()));
 
         // 密码更新成功后才删除 token，防止重复使用
         stringRedisTemplate.delete(phoneKey);
+        return true;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public Boolean resetPasswordCore(Long userId, String password) {
+        securityGuards.ensure(userId); securityGuards.lock(userId);
+        securityGuards.lockUser(userId);
+        baseMapper.update(Wrappers.lambdaUpdate(UserDO.class).eq(UserDO::getUserId, userId)
+                .set(UserDO::getPassword, passwordEncoder.encode(password)));
+        securityGuards.invalidate(userId);
+        logoutAllDevices(userId);
         return true;
     }
 
@@ -636,12 +625,21 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean confirmCloseAccount(Long userId, ConfirmCloseAccountReqDTO requestParam) {
+        securityGuards.ensure(userId); securityGuards.lock(userId);
+        // 注销与绑定共用身份锁序，删除当前关系并释放外部身份名额。
+        var bindings = externalBindings.selectList(Wrappers.lambdaQuery(com.yonagi.verse.dao.entity.UserExternalBindingDO.class)
+                .eq(com.yonagi.verse.dao.entity.UserExternalBindingDO::getUserId, userId));
+        bindings.stream().map(com.yonagi.verse.dao.entity.UserExternalBindingDO::getExternalIdentityId).distinct().sorted()
+                .forEach(externalIdentities::lock);
         UserDO userDO = queryActiveUserFromUserId(userId);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
+
+        emailQuota.lock(userDO.getEmailHash());
+        securityGuards.lockUser(userId);
 
         // 验证验证码是否正确
         String codeKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + userId;
@@ -667,6 +665,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             log.error("Failed to close account for userId: {}", userId);
             throw new ServerException(UserErrorCodeEnum.USER_CLOSE_ACCOUNT_ERROR);
         }
+
+        for (var binding : bindings) {
+            var identity = externalIdentities.selectById(binding.getExternalIdentityId());
+            identity.setBindingVersion(identity.getBindingVersion() + 1);
+            externalIdentities.updateById(identity);
+            externalBindings.deleteById(binding.getId());
+            securityGuards.audit(java.util.UUID.randomUUID().toString().replace("-", ""), "CLOSE", binding.getProvider(),
+                    userId, identity.getId(), binding.getId(), null, null, "UNBOUND");
+        }
+        securityGuards.invalidate(userId);
 
         // 删除用户缓存
         stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
@@ -725,16 +733,13 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     private Long getEmailBindCount(String email) {
-        // 用Redis的Set维护一个邮箱绑定的用户ID集合（Key使用邮箱哈希），直接查询集合的大小即可
         String emailHash = aesUtil.hashForLookup(email);
-        Long userIdCount = stringRedisTemplate.opsForSet().size(RedisKeyConstant.USER_EMAIL_COUNT_KEY + emailHash);
-        return Objects.requireNonNullElse(userIdCount, 0L);
+        return securityGuards.emailCount(emailHash);
     }
 
     private Boolean hasPhone(String phone) {
         String phoneHash = aesUtil.hashForLookup(phone);
-        Long size = stringRedisTemplate.opsForSet().size(RedisKeyConstant.USER_PHONE_KEY + phoneHash);
-        return size != null && size > 0;
+        return baseMapper.selectCount(Wrappers.lambdaQuery(UserDO.class).eq(UserDO::getPhoneHash, phoneHash)) > 0;
     }
 
     private UserDO queryActiveUserFromUserId(Long userId) {

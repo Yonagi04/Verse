@@ -33,6 +33,30 @@ server:
   port: 8080
 
 verse:
+  external-auth:
+    enabled: ${VERSE_EXTERNAL_AUTH_ENABLED:false}
+    frontend-origin: ${VERSE_FRONTEND_ORIGIN:http://localhost:3000}
+    connect-timeout: ${VERSE_EXTERNAL_AUTH_CONNECT_TIMEOUT:5s}
+    read-timeout: ${VERSE_EXTERNAL_AUTH_READ_TIMEOUT:15s}
+    proxy-url: ${VERSE_EXTERNAL_AUTH_PROXY_URL:}
+    auth-ttl: 10m
+    action-ttl: 5m
+    recent-auth-ttl: 5m
+    starts-per-minute: 10
+    password-attempts: 5
+    providers:
+      google:
+        enabled: ${VERSE_GOOGLE_ENABLED:false}
+        client-id: ${VERSE_GOOGLE_CLIENT_ID:}
+        client-secret: ${VERSE_GOOGLE_CLIENT_SECRET:}
+      github:
+        enabled: ${VERSE_GITHUB_ENABLED:false}
+        client-id: ${VERSE_GITHUB_CLIENT_ID:}
+        client-secret: ${VERSE_GITHUB_CLIENT_SECRET:}
+      gitlab:
+        enabled: ${VERSE_GITLAB_ENABLED:false}
+        client-id: ${VERSE_GITLAB_CLIENT_ID:}
+        client-secret: ${VERSE_GITLAB_CLIENT_SECRET:}
   frontend-baseurl: http://localhost:3000
   llm:
     costing:

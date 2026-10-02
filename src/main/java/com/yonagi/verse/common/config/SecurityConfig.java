@@ -20,6 +20,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 import org.springframework.security.web.util.matcher.RequestMatcher;
+import org.springframework.http.HttpMethod;
 
 import java.util.Arrays;
 import java.util.List;
@@ -55,6 +56,13 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/external/flows/*/attach-current-user").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/v1/auth/external/providers", "/api/v1/auth/external/callback/google",
+                                "/api/v1/auth/external/callback/github", "/api/v1/auth/external/callback/gitlab", "/api/v1/auth/external/flows/*",
+                                "/api/v1/users/hasUsername").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/external/flows", "/api/v1/auth/external/flows/*/complete",
+                                "/api/v1/auth/external/flows/*/register", "/api/v1/auth/external/flows/*/continue-binding",
+                                "/api/v1/auth/external/flows/*/cancel", "/api/v1/auth/external/flows/*/acknowledge").permitAll()
                         .requestMatchers("/api/v1/openai/**", "/api/v1/rerank").permitAll()
                         .requestMatchers(ignoreMatchers).permitAll()
                         .anyRequest().authenticated()

@@ -44,6 +44,7 @@ public class JwtUtil {
 
         return Jwts.builder()
                 .subject(String.valueOf(userId))
+                .id(java.util.UUID.randomUUID().toString())
                 .claim("username", username)
                 .issuedAt(now)
                 .expiration(expiryDate)

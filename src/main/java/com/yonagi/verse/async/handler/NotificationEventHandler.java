@@ -45,6 +45,7 @@ public class NotificationEventHandler implements DomainEventHandler<Notification
     }
 
     @Override
+    @org.springframework.transaction.annotation.Transactional(rollbackFor = Exception.class)
     public void onEvent(NotificationEvent event) {
         // 幂等：已处理则跳过
         Long existing = notificationMapper.selectCount(Wrappers.lambdaQuery(NotificationDO.class)
@@ -80,7 +81,10 @@ public class NotificationEventHandler implements DomainEventHandler<Notification
             notificationRecipientMapper.insert(recipient);
         }
 
-        push(event, notification.getCreateTime());
+        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    public void afterCommit() { push(event, notification.getCreateTime()); }
+                });
     }
 
     private void push(NotificationEvent event, Date createTime) {

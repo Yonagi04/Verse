@@ -34,6 +34,12 @@ import java.util.Optional;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    /** 保留来源拒绝及限频的真实HTTP状态，供外部认证界面就地处理。 */
+    @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
+    public org.springframework.http.ResponseEntity<Result<Void>> responseStatus(org.springframework.web.server.ResponseStatusException ex) {
+        return org.springframework.http.ResponseEntity.status(ex.getStatusCode()).body(
+                Results.failure(BaseErrorCode.CLIENT_ERROR.code(), ex.getReason()));
+    }
 
     /**
      * 拦截参数不合法异常
@@ -124,6 +130,7 @@ public class GlobalExceptionHandler {
     }
 
     private String getUrl(HttpServletRequest request) {
+        if (request.getRequestURI().startsWith("/api/v1/auth/external")) return request.getRequestURL().toString();
         if (!StringUtils.hasLength(request.getQueryString())) {
             return request.getRequestURL().toString();
         }

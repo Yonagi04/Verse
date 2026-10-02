@@ -499,6 +499,7 @@ CREATE TABLE IF NOT EXISTS `t_login_device` (
 -- 12. 登录历史表
 -- ============================================
 CREATE TABLE IF NOT EXISTS `t_login_history` (
+    `login_source` VARCHAR(16) NOT NULL DEFAULT 'PASSWORD' COMMENT '登录来源',
     `id`           BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `user_id`      BIGINT       NOT NULL COMMENT '用户ID',
     `event_id`     VARCHAR(64)  DEFAULT NULL COMMENT '事件唯一ID（幂等键）',
@@ -607,3 +608,47 @@ CREATE TABLE IF NOT EXISTS `t_playground_turn` (
     KEY `idx_playground_turn_owner` (`tenant_id`, `owner_user_id`, `session_id`, `turn_no`),
     KEY `idx_playground_pending` (`status`, `update_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='PlayGround 聊天轮次';
+
+
+-- 外部认证表；时间统一使用 UTC。部署前备份并显式执行，无自动 Flyway 迁移。
+CREATE TABLE IF NOT EXISTS t_external_identity (
+ id BIGINT NOT NULL PRIMARY KEY,
+ provider VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ issuer VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ subject VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ external_username VARCHAR(255), display_name VARCHAR(255), email_encrypted VARCHAR(1024),
+ email_verified TINYINT NOT NULL DEFAULT 0, binding_version BIGINT NOT NULL DEFAULT 0,
+ profile_updated_at DATETIME(3),
+ UNIQUE KEY uk_external_subject(provider,issuer,subject)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS t_user_external_binding (
+ id BIGINT NOT NULL PRIMARY KEY, user_id BIGINT NOT NULL, external_identity_id BIGINT NOT NULL,
+ provider VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL, bound_at DATETIME(3) NOT NULL,
+ UNIQUE KEY uk_user_provider(user_id,provider), UNIQUE KEY uk_user_identity(user_id,external_identity_id),
+ KEY idx_identity_user(external_identity_id,user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS t_external_auth_flow (
+ flow_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+ purpose VARCHAR(16) NOT NULL, stage VARCHAR(32) NOT NULL, provider VARCHAR(16) NOT NULL,
+ state_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+ flow_token_hash CHAR(64) NOT NULL, browser_cookie_hash CHAR(64) NOT NULL,
+ external_identity_id BIGINT, identity_binding_version BIGINT, candidate_snapshot VARCHAR(2048),
+ target_user_id BIGINT, target_session_id VARCHAR(64), target_token_hash CHAR(64), security_version BIGINT,
+ recent_verified_at DATETIME(3), result_user_id BIGINT, result_binding_id BIGINT,
+ registration_completed TINYINT NOT NULL DEFAULT 0, session_status VARCHAR(16) NOT NULL DEFAULT 'NOT_STARTED',
+ expires_at DATETIME(3) NOT NULL, completed_at DATETIME(3), error_reason VARCHAR(64),
+ create_time DATETIME(3) NOT NULL, UNIQUE KEY uk_state_hash(state_hash), KEY idx_flow_cleanup(create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE IF NOT EXISTS t_user_security_guard (
+ user_id BIGINT NOT NULL PRIMARY KEY, security_version BIGINT NOT NULL DEFAULT 0
+) ENGINE=InnoDB;
+INSERT IGNORE INTO t_user_security_guard(user_id,security_version) SELECT user_id,0 FROM t_user;
+CREATE TABLE IF NOT EXISTS t_user_email_quota_guard (
+ email_hash VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS t_user_external_auth_audit (
+ event_id CHAR(32) NOT NULL PRIMARY KEY, action VARCHAR(16) NOT NULL, provider VARCHAR(16),
+ user_id BIGINT, external_identity_id BIGINT, binding_id BIGINT, flow_id CHAR(32), operation_id VARCHAR(64),
+ outcome VARCHAR(32) NOT NULL, create_time DATETIME(3) NOT NULL DEFAULT (UTC_TIMESTAMP(3)),
+ UNIQUE KEY uk_user_operation(user_id,operation_id), KEY idx_audit_cleanup(create_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

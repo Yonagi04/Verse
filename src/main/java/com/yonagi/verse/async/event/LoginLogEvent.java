@@ -39,6 +39,9 @@ public class LoginLogEvent extends DomainEvent {
 
     private String failReason;
 
+    /** 登录来源，旧事件默认密码 */
+    private String loginSource;
+
     /**
      * 登录时间（生产者生成，保证历史时间准确）
      */

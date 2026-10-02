@@ -28,4 +28,11 @@ public class LoginSessionVO implements Serializable {
     private String deviceName;
     private String ip;
     private String region;
+
+    /** 登录来源，旧事件默认密码 */
+    private String loginSource;
+    /** 随机会话标识 */
+    private String sessionId;
+    /** 本站密码验证时间 */
+    private Date passwordVerifiedAt;
 }

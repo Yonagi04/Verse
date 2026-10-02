@@ -48,5 +48,8 @@ public class LoginHistoryRespDTO {
         private String result;
 
         private String failReason;
+
+    /** 登录来源，旧事件默认密码 */
+    private String loginSource;
     }
 }

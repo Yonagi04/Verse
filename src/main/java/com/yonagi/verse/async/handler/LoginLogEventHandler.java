@@ -60,6 +60,7 @@ public class LoginLogEventHandler implements DomainEventHandler<LoginLogEvent> {
                 .result(event.getResult())
                 .failReason(event.getFailReason())
                 .eventId(event.getEventId())
+                .loginSource(event.getLoginSource() == null ? "PASSWORD" : event.getLoginSource())
                 .build();
         try {
             loginHistoryMapper.insert(history);
