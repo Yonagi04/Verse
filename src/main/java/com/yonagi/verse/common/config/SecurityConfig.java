@@ -58,7 +58,8 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/external/flows/*/attach-current-user").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/auth/external/providers", "/api/v1/auth/external/callback/google",
-                                "/api/v1/auth/external/callback/github", "/api/v1/auth/external/callback/gitlab", "/api/v1/auth/external/flows/*",
+                                "/api/v1/auth/external/callback/github", "/api/v1/auth/external/callback/gitlab",
+                                "/api/v1/auth/external/callback/feishu", "/api/v1/auth/external/flows/*",
                                 "/api/v1/users/hasUsername").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/external/flows", "/api/v1/auth/external/flows/*/complete",
                                 "/api/v1/auth/external/flows/*/register", "/api/v1/auth/external/flows/*/continue-binding",

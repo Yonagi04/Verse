@@ -16,6 +16,7 @@ public enum ExternalAuthErrorCodeEnum implements IErrorCode {
     FLOW_IN_PROGRESS("A002110", "认证正在处理，请稍后查询"),
     PROVIDER_DISABLED("A002111", "该平台尚未启用或配置不完整"),
     ACTION_NOT_ALLOWED("A002112", "当前账号无法执行此操作"),
+    FLOW_LIMIT_EXCEEDED("A002113", "同时进行的外部认证已达3个，请完成或取消其他标签页的认证后重试"),
     PROVIDER_UNAVAILABLE("C002100", "外部平台暂时不可用，请稍后重试"),
     PROVIDER_RESPONSE_INVALID("C002101", "外部平台身份验证失败，请重新认证");
     private final String code;

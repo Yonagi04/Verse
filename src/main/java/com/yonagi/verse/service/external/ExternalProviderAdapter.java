@@ -23,11 +23,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 
-/** 固定可信端点的三平台协议适配器，平台令牌仅存在于当前请求内。 */
+/** 固定可信端点的外部平台协议适配器，平台令牌仅存在于当前请求内。 */
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class ExternalProviderAdapter {
+    /** 支持的平台及展示顺序，登录和绑定管理共用。 */
+    public static final List<String> SUPPORTED_PROVIDERS = List.of("google", "github", "gitlab", "feishu");
     private final ExternalAuthProperties properties;
     private final Map<String, JwtDecoder> decoders = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String, Instant> unavailableUntil = new java.util.concurrent.ConcurrentHashMap<>();
@@ -37,9 +39,10 @@ public class ExternalProviderAdapter {
 
     public boolean enabled(String provider) {
         var config = properties.getProviders().get(provider);
-        return Set.of("google", "github", "gitlab").contains(provider) && properties.isEnabled()
+        return SUPPORTED_PROVIDERS.contains(provider) && properties.isEnabled()
                 && config != null && config.isEnabled() && config.getClientId() != null && !config.getClientId().isBlank()
-                && config.getClientSecret() != null && !config.getClientSecret().isBlank();
+                && config.getClientSecret() != null && !config.getClientSecret().isBlank()
+                && (!"feishu".equals(provider) || config.getClientId().matches("cli_[A-Za-z0-9_-]{1,128}"));
     }
     public String availability(String provider) {
         if (!enabled(provider)) return "DISABLED";
@@ -68,15 +71,26 @@ public class ExternalProviderAdapter {
                 user = "https://gitlab.com/oauth/userinfo"; jwks = "https://gitlab.com/oauth/discovery/keys";
                 issuer = "https://gitlab.com";
             }
+            case "feishu" -> {
+                authorize = "https://accounts.feishu.cn/open-apis/authen/v1/authorize";
+                // 授权端点文档注明 PKCE 暂时配合 v2；v3 对有效 S256 请求仍有 20049 兼容问题。
+                token = "https://open.feishu.cn/open-apis/authen/v2/oauth/token";
+                user = "https://open.feishu.cn/open-apis/authen/v1/user_info";
+                // open_id 仅在当前应用内唯一，更换 App ID 不能复用旧身份。
+                issuer = "https://open.feishu.cn/apps/" + config.getClientId();
+            }
             default -> throw new ClientException(PROVIDER_DISABLED);
         }
         var builder = ClientRegistration.withRegistrationId(provider).clientId(config.getClientId())
                 .clientSecret(config.getClientSecret()).clientAuthenticationMethod(ClientAuthenticationMethod.CLIENT_SECRET_POST)
                 .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
                 .redirectUri(properties.getFrontendOrigin() + "/api/v1/auth/external/callback/" + provider)
-                .authorizationUri(authorize).tokenUri(token).userInfoUri(user).userNameAttributeName("github".equals(provider) ? "id" : "sub")
-                .scope("github".equals(provider) ? List.of("read:user", "user:email") : List.of("openid", "profile", "email"));
+                .authorizationUri(authorize).tokenUri(token).userInfoUri(user)
+                .userNameAttributeName("github".equals(provider) ? "id" : "feishu".equals(provider) ? "open_id" : "sub")
+                .scope("github".equals(provider) ? List.of("read:user", "user:email")
+                        : "feishu".equals(provider) ? List.of() : List.of("openid", "profile", "email"));
         if (jwks != null) builder.jwkSetUri(jwks).issuerUri(issuer);
+        if ("feishu".equals(provider)) builder.issuerUri(issuer);
         return builder.build();
     }
 
@@ -85,10 +99,9 @@ public class ExternalProviderAdapter {
         Map<String, Object> params = new LinkedHashMap<>();
         params.put("code_challenge", Base64.getUrlEncoder().withoutPadding().encodeToString(sha256(verifier)));
         params.put("code_challenge_method", "S256");
-        if (!"github".equals(provider)) params.put("nonce", nonce);
-        if (!"gitlab".equals(provider)) params.put("prompt", "select_account");
-        // GitLab支持prompt=login，三个平台不共用账号选择参数。
-        if ("gitlab".equals(provider)) params.put("prompt", "login");
+        if (Set.of("google", "gitlab").contains(provider)) params.put("nonce", nonce);
+        // 飞书只支持 consent；不发送 OIDC nonce 或其他平台的账号选择参数。
+        params.put("prompt", "feishu".equals(provider) ? "consent" : "gitlab".equals(provider) ? "login" : "select_account");
         return OAuth2AuthorizationRequest.authorizationCode().authorizationUri(client.getProviderDetails().getAuthorizationUri())
                 .clientId(client.getClientId()).redirectUri(client.getRedirectUri()).scopes(client.getScopes()).state(state)
                 .additionalParameters(params).attributes(Map.of("code_verifier", verifier)).build();
@@ -100,10 +113,50 @@ public class ExternalProviderAdapter {
             var client = registration(provider);
             RestTemplate http = http();
             DefaultAuthorizationCodeTokenResponseClient exchange = new DefaultAuthorizationCodeTokenResponseClient();
+            if ("feishu".equals(provider)) {
+                var requestConverter = new OAuth2AuthorizationCodeGrantRequestEntityConverter();
+                exchange.setRequestEntityConverter(grant -> {
+                    var formRequest = requestConverter.convert(grant);
+                    @SuppressWarnings("unchecked")
+                    var form = (org.springframework.util.MultiValueMap<String, String>) formRequest.getBody();
+                    var jsonHeaders = new HttpHeaders();
+                    jsonHeaders.putAll(formRequest.getHeaders());
+                    jsonHeaders.setContentType(MediaType.APPLICATION_JSON);
+                    // 复用 Spring 的授权码参数，v2 按官方要求发送 JSON，保留原始 verifier。
+                    return new RequestEntity<>(form.toSingleValueMap(), jsonHeaders, formRequest.getMethod(), formRequest.getUrl());
+                });
+            }
+            var tokenConverter = new org.springframework.security.oauth2.core.http.converter.OAuth2AccessTokenResponseHttpMessageConverter();
+            if ("feishu".equals(provider)) {
+                var delegate = new DefaultMapOAuth2AccessTokenResponseConverter();
+                // 飞书可能以 HTTP 200 返回业务错误，必须在标准 OAuth 解析前拒绝。
+                tokenConverter.setAccessTokenResponseConverter(values -> {
+                    requireFeishuSuccess(values, "TOKEN_EXCHANGE");
+                    if (values.get("error") != null || !(values.get("access_token") instanceof String access) || access.isBlank()
+                            || !(values.get("token_type") instanceof String type) || !"Bearer".equalsIgnoreCase(type)
+                            || !(values.get("expires_in") instanceof Number expires) || expires.longValue() <= 0)
+                        throw invalidIdentity("FEISHU_TOKEN_INVALID");
+                    return delegate.convert(values);
+                });
+            }
             RestTemplate tokenHttp = new RestTemplate(List.of(new org.springframework.http.converter.FormHttpMessageConverter(),
-                    new org.springframework.security.oauth2.core.http.converter.OAuth2AccessTokenResponseHttpMessageConverter()));
+                    tokenConverter, new org.springframework.http.converter.json.MappingJackson2HttpMessageConverter()));
             tokenHttp.setRequestFactory(http.getRequestFactory());
-            tokenHttp.setErrorHandler(new org.springframework.security.oauth2.client.http.OAuth2ErrorResponseErrorHandler());
+            var errorHandler = new org.springframework.security.oauth2.client.http.OAuth2ErrorResponseErrorHandler();
+            if ("feishu".equals(provider)) {
+                var errorConverter = new org.springframework.security.oauth2.core.http.converter.OAuth2ErrorHttpMessageConverter();
+                errorConverter.setErrorConverter(values -> {
+                    logFeishuError(values, "TOKEN_EXCHANGE");
+                    // 只保留标准错误类型，平台描述可能含敏感值，不传播到异常或日志。
+                    String error = values.get("error");
+                    String safeError = Set.of("invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+                            "unsupported_grant_type", "invalid_scope", "server_error", "temporarily_unavailable")
+                            .contains(error == null ? "" : error) ? error : "invalid_response";
+                    return new OAuth2Error(safeError);
+                });
+                errorHandler.setErrorConverter(errorConverter);
+            }
+            tokenHttp.setErrorHandler(errorHandler);
             exchange.setRestOperations(tokenHttp);
             var auth = authorization(provider, state, verifier, nonce);
             var response = OAuth2AuthorizationResponse.success(code).redirectUri(client.getRedirectUri()).state(state).build();
@@ -115,6 +168,16 @@ public class ExternalProviderAdapter {
             Map<?, ?> info = http.exchange(client.getProviderDetails().getUserInfoEndpoint().getUri(), HttpMethod.GET,
                     new HttpEntity<>(headers), Map.class).getBody();
             if (info == null) throw invalidIdentity("USERINFO_MISSING");
+            if ("feishu".equals(provider)) {
+                requireFeishuSuccess(info, "USERINFO");
+                if (!(info.get("data") instanceof Map<?, ?> profile)) throw invalidIdentity("FEISHU_PROFILE_MISSING");
+                Object id = profile.get("open_id");
+                if (!(id instanceof String subject) || !subject.matches("[A-Za-z0-9_-]{1,255}"))
+                    throw invalidIdentity("FEISHU_OPEN_ID_INVALID");
+                // 官方说明邮箱可由管理员导入，未经用户实时验证，不用于注册预填或身份匹配。
+                return new VerifiedIdentity(provider, client.getProviderDetails().getIssuerUri(), subject,
+                        null, text(profile.get("name"), 255), null);
+            }
             if ("github".equals(provider)) {
                 Object id = info.get("id");
                 if (!(id instanceof Number) || !id.toString().matches("[1-9][0-9]{0,18}")) throw new ClientException(PROVIDER_RESPONSE_INVALID);
@@ -157,6 +220,36 @@ public class ExternalProviderAdapter {
                 unavailableUntil.put(provider, Instant.now().plusSeconds(60));
             throw new ClientException(PROVIDER_UNAVAILABLE);
         }
+    }
+
+    private static void requireFeishuSuccess(Map<?, ?> response, String stage) {
+        if (!(response.get("code") instanceof Number code) || !"0".equals(code.toString())) {
+            logFeishuError(response, stage);
+            throw invalidIdentity("FEISHU_BUSINESS_ERROR");
+        }
+    }
+
+    private static void logFeishuError(Map<?, ?> response, String stage) {
+        // 数字错误码用于区分 invalid_grant 的具体原因，拒绝记录原始响应及任意文本。
+        Object raw = response.get("code");
+        String code = raw instanceof Number || raw instanceof String ? raw.toString() : "";
+        if (!code.matches("[0-9]{1,6}")) code = "UNKNOWN";
+        String reason = switch (code) {
+            case "20001" -> "MISSING_PARAMETERS";
+            case "20002" -> "CLIENT_SECRET_INVALID";
+            case "20003" -> "AUTHORIZATION_CODE_NOT_FOUND";
+            case "20004" -> "AUTHORIZATION_CODE_EXPIRED";
+            case "20009" -> "APP_NOT_INSTALLED";
+            case "20010" -> "USER_OUTSIDE_APP_AVAILABILITY";
+            case "20024" -> "CLIENT_ID_MISMATCH";
+            case "20049" -> "PKCE_VERIFICATION_FAILED";
+            case "20065" -> "AUTHORIZATION_CODE_ALREADY_USED";
+            case "20069" -> "APP_DISABLED";
+            case "20070" -> "MULTIPLE_CLIENT_AUTHENTICATION_METHODS";
+            case "20071" -> "REDIRECT_URI_MISMATCH";
+            default -> "OTHER_PROVIDER_ERROR";
+        };
+        log.warn("飞书接口拒绝请求: stage={}, providerCode={}, reason={}", stage, code, reason);
     }
 
     static void validateClaims(Jwt jwt, String clientId, String provider, String nonce) {

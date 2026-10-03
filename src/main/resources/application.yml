@@ -57,6 +57,10 @@ verse:
         enabled: ${VERSE_GITLAB_ENABLED:false}
         client-id: ${VERSE_GITLAB_CLIENT_ID:}
         client-secret: ${VERSE_GITLAB_CLIENT_SECRET:}
+      feishu:
+        enabled: ${VERSE_FEISHU_ENABLED:false}
+        client-id: ${VERSE_FEISHU_APP_ID:}
+        client-secret: ${VERSE_FEISHU_APP_SECRET:}
   frontend-baseurl: http://localhost:3000
   llm:
     costing:

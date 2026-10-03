@@ -10,7 +10,7 @@ public class ExternalReauthReqDTO {
     @NotBlank @Pattern(regexp="BIND|UNBIND|ATTACH")
     private String action;
     /** 平台 */
-    @Pattern(regexp="google|github|gitlab")
+    @Pattern(regexp="google|github|gitlab|feishu")
     private String provider;
     /** 解绑关系 */
     @Pattern(regexp="[0-9]{1,19}")

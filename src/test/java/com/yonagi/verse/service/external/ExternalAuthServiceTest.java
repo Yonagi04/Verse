@@ -106,4 +106,146 @@ class ExternalAuthServiceTest {
         request.removeHeader("Origin"); request.addHeader("Origin","https://evil.example");
         assertEquals(403,assertThrows(org.springframework.web.server.ResponseStatusException.class,()->service.source(request)).getStatusCode().value());
     }
+    @Test void feishuIsListedWhenEnabledAndHiddenWhenDisabled() {
+        when(adapter.availability(anyString())).thenReturn("AVAILABLE");
+        assertTrue(service.providers().stream().anyMatch(p->"feishu".equals(p.provider())));
+        when(adapter.enabled("feishu")).thenReturn(false);
+        assertFalse(service.providers().stream().anyMatch(p->"feishu".equals(p.provider())));
+    }
+    @Test void feishuLoginIssuesSessionWithFeishuSource() {
+        flow.setProvider("feishu"); flow.setStage("LOGIN_READY"); flow.setCandidateSnapshot("{\"10\":20}");
+        identity.setProvider("feishu");
+        var user=user(10,1); var binding=relation(20,10); binding.setProvider("feishu");
+        var tenant=new com.yonagi.verse.dao.projection.CurrentTenantState();
+        when(guards.lockUser(10L)).thenReturn(user); when(bindings.selectById(20L)).thenReturn(binding);
+        when(tenants.resolveCurrentTenant(10L)).thenReturn(tenant);
+        var login=new com.yonagi.verse.dto.resp.UserLoginRespDTO().setUserId(10L).setToken("token");
+        when(sessions.create(user,"FEISHU",request,tenant)).thenReturn(login);
+
+        var result=service.complete(flow.getFlowId(),new ExternalCompleteReqDTO(),request);
+
+        assertEquals("LOGGED_IN",result.outcome()); assertSame(login,result.login());
+        verify(sessions).create(user,"FEISHU",request,tenant);
+        assertEquals("COMPLETED",flow.getStage());
+    }
+    @Test void feishuCallbackRetainsStateBrowserAndReplayChecks() {
+        flow.setProvider("feishu"); when(flows.selectOne(any())).thenReturn(flow);
+        assertTrue(service.callback("feishu",request,new MockHttpServletResponse()).endsWith("/auth/external/error"));
+        request.addParameter("state","state"); request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"wrong"));
+        assertTrue(service.callback("feishu",request,new MockHttpServletResponse()).endsWith("/auth/external/error"));
+        request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof")); when(flows.claim(any())).thenReturn(0);
+        assertTrue(service.callback("feishu",request,new MockHttpServletResponse()).contains("#flow="));
+        verify(adapter,never()).exchange(any(),any(),any(),any(),any());
+    }
+    @Test void feishuCallbackReusesRegistrationLoginSelectionAndBindingStages() {
+        flow.setProvider("feishu"); identity.setProvider("feishu");
+        when(flows.selectOne(any())).thenReturn(flow); when(flows.claim(any())).thenReturn(1);
+        request.addParameter("state","state"); request.addParameter("code","feishu-code");
+        when(values.getAndDelete(anyString())).thenReturn("encrypted-protocol");
+        var aes=(AesUtil)ReflectionTestUtils.getField(service,"aes");
+        when(aes.decrypt("encrypted-protocol")).thenReturn("{\"verifier\":\"verifier\",\"nonce\":\"nonce\"}");
+        when(adapter.exchange("feishu","feishu-code","state","verifier","nonce"))
+                .thenReturn(new ExternalProviderAdapter.VerifiedIdentity("feishu","https://open.feishu.cn/apps/cli_test","ou_stable",null,"飞书用户",null));
+        when(identities.selectOne(any())).thenReturn(identity);
+        for (int count=0;count<4;count++) {
+            flow.setStage("AUTHENTICATING"); flow.setPurpose(count==3?"BIND":"LOGIN");
+            when(bindings.selectList(any())).thenReturn(count==0?List.of():count==1?List.of(relation(20,10)):List.of(relation(20,10),relation(21,11)));
+            String destination=service.callback("feishu",request,new MockHttpServletResponse());
+            assertTrue(destination.contains("#flow="));
+            assertEquals(List.of("REGISTER_REQUIRED","LOGIN_READY","SELECT_REQUIRED","BIND_CONFIRM_REQUIRED").get(count),flow.getStage());
+            assertEquals("飞书用户",identity.getDisplayName()); assertFalse(identity.getEmailVerified()); assertNull(identity.getEmailEncrypted());
+        }
+        verify(identities,times(4)).ensure(argThat(row->"feishu".equals(row.getProvider())
+                && "https://open.feishu.cn/apps/cli_test".equals(row.getIssuer()) && "ou_stable".equals(row.getSubject())));
+        verifyNoInteractions(sessions,registration);
+    }
+
+    ExternalAuthFlowDO activeFlow(String id,String provider,String purpose,String stage) {
+        var row=new ExternalAuthFlowDO(); row.setFlowId(id); row.setProvider(provider); row.setPurpose(purpose); row.setStage(stage);
+        row.setBrowserCookieHash(ExternalAuthService.hash("browser-proof")); row.setExpiresAt(LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5));
+        return row;
+    }
+    void prepareStart(List<ExternalAuthFlowDO> records) {
+        when(flows.selectList(any())).thenReturn(records);
+        when(redis.execute(any(org.springframework.data.redis.core.script.DefaultRedisScript.class),anyList(),anyString())).thenReturn(1L);
+        when(adapter.authorization(anyString(),anyString(),anyString(),anyString())).thenReturn(
+                org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest.authorizationCode()
+                        .authorizationUri("https://accounts.feishu.cn/open-apis/authen/v1/authorize").clientId("cli_test")
+                        .redirectUri("http://localhost:3000/api/v1/auth/external/callback/feishu").state("state").build());
+    }
+    ExternalFlowStartReqDTO startInput(String provider) { var input=new ExternalFlowStartReqDTO(); input.setProvider(provider); return input; }
+    @Test void reportedThreeActiveFlowsRejectBindingWithSpecificLimitErrorAcrossProviders() {
+        var a=activeFlow("a".repeat(32),"feishu","LOGIN","REGISTER_REQUIRED");
+        var b=activeFlow("b".repeat(32),"github","BIND","AUTHORIZING");
+        var c=activeFlow("c".repeat(32),"feishu","BIND","AUTHORIZING");
+        prepareStart(List.of(a,b,c));
+        request.setCookies(new Cookie("verse_ext_"+a.getFlowId(),"browser-proof"),new Cookie("verse_ext_"+b.getFlowId(),"browser-proof"),
+                new Cookie("verse_ext_"+c.getFlowId(),"browser-proof"));
+        for (String provider : List.of("feishu","github"))
+            assertEquals("A002113",assertThrows(ClientException.class,()->service.start(startInput(provider),10L,request,new MockHttpServletResponse())).getErrorCode());
+        verify(flows,never()).insert(any()); verifyNoInteractions(locks);
+    }
+    @Test void expiredMissingInvalidAndTerminalCookiesDoNotBlockANewFlowOrDestroyCompletionProof() {
+        var expired=activeFlow("b".repeat(32),"github","BIND","AUTHORIZING"); expired.setExpiresAt(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1));
+        var cancelled=activeFlow("c".repeat(32),"feishu","BIND","CANCELLED");
+        var completed=activeFlow("d".repeat(32),"github","LOGIN","COMPLETED");
+        var failed=activeFlow("e".repeat(32),"feishu","LOGIN","FAILED");
+        var invalid=activeFlow("f".repeat(32),"feishu","BIND","AUTHORIZING");
+        prepareStart(List.of(expired,cancelled,completed,failed,invalid));
+        request.setCookies(new Cookie("verse_ext_"+expired.getFlowId(),"browser-proof"),new Cookie("verse_ext_"+cancelled.getFlowId(),"browser-proof"),
+                new Cookie("verse_ext_"+completed.getFlowId(),"browser-proof"),new Cookie("verse_ext_"+failed.getFlowId(),"browser-proof"),
+                new Cookie("verse_ext_"+invalid.getFlowId(),"wrong-proof"),new Cookie("verse_ext_"+"0".repeat(32),"browser-proof"));
+        var response=new MockHttpServletResponse(); var result=service.start(startInput("feishu"),null,request,response);
+        assertNotNull(result.flowId()); verify(flows).insert(any());
+        var cookies=response.getHeaders("Set-Cookie");
+        for (String id : List.of(expired.getFlowId(),invalid.getFlowId(),"0".repeat(32)))
+            assertTrue(cookies.stream().anyMatch(value->value.startsWith("verse_ext_"+id+"=")&&value.contains("Max-Age=0")));
+        assertFalse(cookies.stream().anyMatch(value->value.startsWith("verse_ext_"+completed.getFlowId()+"=")));
+        assertFalse(cookies.stream().anyMatch(value->value.startsWith("verse_ext_"+failed.getFlowId()+"=")));
+        assertTrue(cookies.stream().anyMatch(value->value.startsWith("verse_ext_"+result.flowId()+"=")&&value.contains("Max-Age=600")));
+    }
+    @Test void duplicateFlowCookiesCountOnceAndOtherTabsFlowsAreNotCancelled() {
+        var other=activeFlow("b".repeat(32),"github","BIND","AUTHORIZING"); prepareStart(List.of(flow,other));
+        request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof"),new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof"),
+                new Cookie("verse_ext_"+other.getFlowId(),"browser-proof"));
+        var response=new MockHttpServletResponse(); service.start(startInput("github"),null,request,response);
+        verify(flows,never()).updateById(any());
+        assertTrue(response.getHeaders("Set-Cookie").stream().noneMatch(value->value.contains("Max-Age=0")));
+    }
+    @Test void expiredFlowCanOnlyBeCancelledWithBothOriginalProofs() {
+        flow.setExpiresAt(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1)); var response=new MockHttpServletResponse();
+        request.removeHeader("X-External-Flow-Token");
+        assertEquals("A002101",assertThrows(ClientException.class,()->service.cancel(flow.getFlowId(),request,response,false)).getErrorCode());
+        request.addHeader("X-External-Flow-Token","tab-proof");
+        request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"wrong-proof"));
+        assertEquals("A002101",assertThrows(ClientException.class,()->service.cancel(flow.getFlowId(),request,response,false)).getErrorCode());
+        request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof"));
+        assertEquals("A002100",assertThrows(ClientException.class,()->service.context(flow.getFlowId(),request)).getErrorCode());
+        service.cancel(flow.getFlowId(),request,response,false);
+        assertEquals("CANCELLED",flow.getStage()); assertFalse(ExternalAuthService.matches(flow.getFlowTokenHash(),"tab-proof"));
+        assertTrue(response.getHeader("Set-Cookie").contains("Max-Age=0"));
+        verify(redis).delete(List.of("verse:external:protocol:"+flow.getFlowId(),"verse:external:result:"+flow.getFlowId()));
+    }
+    @Test void failedCallbackKeepsDiagnosticsForActionTtl() {
+        flow.setStage("AUTHENTICATING"); when(flows.selectOne(any())).thenReturn(flow); when(flows.claim(any())).thenReturn(1);
+        request.addParameter("state","state"); request.addParameter("error","access_denied");
+        var response=new MockHttpServletResponse(); service.callback("google",request,response);
+        assertEquals("FAILED",flow.getStage()); assertEquals("AUTHORIZATION_CANCELLED",flow.getErrorReason());
+        assertTrue(response.getHeader("Set-Cookie").contains("Max-Age=300"));
+        assertEquals("FAILED",service.context(flow.getFlowId(),request).stage());
+    }
+    @Test void cancelledFlowIsNotResurrectedWhenProviderExchangeReturns() {
+        flow.setStage("AUTHENTICATING"); flow.setProvider("feishu");
+        when(flows.selectOne(any())).thenReturn(flow); when(flows.claim(any())).thenReturn(1);
+        request.addParameter("state","state"); request.addParameter("code","feishu-code");
+        when(values.getAndDelete(anyString())).thenReturn("encrypted-protocol");
+        var aes=(AesUtil)ReflectionTestUtils.getField(service,"aes");
+        when(aes.decrypt("encrypted-protocol")).thenReturn("{\"verifier\":\"verifier\",\"nonce\":\"nonce\"}");
+        when(adapter.exchange(anyString(),anyString(),anyString(),anyString(),anyString())).thenAnswer(inv->{
+            service.cancel(flow.getFlowId(),request,new MockHttpServletResponse(),false);
+            return new ExternalProviderAdapter.VerifiedIdentity("feishu","https://open.feishu.cn/apps/cli_test","ou_test",null,"用户",null);
+        });
+        var response=new MockHttpServletResponse(); service.callback("feishu",request,response);
+        assertEquals("CANCELLED",flow.getStage()); assertNull(response.getHeader("Set-Cookie")); verify(identities,never()).ensure(any());
+    }
 }
