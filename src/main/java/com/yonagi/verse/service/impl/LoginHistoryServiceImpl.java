@@ -56,7 +56,8 @@ public class LoginHistoryServiceImpl extends ServiceImpl<LoginHistoryMapper, Log
         Date createTime = userDO.getCreateTime();
         Page<LoginHistoryDO> page = baseMapper.selectPage(new Page<>(pageNum, pageSize), Wrappers.lambdaQuery(LoginHistoryDO.class)
                 .eq(LoginHistoryDO::getUserId, userId)
-                .ge(LoginHistoryDO::getLoginTime, createTime));
+                .ge(LoginHistoryDO::getLoginTime, createTime)
+                .orderByDesc(LoginHistoryDO::getLoginTime));
 
         LoginHistoryRespDTO respDTO = buildRespDTO(page, pageNum, pageSize);
         stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(respDTO), 30, TimeUnit.MINUTES);
