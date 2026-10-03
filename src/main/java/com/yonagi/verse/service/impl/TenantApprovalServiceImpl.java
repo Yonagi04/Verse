@@ -172,8 +172,6 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
             log.error("Create tenant join request error: tenant {}, user {}", tenantId, userId);
             throw new ServerException(TenantErrorCodeEnum.TENANT_JOIN_REQUEST_CREATE_ERROR);
         }
-        stringRedisTemplate.opsForValue().set(RedisKeyConstant.TENANT_JOIN_REQUEST_KEY + newRequest.getRequestId(),
-                JSON.toJSONString(newRequest), 30, TimeUnit.MINUTES);
 
         // 通知所有管理员
         List<Long> adminIdList = userTenantService.getTenantAdmins(tenantId)
@@ -188,15 +186,9 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
     }
 
     private TenantJoinRequestDO validateJoinRequest(Long userId, Long requestId) {
-        TenantJoinRequestDO requestDO;
-        String cachedJson = stringRedisTemplate.opsForValue().get(RedisKeyConstant.TENANT_JOIN_REQUEST_KEY + requestId);
-        if (cachedJson != null) {
-            requestDO = JSON.parseObject(cachedJson, TenantJoinRequestDO.class);
-        } else {
-            LambdaQueryWrapper<TenantJoinRequestDO> queryWrapper = Wrappers.lambdaQuery(TenantJoinRequestDO.class)
-                    .eq(TenantJoinRequestDO::getRequestId, requestId);
-            requestDO = tenantJoinRequestMapper.selectOne(queryWrapper);
-        }
+        // 审批状态属于写操作前置条件，实时读取数据库，不能接受缓存中的旧状态。
+        TenantJoinRequestDO requestDO = tenantJoinRequestMapper.selectOne(Wrappers.lambdaQuery(TenantJoinRequestDO.class)
+                .eq(TenantJoinRequestDO::getRequestId, requestId));
         if (requestDO == null) {
             throw new ClientException(TenantErrorCodeEnum.REQUEST_NOT_FOUND);
         }

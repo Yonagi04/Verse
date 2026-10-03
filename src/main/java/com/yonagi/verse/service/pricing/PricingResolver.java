@@ -1,8 +1,8 @@
 package com.yonagi.verse.service.pricing;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.alibaba.fastjson2.JSON;
+import com.yonagi.verse.common.cache.QueryCacheTtl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.enums.BillingMode;
 import com.yonagi.verse.common.enums.PricePeriodType;
 import com.yonagi.verse.dao.entity.LlmPricingPeakPeriodDO;
@@ -10,7 +10,6 @@ import com.yonagi.verse.dao.entity.LlmServicePricingDO;
 import com.yonagi.verse.dao.mapper.LlmPricingPeakPeriodMapper;
 import com.yonagi.verse.dao.mapper.LlmServicePricingMapper;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -24,42 +23,38 @@ public class PricingResolver {
     public static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private final LlmServicePricingMapper pricingMapper;
     private final LlmPricingPeakPeriodMapper peakMapper;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final com.yonagi.verse.common.cache.QueryCache queryCache;
+
+    public record Rules(
+            /** 所有历史价格版本。 */ List<LlmServicePricingDO> prices,
+            /** 价格版本对应的高峰期规则。 */ java.util.Map<Long, List<LlmPricingPeakPeriodDO>> peaks) { }
 
     public PricingSnapshot resolve(Long tenantId, Long serviceId, Instant requestStartedAt) {
-        String cacheKey = RedisKeyConstant.LLM_SERVICE_PRICING_KEY + serviceId;
-        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cached != null) {
-            try {
-                PricingSnapshot snapshot = JSON.parseObject(cached, PricingSnapshot.class);
-                if (contains(snapshot, requestStartedAt)) return snapshot;
-            } catch (Exception ignored) {
-                stringRedisTemplate.delete(cacheKey);
-            }
-        }
+        // 缓存规则而非最终价格，高峰时段和历史请求仍按各自发生时间解析。
+        Rules rules = queryCache.read("pricing-rules", RedisKeyConstant.LLM_SERVICE_PRICING_RULES_KEY, List.of(tenantId, serviceId), Rules.class,
+                List.of("t_llm_service_pricing", "t_llm_pricing_peak_period"), TimeUnit.SECONDS.toMillis(QueryCacheTtl.HOURS_4),
+                () -> loadRules(tenantId, serviceId));
         LocalDateTime local = LocalDateTime.ofInstant(requestStartedAt, SHANGHAI);
-        LlmServicePricingDO pricing = pricingMapper.selectOne(Wrappers.lambdaQuery(LlmServicePricingDO.class)
-                .eq(LlmServicePricingDO::getTenantId, tenantId)
-                .eq(LlmServicePricingDO::getServiceId, serviceId)
-                .le(LlmServicePricingDO::getEffectiveFrom, local)
-                .and(q -> q.isNull(LlmServicePricingDO::getEffectiveTo)
-                        .or().gt(LlmServicePricingDO::getEffectiveTo, local))
-                .orderByDesc(LlmServicePricingDO::getEffectiveFrom)
-                .last("LIMIT 1"));
+        LlmServicePricingDO pricing = rules.prices().stream().filter(p -> !local.isBefore(p.getEffectiveFrom())
+                && (p.getEffectiveTo() == null || local.isBefore(p.getEffectiveTo()))).findFirst().orElse(null);
         if (pricing == null) return PricingSnapshot.unpriced();
-        List<LlmPricingPeakPeriodDO> periods = peakMapper.selectList(Wrappers.lambdaQuery(LlmPricingPeakPeriodDO.class)
-                .eq(LlmPricingPeakPeriodDO::getPricingId, pricing.getPricingId()));
+        List<LlmPricingPeakPeriodDO> periods = rules.peaks().getOrDefault(pricing.getPricingId(), List.of());
         int minute = local.getHour() * 60 + local.getMinute();
         int weekdayBit = 1 << (local.getDayOfWeek().getValue() - 1);
         LlmPricingPeakPeriodDO peak = periods.stream().filter(p -> (p.getWeekdayMask() & weekdayBit) != 0
                 && p.getStartMinute() <= minute && minute < p.getEndMinute()).findFirst().orElse(null);
-        PricingSnapshot snapshot = snapshot(pricing, peak);
-        // 仅有基础价（无高峰期规则）时价格在生效区间内恒定，才可安全缓存；
-        // 存在 peak 规则时价格随日内时间变化，缓存会串价，必须实时解析。
-        if (pricing.getEffectiveTo() == null && periods.isEmpty()) {
-            stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(snapshot), 30, TimeUnit.MINUTES);
-        }
-        return snapshot;
+        return snapshot(pricing, peak);
+    }
+
+    private Rules loadRules(Long tenantId, Long serviceId) {
+        List<LlmServicePricingDO> prices = pricingMapper.selectList(Wrappers.lambdaQuery(LlmServicePricingDO.class)
+                .eq(LlmServicePricingDO::getTenantId, tenantId).eq(LlmServicePricingDO::getServiceId, serviceId)
+                .orderByDesc(LlmServicePricingDO::getEffectiveFrom));
+        java.util.Map<Long, List<LlmPricingPeakPeriodDO>> peaks = prices.isEmpty() ? java.util.Map.of() :
+                peakMapper.selectList(Wrappers.lambdaQuery(LlmPricingPeakPeriodDO.class)
+                        .in(LlmPricingPeakPeriodDO::getPricingId, prices.stream().map(LlmServicePricingDO::getPricingId).toList()))
+                        .stream().collect(java.util.stream.Collectors.groupingBy(LlmPricingPeakPeriodDO::getPricingId));
+        return new Rules(prices, peaks);
     }
 
     private PricingSnapshot snapshot(LlmServicePricingDO pricing, LlmPricingPeakPeriodDO peak) {
@@ -77,12 +72,7 @@ public class PricingResolver {
     }
 
     public void invalidateCurrent(Long serviceId) {
-        stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_PRICING_KEY + serviceId);
+        // 统一写拦截器按价格表依赖失效，保留入口兼容现有提交后回调。
     }
 
-    private boolean contains(PricingSnapshot snapshot, Instant instant) {
-        return snapshot != null && snapshot.priced() && snapshot.effectiveFrom() != null
-                && !instant.isBefore(snapshot.effectiveFrom())
-                && (snapshot.effectiveTo() == null || instant.isBefore(snapshot.effectiveTo()));
-    }
 }

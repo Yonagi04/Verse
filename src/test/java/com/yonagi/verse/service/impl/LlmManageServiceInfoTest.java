@@ -67,7 +67,7 @@ class LlmManageServiceInfoTest {
 
     @ParameterizedTest
     @MethodSource("settingsCases")
-    void detailParsesProviderSettingsFromDatabaseAndCache(String settings, Map<String, String> expected,
+    void detailParsesProviderSettingsWithoutLegacyCache(String settings, Map<String, String> expected,
                                                          boolean cached) {
         LlmServiceDO model = LlmServiceDO.builder()
                 .serviceId(3L).tenantId(2L).createdBy(1L).name("test-model")
@@ -89,14 +89,10 @@ class LlmManageServiceInfoTest {
         assertEquals(8192L, response.getContextWindow());
         assertEquals(2048L, response.getMaxOutputTokens());
         assertEquals("sk-te*****", response.getApiKey());
-        if (cached) {
-            verify(llmServiceMapper, never()).selectOne(any());
-            verify(redisTemplate.opsForValue(), never()).set(any(), any(), anyLong(), any(TimeUnit.class));
-        } else {
-            verify(llmServiceMapper).selectOne(any());
-            // 回写缓存仍保存实体 JSON，避免把供应商配置改成 DTO 的 Map 格式。
-            verify(redisTemplate.opsForValue()).set(cacheKey, JSON.toJSONString(model), 30, TimeUnit.MINUTES);
-        }
+        verify(llmServiceMapper).selectOne(any());
+        // 旧实体缓存不能绕过统一的权限、依赖失效与击穿保护。
+        verify(redisTemplate.opsForValue(), never()).get(cacheKey);
+        verify(redisTemplate.opsForValue(), never()).set(any(), any(), anyLong(), any(TimeUnit.class));
     }
 
     private static Stream<Arguments> settingsCases() {

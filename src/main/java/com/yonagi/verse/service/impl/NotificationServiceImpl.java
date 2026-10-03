@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCacheTtl;
 import cn.hutool.core.bean.BeanUtil;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -56,7 +57,7 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;
     private final NotificationMapper notificationMapper;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final com.yonagi.verse.common.cache.QueryCache queryCache;
 
     @Override
     public NotificationListRespDTO getNotificationList(Long userId, Integer pageNum, Integer pageSize) {
@@ -80,21 +81,11 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
         }
 
         // 查询通知表
-        String cacheKey = RedisKeyConstant.NOTIFICATION_INFO_KEY + notificationId;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        NotificationDO notificationDO;
-        if (cachedJson != null) {
-            notificationDO = JSON.parseObject(cachedJson, NotificationDO.class);
-        } else {
-            notificationDO = baseMapper.selectOne(Wrappers.lambdaQuery(NotificationDO.class)
-                    .eq(NotificationDO::getNotificationId, notificationId));
-            if (notificationDO == null) {
-                throw new ClientException(NotificationErrorCodeEnum.NOTIFICATION_NOT_FOUND);
-            }
-            // 通知内容写回cache
-            stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(notificationDO));
-            stringRedisTemplate.expire(cacheKey, Duration.ofHours(12));
-        }
+        // 只缓存正文，接收人校验和已读写入仍在每次请求执行。
+        NotificationDO notificationDO = queryCache.read("notification-content", RedisKeyConstant.NOTIFICATION_INFO_KEY, notificationId, NotificationDO.class,
+                List.of("t_notification"), java.util.concurrent.TimeUnit.SECONDS.toMillis(QueryCacheTtl.HOURS_24), () -> baseMapper.selectOne(
+                        Wrappers.lambdaQuery(NotificationDO.class).eq(NotificationDO::getNotificationId, notificationId)));
+        if (notificationDO == null) throw new ClientException(NotificationErrorCodeEnum.NOTIFICATION_NOT_FOUND);
         NotificationInfoRespDTO notificationInfoRespDTO = new NotificationInfoRespDTO();
         BeanUtil.copyProperties(notificationDO, notificationInfoRespDTO);
         notificationInfoRespDTO.setCreateTime(notificationRecipientDO.getCreateTime());

@@ -205,18 +205,11 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         if (membership == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
-        String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        TenantInfoRespDTO resp;
-        if (cachedJson != null) {
-            resp = JSON.parseObject(cachedJson, TenantInfoRespDTO.class);
-        } else {
-            resp = new TenantInfoRespDTO();
-            BeanUtil.copyProperties(tenantDO, resp);
-            resp.setLogoUrl(tenantMediaService.resolveUrl(tenantDO.getLogo()));
-            resp.setBannerUrl(tenantMediaService.resolveUrl(tenantDO.getBanner()));
-            stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(resp), 30, TimeUnit.MINUTES);
-        }
+        // 完整响应由统一查询切面缓存，实时权限由命中前校验保护。
+        TenantInfoRespDTO resp = new TenantInfoRespDTO();
+        BeanUtil.copyProperties(tenantDO, resp);
+        resp.setLogoUrl(tenantMediaService.resolveUrl(tenantDO.getLogo()));
+        resp.setBannerUrl(tenantMediaService.resolveUrl(tenantDO.getBanner()));
 
         // 角色和成员数是动态数据，不写入租户公共缓存，避免不同用户之间串角色。
         resp.setRole(membership.getRole());

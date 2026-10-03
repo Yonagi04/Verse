@@ -1,10 +1,13 @@
 package com.yonagi.verse.common.security;
 
+import com.yonagi.verse.common.cache.QueryCacheTtl;
+import com.yonagi.verse.common.constant.RedisKeyConstant;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.yonagi.verse.common.constant.RedisKeyConstant;
+import com.yonagi.verse.common.cache.QueryCache;
+import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import com.yonagi.verse.dao.entity.ApiKeyDO;
 import com.yonagi.verse.dao.mapper.ApiKeyMapper;
@@ -15,7 +18,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -25,7 +27,6 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.Date;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 /**
  * API Key 认证过滤器 — 仅处理 /api/v1/openai/**，解析 Bearer sk_xxx，
@@ -44,15 +45,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
     private static final String AUTH_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
 
-    /**
-     * 防缓存穿透的空值标记
-     */
-    private static final String NULL_MARKER = "__NULL__";
-
-    private static final long CACHE_TTL_MINUTES = 10;
-    private static final long NULL_CACHE_TTL_MINUTES = 1;
-
-    private final StringRedisTemplate stringRedisTemplate;
+    private final QueryCache queryCache;
     private final ApiKeyMapper apiKeyMapper;
     private final ApiKeyUsageRecorder apiKeyUsageRecorder;
 
@@ -72,7 +65,15 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        ApiKeyDO apiKey = loadApiKey(token);
+        ApiKeyDO apiKey;
+        try { apiKey = loadApiKey(token); }
+        catch (ServerException | org.springframework.dao.DataAccessException error) {
+            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            response.setContentType("application/json;charset=UTF-8");
+            response.getWriter().write("{\"error\":{\"message\":\"Authentication temporarily unavailable\","
+                    + "\"type\":\"server_error\",\"code\":\"authentication_unavailable\"}}");
+            return;
+        }
         if (apiKey == null || !isKeyValid(apiKey)) {
             writeOpenAiError(response, HttpServletResponse.SC_UNAUTHORIZED, LlmForwardErrorCodeEnum.API_KEY_INVALID);
             return;
@@ -101,25 +102,14 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private ApiKeyDO loadApiKey(String token) {
         String hash = DigestUtil.sha256Hex(token);
-        String cacheKey = RedisKeyConstant.API_KEY_AUTH_KEY + hash;
-
-        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cached != null) {
-            if (NULL_MARKER.equals(cached)) {
-                return null;
-            }
-            return JSON.parseObject(cached, ApiKeyDO.class);
-        }
-
-        ApiKeyDO apiKey = apiKeyMapper.selectOne(Wrappers.lambdaQuery(ApiKeyDO.class)
-                .eq(ApiKeyDO::getApiKey, hash));
-        if (apiKey == null) {
-            // 防穿透：短暂缓存空标记
-            stringRedisTemplate.opsForValue().set(cacheKey, NULL_MARKER, NULL_CACHE_TTL_MINUTES, TimeUnit.MINUTES);
-            return null;
-        }
-        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(apiKey), CACHE_TTL_MINUTES, TimeUnit.MINUTES);
-        return apiKey;
+        Long id = queryCache.read("api-key-id", RedisKeyConstant.API_KEY_AUTH_ID_KEY, hash, Long.class, List.of("t_api_key"), java.util.concurrent.TimeUnit.SECONDS.toMillis(QueryCacheTtl.HOURS_4), () -> {
+            ApiKeyDO key = apiKeyMapper.selectOne(Wrappers.lambdaQuery(ApiKeyDO.class)
+                    .select(ApiKeyDO::getApiKeyId).eq(ApiKeyDO::getApiKey, hash));
+            return key == null ? null : key.getApiKeyId();
+        });
+        if (id == null) return null;
+        // 即使缓存失效链路异常，撤销、过期、限流与租户归属也以这次实时查询为准。
+        return queryCache.check(() -> apiKeyMapper.selectAuthState(id, hash));
     }
 
     private boolean isKeyValid(ApiKeyDO apiKey) {

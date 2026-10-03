@@ -290,16 +290,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public UserRespDTO getCurrentUser(Long userId, boolean mask) {
-        String cacheKey = RedisKeyConstant.USER_PROFILE_KEY + userId;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cachedJson != null) {
-            UserRespDTO result = JSON.parseObject(cachedJson, UserRespDTO.class);
-            if (mask) {
-                result.setPhone(SensitiveUtil.maskPhone(result.getPhone()));
-                result.setEmail(SensitiveUtil.maskEmail(result.getEmail()));
-            }
-            return result;
-        }
         // 查询隐私设置
         UserPrivacyDO privacy = userPrivacyMapper.selectOne(Wrappers.lambdaQuery(UserPrivacyDO.class)
                 .eq(UserPrivacyDO::getUserId, userId));
@@ -323,7 +313,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                 .showRegion(privacy != null && privacy.getShowRegion() == 1)
                 .showTimezone(privacy != null && privacy.getShowTimezone() == 1)
                 .build());
-        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(result), 1, TimeUnit.HOURS);
 
         if (mask) {
             result.setPhone(SensitiveUtil.maskPhone(result.getPhone()));
@@ -334,12 +323,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public UserInfoRespDTO getUserInfo(Long userId) {
-        String cacheKey = RedisKeyConstant.USER_PUBLIC_PROFILE_KEY + userId;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cachedJson != null) {
-            return JSON.parseObject(cachedJson, UserInfoRespDTO.class);
-        }
-
         UserDO userDO = queryActiveUserFromUserId(userId);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
@@ -359,7 +342,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (privacy == null || privacy.getShowTimezone() == 0) {
             result.setTimezone(null);
         }
-        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(result), 1, TimeUnit.HOURS);
         return result;
     }
 

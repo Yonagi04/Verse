@@ -29,6 +29,7 @@ class ModelResolverCapabilityTest {
                 registration(ModelOperation.CHAT_COMPLETIONS, UpstreamProtocol.OPENAI_COMPAT)));
         ModelResolverImpl resolver = new ModelResolverImpl(redis, services, capabilities, registry);
         LlmServiceDO service = service(1);
+        when(services.selectOne(any())).thenReturn(service, service, null);
         when(redis.opsForHash().get(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + 2L, "alias"))
                 .thenReturn("10");
         when(redis.opsForHash().get(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + 3L, "alias"))
@@ -39,7 +40,7 @@ class ModelResolverCapabilityTest {
         resolver.requireBinding(service, ModelOperation.CHAT_COMPLETIONS);
         assertThrows(ClientException.class, () -> resolver.requireBinding(service, ModelOperation.EMBEDDINGS));
         assertThrows(ClientException.class, () -> resolver.resolve(3L, "alias"));
-        verify(services, never()).selectOne(any());
+        verify(services, times(3)).selectOne(any());
     }
 
     @Test

@@ -66,14 +66,6 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
                 log.error("Update exist user-tenant failed: userId {} tenantId {}", userId, tenantId);
                 throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_CREATE_FAILED);
             }
-            // 写入缓存
-            lastLeftUserTenant.setLeftAt(null);
-            lastLeftUserTenant.setRole(role);
-            lastLeftUserTenant.setJoinedAt(new Date());
-            lastLeftUserTenant.setFavorite(false);
-            lastLeftUserTenant.setPinned(false);
-            String userTenantCacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
-            stringRedisTemplate.opsForValue().set(userTenantCacheKey, JSON.toJSONString(lastLeftUserTenant), 15, TimeUnit.MINUTES);
             return Boolean.TRUE;
         }
 
@@ -90,9 +82,6 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
             throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_CREATE_FAILED);
         }
 
-        // 写入缓存
-        String userTenantCacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
-        stringRedisTemplate.opsForValue().set(userTenantCacheKey, JSON.toJSONString(userTenantDO), 15, TimeUnit.MINUTES);
         return Boolean.TRUE;
     }
 
@@ -105,25 +94,15 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
             throw new ClientException(UserTenantErrorCodeEnum.TENANT_ID_IS_NULL);
         }
 
-        String cacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        UserTenantDO userTenantDO;
-        if (cachedJson != null) {
-            userTenantDO = JSON.parseObject(cachedJson, UserTenantDO.class);
-        } else {
-            userTenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
-                    .eq(UserTenantDO::getUserId, userId)
-                    .eq(UserTenantDO::getTenantId, tenantId)
-                    .isNull(UserTenantDO::getLeftAt)
-                    .exists("SELECT 1 FROM t_tenant WHERE t_tenant.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0"));
-        }
-
+        // 授权读取不复用旧成员关系，角色撤销须及时生效。
+        UserTenantDO userTenantDO = baseMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
+                .eq(UserTenantDO::getUserId, userId).eq(UserTenantDO::getTenantId, tenantId)
+                .isNull(UserTenantDO::getLeftAt)
+                .exists("SELECT 1 FROM t_tenant WHERE t_tenant.tenant_id = t_user_tenant.tenant_id AND status = 1 AND del_flag = 0"));
         if (userTenantDO == null) {
             log.warn("User-Tenant association not found for userId: {}, tenantId: {}", userId, tenantId);
             throw new ServerException(UserTenantErrorCodeEnum.USER_TENANT_RELATION_NOT_EXIST);
         }
-        // 查到了就重新写回缓存
-        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(userTenantDO), 15, TimeUnit.MINUTES);
 
         return userTenantDO.getRole();
     }
@@ -150,12 +129,6 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
 
     @Override
     public Boolean isUserJoinedTenant(Long userId, Long tenantId) {
-        String cacheKey = RedisKeyConstant.USER_TENANT_RELATION_KEY + userId + ":" + tenantId;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cachedJson != null) {
-            return Boolean.TRUE;
-        }
-
         LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)
                 .eq(UserTenantDO::getUserId, userId)
                 .eq(UserTenantDO::getTenantId, tenantId)

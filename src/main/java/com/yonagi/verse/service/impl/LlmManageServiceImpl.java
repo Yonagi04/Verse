@@ -146,16 +146,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                             .target(TenantActivityTargetType.LLM_SERVICE, llmServiceId, llmServiceDO.getName())
                             .detail("provider", llmServiceDO.getProvider()).detail("modelName", llmServiceDO.getModelName()));
 
-                    // 缓存
-                    stringRedisTemplate.opsForValue().set(RedisKeyConstant.LLM_SERVICE_INFO_KEY + llmServiceId,
-                            JSON.toJSONString(llmServiceDO),
-                            30,
-                            TimeUnit.MINUTES);
-                    stringRedisTemplate.opsForHash().put(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId,
-                            requestParam.getName(),
-                            String.valueOf(llmServiceId));
-                    stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
-                    stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
+                    // 查询缓存由 SQL 写拦截器统一失效，提交后按需重建。
                     return Boolean.TRUE;
                 } finally {
                     lock.unlock();
@@ -230,14 +221,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     private List<LlmServiceListRespDTO.LlmServiceInfo> loadServiceInfos(Long tenantId) {
-        String key = RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId;
-        String json = stringRedisTemplate.opsForValue().get(key);
-        if (json != null) {
-            return JSON.parseArray(json, LlmServiceListRespDTO.LlmServiceInfo.class);
-        }
         List<LlmServiceListRespDTO.LlmServiceInfo> list = baseMapper.selectByTenantId(tenantId);
         list.forEach(info -> info.setCapabilities(getCapabilities(info.getServiceId())));
-        stringRedisTemplate.opsForValue().set(key, JSON.toJSONString(list), 30, TimeUnit.MINUTES);
         return list;
     }
 
@@ -331,18 +316,6 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                     .set(LlmServiceDO::getActivePricingId, llmServiceDO.getActivePricingId()));
         }
 
-        // 失效缓存；名称变更时重建路由索引
-        stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
-        stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId);
-        stringRedisTemplate.opsForHash().delete(
-                RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, llmServiceDO.getName()
-        );
-        if (nameChanged) {
-            stringRedisTemplate.opsForHash().put(
-                    RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, newName, String.valueOf(serviceId)
-            );
-            stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
-        }
         if (requestParam.getCapabilities() != null) replaceCapabilities(serviceId, bindings);
         if (!changedFields.isEmpty()) record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_UPDATED).actor(userId)
                 .target(TenantActivityTargetType.LLM_SERVICE, serviceId, newName == null ? llmServiceDO.getName() : newName)
@@ -476,25 +449,11 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     @Override
     public LlmServiceInfoRespDTO getLlmInfo(Long userId, Long tenantId, Long serviceId) {
         validateTenantAndMembership(userId, tenantId);
-        // 从缓存中读取
-        String cacheKey = RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        LlmServiceDO llmServiceDO = JSON.parseObject(cachedJson, LlmServiceDO.class);
-        if (llmServiceDO != null && (!tenantId.equals(llmServiceDO.getTenantId())
-                || !Integer.valueOf(0).equals(llmServiceDO.getDelFlag()))) {
-            llmServiceDO = null;
-        }
-        boolean isReadFromCache = true;
-        if (llmServiceDO == null) {
-            isReadFromCache = false;
-            llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
-                    .eq(LlmServiceDO::getServiceId, serviceId)
-                    .eq(LlmServiceDO::getTenantId, tenantId)
-                    .eq(LlmServiceDO::getDelFlag, 0));
-            if (llmServiceDO == null) {
-                throw new ClientException(LlmManageErrorCodeEnum.LLM_SERVICE_IS_NOT_EXIST);
-            }
-        }
+        LlmServiceDO llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
+                .eq(LlmServiceDO::getServiceId, serviceId)
+                .eq(LlmServiceDO::getTenantId, tenantId)
+                .eq(LlmServiceDO::getDelFlag, 0));
+        if (llmServiceDO == null) throw new ClientException(LlmManageErrorCodeEnum.LLM_SERVICE_IS_NOT_EXIST);
 
         Long createdByUserId = llmServiceDO.getCreatedBy();
         UserDO createByUser = userMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
@@ -514,10 +473,6 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         respDTO.setCapabilities(getCapabilities(serviceId));
         respDTO.setTagCodes(metadataService.tags(serviceId));
         respDTO.setPricing(pricingConfigurationService.current(serviceId));
-        // 如果没命中缓存，就写回
-        if (!isReadFromCache) {
-            stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(llmServiceDO), 30, TimeUnit.MINUTES);
-        }
         return respDTO;
     }
 
@@ -614,17 +569,6 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_ENABLED).actor(userId)
                 .target(TenantActivityTargetType.LLM_SERVICE, serviceId, llmServiceDO.getName()));
         llmServiceDO.setStatus(1);
-        // 写回缓存
-        stringRedisTemplate.delete(RedisKeyConstant.LLM_SERVICE_LIST_KEY + tenantId);
-        stringRedisTemplate.opsForValue().set(RedisKeyConstant.LLM_SERVICE_INFO_KEY + serviceId,
-                JSON.toJSONString(llmServiceDO),
-                30, TimeUnit.MINUTES);
-        stringRedisTemplate.opsForHash().put(
-                RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId,
-                llmServiceDO.getName(),
-                String.valueOf(serviceId)
-        );
-        stringRedisTemplate.expire(RedisKeyConstant.LLM_SERVICE_ROUTE_KEY + tenantId, 3, TimeUnit.HOURS);
         return Boolean.TRUE;
     }
 

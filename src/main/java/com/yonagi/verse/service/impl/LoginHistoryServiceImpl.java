@@ -45,12 +45,6 @@ public class LoginHistoryServiceImpl extends ServiceImpl<LoginHistoryMapper, Log
         if (pageSize == null) {
             pageSize = 10;
         }
-        String cacheKey = RedisKeyConstant.USER_LOGIN_HISTORY_KEY + userId + ":" + pageNum + ":" + pageSize;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cachedJson != null) {
-            return JSON.parseObject(cachedJson, LoginHistoryRespDTO.class);
-        }
-
         UserDO userDO = userMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getUserId, userId));
         Date createTime = userDO.getCreateTime();
@@ -60,7 +54,6 @@ public class LoginHistoryServiceImpl extends ServiceImpl<LoginHistoryMapper, Log
                 .orderByDesc(LoginHistoryDO::getLoginTime));
 
         LoginHistoryRespDTO respDTO = buildRespDTO(page, pageNum, pageSize);
-        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(respDTO), 30, TimeUnit.MINUTES);
         return respDTO;
     }
 

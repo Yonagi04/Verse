@@ -57,16 +57,30 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
 
     @Override
     public List<JSONObject> models(UserContext actor, Long tenant) {
+        return withCurrentPrices(tenant, modelMetadata(actor, tenant));
+    }
+
+    /** 缓存只保存模型元数据，不冻结随请求时间变化的最终价格。 */
+    public List<JSONObject> modelMetadata(UserContext actor, Long tenant) {
         return playgroundService.models(actor, tenant).items().stream().map(m -> {
             LlmServiceDO service = model(tenant, Long.valueOf(m.serviceId()));
-            var price = pricingResolver.resolve(tenant, service.getServiceId(), Instant.now());
-            JSONObject pricing = price.priced() ? json("currency", price.currency(),
-                    "billingMode", price.billingMode(), "inputPriceFen", price.cacheMissInputPriceFen(),
-                    "outputPriceFen", price.outputPriceFen(), "requestPriceFen", price.requestPriceFen(),
-                    "periodType", price.periodType()) : null;
             return json("serviceId", m.serviceId(), "name", m.name(), "provider", m.provider(),
                     "description", m.description(), "contextWindow", m.contextWindow(),
-                    "capabilities", caps(service), "pricing", pricing);
+                    "capabilities", caps(service));
+        }).toList();
+    }
+
+    /** 命中元数据后仍按当前请求时间计算价格，兼容跨高峰及价格生效边界。 */
+    public List<JSONObject> withCurrentPrices(Long tenant, List<JSONObject> metadata) {
+        Instant startedAt = Instant.now();
+        return metadata.stream().map(item -> {
+            JSONObject result = new JSONObject(item);
+            var price = pricingResolver.resolve(tenant, Long.valueOf(item.getString("serviceId")), startedAt);
+            result.put("pricing", price.priced() ? json("currency", price.currency(),
+                    "billingMode", price.billingMode(), "inputPriceFen", price.cacheMissInputPriceFen(),
+                    "outputPriceFen", price.outputPriceFen(), "requestPriceFen", price.requestPriceFen(),
+                    "periodType", price.periodType()) : null);
+            return result;
         }).toList();
     }
 

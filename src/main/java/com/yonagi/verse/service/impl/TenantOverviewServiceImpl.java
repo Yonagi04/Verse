@@ -141,6 +141,7 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
             return query.get().stream().collect(Collectors.toMap(TenantOverviewCountRow::getTenantId,
                     TenantOverviewCountRow::getTotal));
         } catch (RuntimeException error) {
+            com.yonagi.verse.common.cache.QueryCacheHealth.degraded();
             log.error("租户概览聚合失败: dimension={}", dimension, error);
             return null;
         }
@@ -152,6 +153,7 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
             return overviewMapper.usage(ids, userId, window.from(), window.to()).stream()
                     .collect(Collectors.toMap(TenantOverviewUsageRow::getTenantId, row -> row));
         } catch (RuntimeException error) {
+            com.yonagi.verse.common.cache.QueryCacheHealth.degraded();
             log.error("租户概览用量聚合失败: dimension={}", dimension, error);
             return null;
         }
@@ -190,6 +192,7 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
                     .stream().filter(row -> ACTIVITY_TITLES.containsKey(row.getType()))
                     .map(this::activity).toList();
         } catch (RuntimeException error) {
+            com.yonagi.verse.common.cache.QueryCacheHealth.degraded();
             log.error("租户概览动态摘要查询失败: tenantId={}", tenant.getTenantId(), error);
             return null;
         }

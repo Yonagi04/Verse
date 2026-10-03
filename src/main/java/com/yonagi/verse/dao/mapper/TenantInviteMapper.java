@@ -17,6 +17,12 @@ import java.util.Date;
 @Mapper
 public interface TenantInviteMapper extends BaseMapper<TenantInviteDO> {
 
+    /** 列表和缓存候选查询共用字段与有效期条件。 */
+    String INVITE_LIST_SQL = "SELECT ti.id, ti.code, ti.created_by, tu.username, ti.usage_count, ti.is_active, ti.expires_at, ti.create_time "
+            + "FROM t_tenant_invite ti JOIN t_user tu ON ti.created_by = tu.user_id "
+            + "WHERE ti.tenant_id = #{tenantId} AND (ti.expires_at IS NULL OR ti.expires_at > #{now}) "
+            + "ORDER BY ti.create_time DESC, ti.id DESC";
+
     /**
      * 分页查询租户邀请列表（根据用户ID和租户ID）
      * @param objectPage 页码对象
@@ -24,13 +30,8 @@ public interface TenantInviteMapper extends BaseMapper<TenantInviteDO> {
      * @param now 当前时间
      * @return 分页结果
      */
-    @Select("SELECT ti.id, ti.code, ti.created_by, tu.username, ti.usage_count, ti.is_active, ti.expires_at, ti.create_time " +
-            "FROM t_tenant_invite ti " +
-            "JOIN t_user tu ON ti.created_by = tu.user_id " +
-            "WHERE ti.tenant_id = #{tenantId} " +
-            "AND (ti.expires_at IS NULL OR ti.expires_at > #{now}) " +
-            "ORDER BY ti.create_time DESC")
-    @Results({
+    @Select(INVITE_LIST_SQL)
+    @Results(id = "tenantInviteInfo", value = {
             @Result(property = "createdBy", column = "created_by"),
             @Result(property = "usageCount", column = "usage_count"),
             @Result(property = "isActive", column = "is_active"),
@@ -39,6 +40,12 @@ public interface TenantInviteMapper extends BaseMapper<TenantInviteDO> {
             @Result(property = "createdByUsername", column = "username")
     })
     Page<TenantInviteListRespDTO.TenantInviteInfo> selectPageByTenantId(Page<?> objectPage, @Param("tenantId") Long tenantId, @Param("now") Date now);
+
+    /** 缓存未过期候选记录，读取时按当前时间过滤后再分页。 */
+    @Select(INVITE_LIST_SQL)
+    @ResultMap("tenantInviteInfo")
+    java.util.List<TenantInviteListRespDTO.TenantInviteInfo> selectAvailableCandidates(
+            @Param("tenantId") Long tenantId, @Param("now") Date now);
 
     /**
      * usage_count 原子 +1，不依赖读取旧值，避免读改写竞态。

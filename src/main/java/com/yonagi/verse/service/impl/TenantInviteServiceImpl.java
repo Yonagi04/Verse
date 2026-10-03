@@ -4,7 +4,6 @@ import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.async.api.DomainEventPublisher;
 import com.yonagi.verse.async.activity.TenantActivityRecorder;
 import com.yonagi.verse.async.event.TenantActivityDraft;
@@ -109,8 +108,6 @@ public class TenantInviteServiceImpl implements TenantInviteService {
             log.error("Create tenant invite code error: tenant {}, user {}", tenantId, userId);
             throw new ServerException(TenantErrorCodeEnum.TENANT_INVITE_CODE_CREATE_ERROR);
         }
-        String cacheKey = RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteCode;
-        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(inviteDO), 15, TimeUnit.MINUTES);
         inviteCodeFilter.add(inviteCode);
 
         TenantInviteRespDTO resp = new TenantInviteRespDTO();
@@ -128,38 +125,27 @@ public class TenantInviteServiceImpl implements TenantInviteService {
             throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
         }
         Long tenantId = inviteDO.getTenantId();
-        String name;
-
-        String cacheKey = RedisKeyConstant.TENANT_INFO_KEY + tenantId;
-        String cachedJson = stringRedisTemplate.opsForValue().get(cacheKey);
-        if (cachedJson != null) {
-            TenantInfoRespDTO respDTO = JSON.parseObject(cachedJson, TenantInfoRespDTO.class);
-            name = respDTO.getName();
-        } else {
-            TenantDO tenantDO = tenantMapper.selectOne(
-                    Wrappers.lambdaQuery(TenantDO.class)
-                            .eq(TenantDO::getTenantId, tenantId)
-                            .eq(TenantDO::getStatus, 1)
-                            .eq(TenantDO::getDelFlag, 0));
-            if (tenantDO == null) {
-                throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-            }
-            name = tenantDO.getName();
-        }
+        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
+                .eq(TenantDO::getTenantId, tenantId).eq(TenantDO::getStatus, 1).eq(TenantDO::getDelFlag, 0));
+        if (tenantDO == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        String name = tenantDO.getName();
         return new TenantJoinInfoRespDTO(name, inviteCode);
     }
 
     @Override
     public TenantInviteListRespDTO listTenantInviteCodes(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
+        return pageAvailableInvites(inviteCandidates(userId, tenantId), pageNum, pageSize);
+    }
+
+    /** 全部候选作为缓存内容；分页结果不能因某条邀请码自然过期而冻结。 */
+    public TenantInviteListRespDTO inviteCandidates(Long userId, Long tenantId) {
         validationHelper.validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
         Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
         if (!isJoinedTenant) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
 
-        Date now = new Date();
-        Page<TenantInviteListRespDTO.TenantInviteInfo> page = tenantInviteMapper.selectPageByTenantId(new Page<>(pageNum, pageSize), tenantId, now);
-        java.util.List<TenantInviteListRespDTO.TenantInviteInfo> records = page.getRecords();
+        java.util.List<TenantInviteListRespDTO.TenantInviteInfo> records = tenantInviteMapper.selectAvailableCandidates(tenantId, new Date());
         if (!records.isEmpty()) {
             records.forEach(record -> {
                 String inviteUrl = frontendBaseUrl + "/join/" + record.getCode();
@@ -168,12 +154,21 @@ public class TenantInviteServiceImpl implements TenantInviteService {
         }
         TenantInviteListRespDTO resp = new TenantInviteListRespDTO();
         resp.setInviteCodes(records);
-        resp.setTotal(page.getTotal());
-        resp.setTotalPages(page.getPages());
-        resp.setPage(pageNum);
-        resp.setPageSize(pageSize);
-
         return resp;
+    }
+
+    /** 每次读取都过滤自然过期项并重新分页，保持总数及页内容一致。 */
+    public TenantInviteListRespDTO pageAvailableInvites(TenantInviteListRespDTO candidates, Integer pageNum, Integer pageSize) {
+        if (pageNum == null || pageSize == null || pageNum < 1 || pageSize < 1)
+            throw new ClientException("分页参数必须大于 0");
+        Date now = new Date();
+        java.util.List<TenantInviteListRespDTO.TenantInviteInfo> available = candidates.getInviteCodes().stream()
+                .filter(record -> record.getExpiresAt() == null || record.getExpiresAt().after(now)).toList();
+        int from = (int) Math.min(available.size(), ((long) pageNum - 1) * pageSize);
+        int to = (int) Math.min(available.size(), (long) from + pageSize);
+        return new TenantInviteListRespDTO().setInviteCodes(available.subList(from, to))
+                .setTotal((long) available.size()).setTotalPages((available.size() + (long) pageSize - 1) / pageSize)
+                .setPage(pageNum).setPageSize(pageSize);
     }
 
     @Override
@@ -243,23 +238,14 @@ public class TenantInviteServiceImpl implements TenantInviteService {
             throw new ServerException(TenantErrorCodeEnum.INVITE_CODE_ACTIVATE_ERROR);
         }
         record(tenantId, userId, TenantActivityType.INVITE_ENABLED, inviteDO, "ENABLED");
-        inviteDO.setIsActive(1);
-        String cacheKey = RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteDO.getCode();
-        stringRedisTemplate.opsForValue().set(cacheKey, JSON.toJSONString(inviteDO), 15, TimeUnit.MINUTES);
         return Boolean.TRUE;
     }
 
     @Override
     public TenantInviteDO validateAndGetInviteCode(String inviteCode) {
-        String cachedJson = stringRedisTemplate.opsForValue().get(RedisKeyConstant.TENANT_INVITE_CODE_KEY + inviteCode);
-        TenantInviteDO inviteDO;
-        if (cachedJson != null) {
-            inviteDO = JSON.parseObject(cachedJson, TenantInviteDO.class);
-        } else {
-            LambdaQueryWrapper<TenantInviteDO> queryWrapper = Wrappers.lambdaQuery(TenantInviteDO.class)
-                    .eq(TenantInviteDO::getCode, inviteCode);
-            inviteDO = tenantInviteMapper.selectOne(queryWrapper);
-        }
+        // 加入操作实时校验有效性，不能复用失效前的邀请码状态。
+        TenantInviteDO inviteDO = tenantInviteMapper.selectOne(Wrappers.lambdaQuery(TenantInviteDO.class)
+                .eq(TenantInviteDO::getCode, inviteCode));
         if (inviteDO == null || inviteDO.getIsActive() == 0) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
         }

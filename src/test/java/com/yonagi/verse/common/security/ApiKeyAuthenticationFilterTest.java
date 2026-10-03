@@ -1,6 +1,8 @@
 package com.yonagi.verse.common.security;
 
 import com.yonagi.verse.dao.entity.ApiKeyDO;
+import com.yonagi.verse.common.cache.QueryCache;
+import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.dao.mapper.ApiKeyMapper;
 import com.yonagi.verse.service.impl.ApiKeyUsageRecorder;
 import jakarta.servlet.FilterChain;
@@ -12,6 +14,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.Date;
+import java.util.function.Supplier;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -21,6 +24,13 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class ApiKeyAuthenticationFilterTest {
+
+    @org.junit.jupiter.api.BeforeAll
+    static void metadata() {
+        com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(
+                new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "api-auth-test"),
+                ApiKeyDO.class);
+    }
 
     @Test
     void rerankRequiresApiKeyBeforeController() throws Exception {
@@ -45,6 +55,7 @@ class ApiKeyAuthenticationFilterTest {
         key.setUserId(10L);
         key.setStatus(1);
         when(mapper.selectOne(any())).thenReturn(key);
+        when(mapper.selectAuthState(eq(30L), any())).thenReturn(key);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(redis(), mapper,
                 mock(ApiKeyUsageRecorder.class));
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/v1/rerank");
@@ -84,6 +95,7 @@ class ApiKeyAuthenticationFilterTest {
         key.setUserId(10L);
         key.setStatus(1);
         when(mapper.selectOne(any())).thenReturn(key);
+        when(mapper.selectAuthState(eq(30L), any())).thenReturn(key);
         ApiKeyAuthenticationFilter filter = new ApiKeyAuthenticationFilter(redis(), mapper, recorder);
         FilterChain chain = (request, response) -> {
             assertEquals(30L, UserContextHolder.get().getApiKeyId());
@@ -112,11 +124,45 @@ class ApiKeyAuthenticationFilterTest {
     }
 
     @SuppressWarnings("unchecked")
-    private static StringRedisTemplate redis() {
-        StringRedisTemplate redis = mock(StringRedisTemplate.class);
-        ValueOperations<String, String> operations = mock(ValueOperations.class);
-        when(redis.opsForValue()).thenReturn(operations);
-        return redis;
+    private static QueryCache redis() {
+        QueryCache cache = mock(QueryCache.class);
+        when(cache.read(any(), any(), any(), eq(Long.class), any(), anyLong(), any()))
+                .thenAnswer(call -> ((Supplier<?>) call.getArgument(6)).get());
+        when(cache.check(any())).thenAnswer(call -> ((Supplier<?>) call.getArgument(0)).get());
+        return cache;
+    }
+
+    @Test
+    void cachedIdNeverAuthorizesRevokedKey() throws Exception {
+        QueryCache cache = redis();
+        when(cache.read(any(), any(), any(), eq(Long.class), any(), anyLong(), any())).thenReturn(30L);
+        ApiKeyMapper mapper = mock(ApiKeyMapper.class);
+        ApiKeyDO revoked = new ApiKeyDO();
+        revoked.setApiKeyId(30L); revoked.setStatus(0);
+        when(mapper.selectAuthState(eq(30L), any())).thenReturn(revoked);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        new ApiKeyAuthenticationFilter(cache, mapper, mock(ApiKeyUsageRecorder.class))
+                .doFilterInternal(request("Bearer sk_valid"), response, (req, res) -> {
+                    throw new AssertionError("revoked cached key reached controller");
+                });
+        assertEquals(401, response.getStatus());
+        verify(mapper).selectAuthState(eq(30L), any());
+        verify(mapper, never()).selectOne(any());
+    }
+
+    @Test
+    void cacheFailureReturns503WithoutDatabaseFallback() throws Exception {
+        QueryCache cache = redis();
+        when(cache.read(any(), any(), any(), eq(Long.class), any(), anyLong(), any()))
+                .thenThrow(new ServerException("cache unavailable"));
+        ApiKeyMapper mapper = mock(ApiKeyMapper.class);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        new ApiKeyAuthenticationFilter(cache, mapper, mock(ApiKeyUsageRecorder.class))
+                .doFilterInternal(request("Bearer sk_valid"), response, (req, res) -> {
+                    throw new AssertionError("unavailable cache reached controller");
+                });
+        assertEquals(503, response.getStatus());
+        verifyNoInteractions(mapper);
     }
 
     private static MockHttpServletRequest request(String authorization) {

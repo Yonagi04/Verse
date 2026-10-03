@@ -18,6 +18,16 @@ import java.util.List;
 @Mapper
 public interface UserTenantMapper extends BaseMapper<UserTenantDO> {
 
+    /** 批量概览缓存键包含有效租户与实时角色，移除成员或停用租户后不能复用旧摘要。 */
+    @Select("""
+            SELECT ut.user_id, ut.tenant_id, ut.role FROM t_user_tenant ut
+            JOIN t_tenant t ON t.tenant_id = ut.tenant_id AND t.status = 1 AND t.del_flag = 0
+            WHERE ut.user_id = #{userId} AND ut.left_at IS NULL
+              AND ut.role IN ('SUPER_ADMIN', 'ADMIN', 'MEMBER')
+            ORDER BY ut.tenant_id
+            """)
+    List<UserTenantDO> selectOverviewMemberships(@Param("userId") Long userId);
+
     /** 查询用户可回退的有效个人租户。 */
     @Select("""
             SELECT u.last_active_tenant_id AS storedTenantId,
