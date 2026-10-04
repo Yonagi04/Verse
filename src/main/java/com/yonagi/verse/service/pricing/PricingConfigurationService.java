@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.pricing;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.enums.BillingMode;
 import com.yonagi.verse.common.enums.LlmManageErrorCodeEnum;
@@ -29,6 +31,9 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
 @Service
 @RequiredArgsConstructor
@@ -106,6 +111,8 @@ public class PricingConfigurationService {
         invalidateAfterCommit(service.getServiceId());
     }
 
+    @QueryCached(keyPrefix = LLM_SERVICE_PRICING_KEY, seconds = HOURS_4, access = Access.NONE,
+            tables = {"t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public PricingConfigRespDTO current(Long serviceId) {
         LlmServicePricingDO pricing = pricingMapper.selectOne(Wrappers.lambdaQuery(LlmServicePricingDO.class)
                 .eq(LlmServicePricingDO::getServiceId, serviceId).isNull(LlmServicePricingDO::getEffectiveTo)

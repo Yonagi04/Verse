@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
+import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -39,6 +42,9 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Date;
 import java.util.concurrent.TimeUnit;
+
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
 @Service
 @RequiredArgsConstructor
@@ -118,6 +124,8 @@ public class TenantInviteServiceImpl implements TenantInviteService {
     }
 
     @Override
+    @QueryCached(keyPrefix = TENANT_INVITE_CODE_KEY, seconds = HOURS_1, access = Access.INVITE,
+            tables = {"t_tenant", "t_tenant_invite"})
     public TenantJoinInfoRespDTO getTenantAndInviteCodeInfo(String inviteCode) {
         TenantInviteDO inviteDO = tenantInviteMapper.selectOne(Wrappers.lambdaQuery(TenantInviteDO.class)
                 .eq(TenantInviteDO::getCode, inviteCode));
@@ -133,6 +141,8 @@ public class TenantInviteServiceImpl implements TenantInviteService {
     }
 
     @Override
+    @QueryCached(keyPrefix = TENANT_INVITE_LIST_KEY, seconds = MINUTES_30, access = Access.TEAM,
+            tables = {"t_tenant", "t_user_tenant", "t_tenant_invite"}, behavior = QueryCacheBehaviors.Invites.class)
     public TenantInviteListRespDTO listTenantInviteCodes(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
         return pageAvailableInvites(inviteCandidates(userId, tenantId), pageNum, pageSize);
     }

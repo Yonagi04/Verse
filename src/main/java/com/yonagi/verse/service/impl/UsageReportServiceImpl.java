@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
+import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.yonagi.verse.common.config.UsageReportingProperties;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.RoleEnum;
@@ -35,6 +38,9 @@ import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /** 用量报表查询实现。 */
 @Service
 @RequiredArgsConstructor
@@ -48,12 +54,16 @@ public class UsageReportServiceImpl implements UsageReportService {
     private final UserMapper userMapper;
 
     @Override
+    @QueryCached(keyPrefix = USAGE_REPORT_QUERY_KEY, seconds = MINUTES_10, access = Access.REPORT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = QueryCacheBehaviors.ReportWindow.class)
     public UsageReportRespDTO query(UserContext context, Long tenantId, UsageGranularity granularity,
                                     LocalDateTime from, LocalDateTime to, Long requestedUserId) {
         return query(context, tenantId, granularity, from, to, requestedUserId, null, null);
     }
 
     @Override
+    @QueryCached(keyPrefix = USAGE_REPORT_QUERY_KEY, seconds = MINUTES_10, access = Access.REPORT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = QueryCacheBehaviors.ReportWindow.class)
     public UsageReportRespDTO query(UserContext context, Long tenantId, UsageGranularity granularity,
                                     LocalDateTime from, LocalDateTime to, Long requestedUserId,
                                     Long apiKeyId, Long serviceId) {
@@ -81,6 +91,8 @@ public class UsageReportServiceImpl implements UsageReportService {
     }
 
     @Override
+    @QueryCached(keyPrefix = USAGE_REPORT_BREAKDOWN_KEY, seconds = MINUTES_10, access = Access.REPORT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = QueryCacheBehaviors.ReportWindow.class)
     public UsageBreakdownRespDTO breakdown(UserContext context, Long tenantId, UsageGranularity granularity,
         LocalDateTime from, LocalDateTime to, Long userId, Long apiKeyId, Long serviceId,
         UsageBreakdownDimension dimension, UsageBreakdownOrder order, int limit) {
@@ -112,6 +124,8 @@ public class UsageReportServiceImpl implements UsageReportService {
     }
 
     @Override
+    @QueryCached(keyPrefix = USAGE_REPORT_FILTER_OPTIONS_KEY, seconds = HOURS_1, access = Access.REPORT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"})
     public UsageFilterOptionsRespDTO filterOptions(UserContext context, Long tenantId) {
         UsageReportFilter filter=resolveFilter(context,tenantId,UsageGranularity.DAY,null,null,null,null,null);
         List<LlmServiceDO> services=llmServiceMapper.selectList(Wrappers.lambdaQuery(LlmServiceDO.class)
@@ -164,6 +178,8 @@ public class UsageReportServiceImpl implements UsageReportService {
     private static BigDecimal metric(Metrics r,UsageBreakdownOrder o){return switch(o){case TOTAL_TOKENS->BigDecimal.valueOf(r.total);case REQUEST_COUNT->BigDecimal.valueOf(r.requests);case ESTIMATED_COST_FEN->r.cost;};}
 
     @Override
+    @QueryCached(keyPrefix = USAGE_REPORT_DASHBOARD_KEY, seconds = MINUTES_10, access = Access.REPORT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = QueryCacheBehaviors.Hourly.class)
     public UsageDashboardRespDTO dashboard(UserContext context, Long tenantId) {
         LocalDateTime now = LocalDateTime.now(SHANGHAI);
         LocalDateTime hourTo = now.truncatedTo(ChronoUnit.HOURS).plusHours(1);

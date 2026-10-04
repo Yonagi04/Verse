@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
+import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.config.UsageReportingProperties;
 import com.yonagi.verse.common.convention.exception.ClientException;
@@ -30,6 +33,9 @@ import java.util.Map;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /** 以目标成员关系角色裁剪用量和待办，不依赖当前租户角色，也不改变当前租户状态。 */
 @Service
 @RequiredArgsConstructor
@@ -58,6 +64,8 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
     private final UsageReportingProperties usageProperties;
 
     @Override
+    @QueryCached(keyPrefix = TENANT_OVERVIEW_LIST_KEY, seconds = MINUTES_30, access = Access.BATCH,
+            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_token_usage_hourly_agg", "t_tenant_join_request"}, behavior = QueryCacheBehaviors.Overview.class)
     public TenantOverviewRespDTO.Batch batch(Long userId) {
         List<UserTenantDO> memberships = userTenantService.getUserTenantList(userId, Boolean.FALSE, 10L);
         Window window = window(LocalDate.now(SHANGHAI));
@@ -85,6 +93,8 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
     }
 
     @Override
+    @QueryCached(keyPrefix = TENANT_OVERVIEW_INFO_KEY, seconds = MINUTES_30, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_token_usage_hourly_agg", "t_tenant_join_request", "t_tenant_activity_log"}, behavior = QueryCacheBehaviors.Overview.class)
     public TenantOverviewRespDTO.Detail detail(Long userId, Long tenantId) {
         if (tenantId == null) throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
         TenantDO tenant = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)

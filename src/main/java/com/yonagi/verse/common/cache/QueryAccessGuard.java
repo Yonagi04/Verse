@@ -55,19 +55,24 @@ public class QueryAccessGuard {
             throw new ClientException(PlaygroundErrorCodeEnum.DISABLED);
         if (access == QueryCatalogue.Access.ACTIVITY && !Integer.valueOf(1).equals(tenant.getActivityRecordingEnabled()))
             throw new ClientException(TenantErrorCodeEnum.TENANT_ACTIVITY_RECORDING_DISABLED);
-        if (access == QueryCatalogue.Access.PLAYGROUND && policy.name().endsWith(".detail")) {
-            PlaygroundWorkspaceDO workspace = workspaces.selectOne(Wrappers.lambdaQuery(PlaygroundWorkspaceDO.class)
-                    .eq(PlaygroundWorkspaceDO::getWorkspaceId, arguments[2])
-                    .eq(PlaygroundWorkspaceDO::getTenantId, tenantId).eq(PlaygroundWorkspaceDO::getOwnerUserId, user)
-                    .eq(PlaygroundWorkspaceDO::getDelFlag, 0));
-            if (workspace == null) throw new ClientException(PlaygroundErrorCodeEnum.SESSION_NOT_FOUND);
-        }
         if (access == QueryCatalogue.Access.REPORT && arguments.length >= 6) {
             reports.getObject().resolveFilter((UserContext) arguments[0], tenantId, (UsageGranularity) arguments[2],
                     (java.time.LocalDateTime) arguments[3], (java.time.LocalDateTime) arguments[4], (Long) arguments[5],
                     arguments.length > 6 ? (Long) arguments[6] : null,
                     arguments.length > 7 ? (Long) arguments[7] : null);
         }
+    }
+
+    /** 工作台详情专用归属校验，由缓存业务策略显式调用。 */
+    public void checkWorkspace(Object[] arguments) {
+        UserContext actor = (UserContext) arguments[0];
+        Long tenantId = (Long) arguments[1];
+        Long user = actor.getUserId();
+        PlaygroundWorkspaceDO workspace = workspaces.selectOne(Wrappers.lambdaQuery(PlaygroundWorkspaceDO.class)
+                .eq(PlaygroundWorkspaceDO::getWorkspaceId, arguments[2])
+                .eq(PlaygroundWorkspaceDO::getTenantId, tenantId).eq(PlaygroundWorkspaceDO::getOwnerUserId, user)
+                .eq(PlaygroundWorkspaceDO::getDelFlag, 0));
+        if (workspace == null) throw new ClientException(PlaygroundErrorCodeEnum.SESSION_NOT_FOUND);
     }
 
     public Object batchIdentity(Object[] arguments) {

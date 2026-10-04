@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
+import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.yonagi.verse.common.cache.QueryCacheTtl;
 import cn.hutool.core.bean.BeanUtil;
 import com.alibaba.fastjson2.JSON;
@@ -40,6 +43,9 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /**
  * @author Yonagi
  * @version 1.0
@@ -61,6 +67,8 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     private final com.yonagi.verse.common.cache.QueryCache queryCache;
 
     @Override
+    @QueryCached(keyPrefix = NOTIFICATION_LIST_KEY, seconds = MINUTES_10, access = Access.NONE,
+            tables = {"t_notification", "t_notification_recipient"}, behavior = QueryCacheBehaviors.Hourly.class)
     public NotificationListRespDTO getNotificationList(Long userId, NotificationListReqDTO requestParam) {
         long startTime = System.currentTimeMillis() - Duration.ofDays(90).toMillis();
         // 筛选在数据库分页前执行，确保总条数与当前页使用相同条件。
@@ -109,6 +117,8 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     }
 
     @Override
+    @QueryCached(keyPrefix = NOTIFICATION_UNREAD_COUNT_KEY, seconds = MINUTES_10, access = Access.NONE,
+            tables = {"t_notification", "t_notification_recipient"}, behavior = QueryCacheBehaviors.Hourly.class)
     public NotificationUnreadCountRespDTO getUnreadNotificationCount(Long userId) {
         long startTime = System.currentTimeMillis() - Duration.ofDays(90).toMillis();
         Long count = notificationRecipientMapper.selectCount(Wrappers.lambdaQuery(NotificationRecipientDO.class)
@@ -143,6 +153,8 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
      * @return
      */
     @Override
+    @QueryCached(keyPrefix = NOTIFICATION_RECENT_LIST_KEY, seconds = MINUTES_10, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant", "t_notification", "t_notification_recipient"}, behavior = QueryCacheBehaviors.Hourly.class)
     public NotificationRecentListRespDTO getRecentNotifications(Long userId, Long tenantId) {
         validateTenantAndMembership(tenantId, userId);
         long startTime = System.currentTimeMillis() - Duration.ofDays(1).toMillis();

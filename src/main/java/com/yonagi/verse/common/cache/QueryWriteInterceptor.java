@@ -23,6 +23,7 @@ public class QueryWriteInterceptor implements Interceptor {
     private static final String LAST_USED_SQL = "UPDATE t_api_key SET last_used_at = ? WHERE api_key_id = ? "
             + "AND (last_used_at IS NULL OR last_used_at < ?)";
     private final QueryCache cache;
+    private final QueryCatalogue catalogue;
 
     static String table(String sql) {
         var matcher = TARGET.matcher(sql);
@@ -41,11 +42,11 @@ public class QueryWriteInterceptor implements Interceptor {
         if (table == null) {
             var names = Pattern.compile("(?i)\\bt_[a-z0-9_]+\\b").matcher(sql);
             while (names.find()) {
-                if (QueryCatalogue.dependsOn(names.group().toLowerCase(Locale.ROOT)))
+                if (catalogue.dependsOn(names.group().toLowerCase(Locale.ROOT)))
                     throw new com.yonagi.verse.common.convention.exception.ServerException("无法识别核心数据写入，已阻止 SQL 执行");
             }
         }
-        if (table == null || !QueryCatalogue.dependsOn(table)) return invocation.proceed();
+        if (table == null || !catalogue.dependsOn(table)) return invocation.proceed();
         if (TransactionSynchronizationManager.isActualTransactionActive()
                 && TransactionSynchronizationManager.isSynchronizationActive()) {
             Mutation state = (Mutation) TransactionSynchronizationManager.getResource(RESOURCE);

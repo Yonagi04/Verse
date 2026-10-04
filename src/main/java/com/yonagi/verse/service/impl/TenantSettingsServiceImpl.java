@@ -1,6 +1,8 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.util.StrUtil;
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.async.activity.TenantActivityRecorder;
@@ -24,6 +26,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /**
  * 租户自定义设置服务实现。
  *
@@ -41,6 +46,8 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
     private final TenantActivityRecorder activityRecorder;
 
     @Override
+    @QueryCached(keyPrefix = TENANT_SETTINGS_KEY, seconds = HOURS_4, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant"})
     public TenantSettingsRespDTO getSettings(Long userId, Long tenantId) {
         UserTenantDO membership = requireMembership(userId, tenantId);
         TenantDO tenant = requireActiveTenant(tenantId);

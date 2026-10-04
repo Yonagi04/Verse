@@ -1,6 +1,9 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.crypto.digest.DigestUtil;
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
+import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -30,6 +33,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.util.Date;
 import java.util.List;
+
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
 /**
  * API Key 管理服务实现
@@ -100,6 +106,8 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
     }
 
     @Override
+    @QueryCached(keyPrefix = API_KEY_LIST_KEY, seconds = HOURS_4, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant", "t_api_key"}, behavior = QueryCacheBehaviors.ApiKeys.class)
     public ApiKeyPageRespDTO listApiKeys(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
         return withCurrentListState(userId, tenantId, listApiKeyMetadata(userId, tenantId, pageNum, pageSize));
     }

@@ -170,7 +170,7 @@ class QueryCacheRedisTest {
                 org.mockito.Mockito.mock(com.yonagi.verse.dao.mapper.LlmServiceCapabilityMapper.class),
                 new com.yonagi.verse.service.forward.AdapterRegistry(List.of()));
         var factory = new org.springframework.aop.aspectj.annotation.AspectJProxyFactory(resolver);
-        factory.addAspect(new CoreQueryCacheAspect(cache, org.mockito.Mockito.mock(QueryAccessGuard.class)));
+        factory.addAspect(QueryCacheTestSupport.aspect(cache, org.mockito.Mockito.mock(QueryAccessGuard.class)));
         com.yonagi.verse.service.forward.ModelResolver proxy = factory.getProxy();
         assertEquals("custom", proxy.resolve(20L, "alias").getProvider());
         assertEquals("custom", proxy.resolve(20L, "alias").getProvider());
@@ -225,7 +225,7 @@ class QueryCacheRedisTest {
                 org.apache.ibatis.mapping.MappedStatement statement = call.getArgument(0);
                 return jdbc.update(statement.getBoundSql(null).getSql());
             });
-            var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache).plugin(db);
+            var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache, QueryCacheTestSupport.catalogue()).plugin(db);
             for (boolean rollback : List.of(false, true)) {
                 transaction.executeWithoutResult(status -> {
                     var config = new org.apache.ibatis.session.Configuration();
@@ -282,7 +282,7 @@ class QueryCacheRedisTest {
         assertTrue(fixture.service.listApiKeys(10L, 20L, 1, 10).getRecords().isEmpty());
         var db = mock(org.apache.ibatis.executor.Executor.class);
         when(db.update(any(), any())).thenReturn(1);
-        var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache).plugin(db);
+        var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache, QueryCacheTestSupport.catalogue()).plugin(db);
         List<String> mutations = List.of("INSERT INTO t_api_key (name) VALUES ('created')",
                 "UPDATE t_api_key SET cost_config_version=1", "UPDATE t_api_key SET status=0");
         for (int i = 0; i < mutations.size(); i++) {
@@ -377,7 +377,7 @@ class QueryCacheRedisTest {
         fixture.service.getNotificationList(10L, query);
         var db = mock(org.apache.ibatis.executor.Executor.class);
         when(db.update(any(), any())).thenReturn(1);
-        var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache).plugin(db);
+        var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache, QueryCacheTestSupport.catalogue()).plugin(db);
         // 接收状态更新和通知写入均应失效，确保已读操作与新通知刷新能获取新数据。
         for (String sql : List.of("UPDATE t_notification_recipient SET is_read=1 WHERE user_id=10",
                 "INSERT INTO t_notification (title) VALUES ('new')")) {
@@ -412,7 +412,7 @@ class QueryCacheRedisTest {
                     mock(UserTenantService.class), mock(NotificationMapper.class), cache);
             var proxy = new AspectJProxyFactory(target);
             proxy.setProxyTargetClass(true);
-            proxy.addAspect(new CoreQueryCacheAspect(cache, mock(QueryAccessGuard.class)));
+            proxy.addAspect(QueryCacheTestSupport.aspect(cache, mock(QueryAccessGuard.class)));
             service = proxy.getProxy();
         }
     }
@@ -452,7 +452,7 @@ class QueryCacheRedisTest {
             var guard = new QueryAccessGuard(cache, tenants, memberships, mock(TenantInviteMapper.class),
                     mock(PlaygroundWorkspaceMapper.class), mock(org.springframework.beans.factory.ObjectProvider.class));
             var proxy = new AspectJProxyFactory(target); proxy.setProxyTargetClass(true);
-            proxy.addAspect(new CoreQueryCacheAspect(cache, guard)); service = proxy.getProxy();
+            proxy.addAspect(QueryCacheTestSupport.aspect(cache, guard)); service = proxy.getProxy();
         }
     }
 

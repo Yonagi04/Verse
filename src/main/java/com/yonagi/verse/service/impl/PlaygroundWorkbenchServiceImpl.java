@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
+import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
@@ -33,6 +36,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /** 二期编排：数据库保护组锁，调用尝试独立，所有上下文来自服务端。 */
 @Service
 @RequiredArgsConstructor
@@ -56,6 +62,8 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
     }
 
     @Override
+    @QueryCached(keyPrefix = PLAYGROUND_WORKBENCH_MODELS_KEY, seconds = HOURS_4, access = Access.PLAYGROUND,
+            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_llm_service_capability"}, behavior = QueryCacheBehaviors.WorkbenchModels.class)
     public List<JSONObject> models(UserContext actor, Long tenant) {
         return withCurrentPrices(tenant, modelMetadata(actor, tenant));
     }
@@ -85,6 +93,8 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
     }
 
     @Override
+    @QueryCached(keyPrefix = PLAYGROUND_PRESET_LIST_KEY, seconds = HOURS_4, access = Access.PLAYGROUND,
+            tables = {"t_tenant", "t_user_tenant", "t_playground_workspace"}, behavior = QueryCacheBehaviors.WorkbenchList.class)
     public List<JSONObject> list(UserContext actor, Long tenant, String kind, String keyword) {
         enabled(actor, tenant);
         if (!Set.of("GROUP", "PRESET").contains(kind)) throw PlaygroundConfiguration.invalid();
@@ -117,6 +127,8 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
     }
 
     @Override
+    @QueryCached(keyPrefix = PLAYGROUND_PRESET_INFO_KEY, seconds = HOURS_4, access = Access.PLAYGROUND,
+            tables = {"t_tenant", "t_user_tenant", "t_playground_workspace"}, behavior = QueryCacheBehaviors.WorkbenchDetail.class)
     public JSONObject detail(UserContext actor, Long tenant, Long id) {
         enabled(actor, tenant);
         PlaygroundWorkspaceDO w = owned(actor, tenant, id, false);

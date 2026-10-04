@@ -85,7 +85,8 @@ class CoreQueryCacheStartupTest {
 
     @Configuration(proxyBeanMethods = false)
     @EnableAspectJAutoProxy(proxyTargetClass = true)
-    @Import({CoreQueryCacheAspect.class, ModelResolverImpl.class, AdapterRegistry.class,
+    @ComponentScan(basePackageClasses = com.yonagi.verse.service.cache.QueryCacheBehaviors.class)
+    @Import({QueryCatalogue.class, CoreQueryCacheAspect.class, ModelResolverImpl.class, AdapterRegistry.class,
             NativeChatAdapters.Registrations.class, NativeEmbeddingAdapters.Registrations.class,
             RoutingProviderAdapter.class, LlmForwardServiceImpl.class, PricingResolver.class,
             CostCalculator.class, UsageNormalizerRegistry.class, Resilience4jTimeLimiter.class})

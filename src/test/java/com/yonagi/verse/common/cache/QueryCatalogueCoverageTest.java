@@ -76,27 +76,18 @@ class QueryCatalogueCoverageTest {
         Set<String> classified = new TreeSet<>(CORE.keySet()); classified.addAll(EXCEPTIONS);
         assertEquals(classified, routes, "新增 GET 必须明确缓存策略或业务例外");
         assertEquals(35, CORE.size());
+        QueryCatalogue catalogue = QueryCacheTestSupport.catalogue();
         for (String entry : CORE.values()) {
-            int split = entry.lastIndexOf('.');
-            assertNotNull(QueryCatalogue.find(entry.substring(0, split), entry.substring(split+1)), entry);
+            assertTrue(catalogue.policies().values().stream().anyMatch(policy -> policy.name().equals(entry)), entry);
         }
-        for (var policy : QueryCatalogue.policies()) {
-            int split = policy.name().lastIndexOf('.');
-            String owner = policy.name().substring(0, split), method = policy.name().substring(split+1);
-            Class<?> type = null;
-            for (String pkg : List.of("service.impl", "service.forward.impl", "service.pricing")) {
-                try { type = Class.forName("com.yonagi.verse."+pkg+"."+owner); break; }
-                catch (ClassNotFoundException ignored) { }
-            }
-            assertNotNull(type, policy.name());
-            assertTrue(Arrays.stream(type.getMethods()).anyMatch(m -> m.getName().equals(method)), policy.name());
-            // 清单存在还不够，真实切点必须覆盖业务方法，避免收窄范围后静默丢失缓存。
-            var pointcut = new org.springframework.aop.aspectj.AspectJExpressionPointcut();
-            pointcut.setExpression(CoreQueryCacheAspect.class.getMethod("query", org.aspectj.lang.ProceedingJoinPoint.class)
-                    .getAnnotation(org.aspectj.lang.annotation.Around.class).value());
-            for (var target : type.getMethods()) {
-                if (target.getName().equals(method)) assertTrue(pointcut.matches(target, type), policy.name());
-            }
+        var pointcut = new org.springframework.aop.aspectj.AspectJExpressionPointcut();
+        pointcut.setExpression(CoreQueryCacheAspect.class.getMethod("query", org.aspectj.lang.ProceedingJoinPoint.class)
+                .getAnnotation(org.aspectj.lang.annotation.Around.class).value());
+        for (var entry : catalogue.policies().entrySet()) {
+            var method = entry.getKey();
+            var policy = entry.getValue();
+            // 直接使用发现的方法元数据，新实现类或子包不需要再扩展测试中的类名查找清单。
+            assertTrue(pointcut.matches(method, method.getDeclaringClass()), policy.name());
             assertFalse(policy.tables().isEmpty());
         }
     }

@@ -1,6 +1,8 @@
 package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -22,6 +24,9 @@ import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /**
  * @author Yonagi
  * @version 1.0
@@ -38,6 +43,8 @@ public class LoginHistoryServiceImpl extends ServiceImpl<LoginHistoryMapper, Log
     private final UserMapper userMapper;
 
     @Override
+    @QueryCached(keyPrefix = USER_LOGIN_HISTORY_KEY, seconds = HOURS_1, access = Access.NONE,
+            tables = {"t_user", "t_login_history"})
     public LoginHistoryRespDTO getLoginHistoryList(Long userId, Integer pageNum, Integer pageSize) {
         if (pageNum == null) {
             pageNum = 1;

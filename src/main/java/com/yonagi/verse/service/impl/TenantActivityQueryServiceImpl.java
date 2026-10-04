@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -30,6 +32,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /** 租户动态只读查询服务实现。 */
 @Service
 @RequiredArgsConstructor
@@ -44,12 +49,16 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
     private final TenantActivityLogMapper activityLogMapper;
 
     @Override
+    @QueryCached(keyPrefix = TENANT_ACTIVITY_STATUS_KEY, seconds = HOURS_4, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant"})
     public TenantActivityStatusRespDTO getStatus(Long userId, Long tenantId) {
         TenantDO tenant = requireReadableTenant(userId, tenantId);
         return new TenantActivityStatusRespDTO(isRecordingEnabled(tenant));
     }
 
     @Override
+    @QueryCached(keyPrefix = TENANT_ACTIVITY_LIST_KEY, seconds = MINUTES_30, access = Access.ACTIVITY,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_tenant_activity_log"})
     public TenantActivityListRespDTO listActivities(Long userId, Long tenantId,
                                                      Integer requestedLimit, String encodedCursor) {
         TenantDO tenant = requireReadableTenant(userId, tenantId);

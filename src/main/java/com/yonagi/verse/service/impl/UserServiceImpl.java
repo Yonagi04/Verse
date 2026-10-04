@@ -3,6 +3,8 @@ package com.yonagi.verse.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -54,6 +56,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
+
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
 /**
  * @author Yonagi
@@ -289,6 +294,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
+    @QueryCached(keyPrefix = USER_PROFILE_KEY, seconds = HOURS_6, access = Access.NONE,
+            tables = {"t_user", "t_user_privacy"})
     public UserRespDTO getCurrentUser(Long userId, boolean mask) {
         // 查询隐私设置
         UserPrivacyDO privacy = userPrivacyMapper.selectOne(Wrappers.lambdaQuery(UserPrivacyDO.class)
@@ -322,6 +329,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
+    @QueryCached(keyPrefix = USER_PUBLIC_PROFILE_KEY, seconds = HOURS_6, access = Access.NONE,
+            tables = {"t_user", "t_user_privacy"})
     public UserInfoRespDTO getUserInfo(Long userId) {
         UserDO userDO = queryActiveUserFromUserId(userId);
         if (userDO == null) {

@@ -31,7 +31,7 @@ class QueryAccessGuardTest {
         when(members.selectActiveMembership(10L, 20L)).thenReturn(relation);
     }
     @Test void removedMemberOrChangedRoleCannotReadWarmResult() {
-        var policy = QueryCatalogue.find("UsageReportServiceImpl", "dashboard");
+        var policy = QueryCacheTestSupport.policy("UsageReportServiceImpl", "dashboard");
         guard.check(policy, new Object[]{actor, 20L});
         UserTenantDO relation = new UserTenantDO(); relation.setRole("MEMBER");
         when(members.selectActiveMembership(10L, 20L)).thenReturn(relation);
@@ -40,7 +40,7 @@ class QueryAccessGuardTest {
         assertThrows(ClientException.class, () -> guard.check(policy, new Object[]{actor, 20L}));
     }
     @Test void disabledTenantAndPlaygroundCannotReadWarmResult() {
-        var policy = QueryCatalogue.find("PlaygroundServiceImpl", "models");
+        var policy = QueryCacheTestSupport.policy("PlaygroundServiceImpl", "models");
         guard.check(policy, new Object[]{actor, 20L});
         TenantDO disabled = new TenantDO(); disabled.setPlaygroundEnabled(0);
         when(tenants.selectOne(any())).thenReturn(disabled);
@@ -49,7 +49,7 @@ class QueryAccessGuardTest {
         assertThrows(ClientException.class, () -> guard.check(policy, new Object[]{actor, 20L}));
     }
     @Test void expiredOrDeactivatedInviteIsRejectedEvenWithoutTableWrite() {
-        var policy = QueryCatalogue.find("TenantInviteServiceImpl", "getTenantAndInviteCodeInfo");
+        var policy = QueryCacheTestSupport.policy("TenantInviteServiceImpl", "getTenantAndInviteCodeInfo");
         TenantInviteDO invite = new TenantInviteDO(); invite.setTenantId(20L); invite.setIsActive(1);
         invite.setExpiresAt(new java.util.Date(System.currentTimeMillis()-1000));
         when(invites.selectOne(any())).thenReturn(invite);
@@ -71,8 +71,9 @@ class QueryAccessGuardTest {
     }
 
     @Test void privatePresetOwnershipIsRechecked() {
-        var policy = QueryCatalogue.find("PlaygroundWorkbenchServiceImpl", "detail");
-        assertThrows(ClientException.class, () -> guard.check(policy, new Object[]{actor, 20L, 30L}));
+        var policy = QueryCacheTestSupport.policy("PlaygroundWorkbenchServiceImpl", "detail");
+        guard.check(policy, new Object[]{actor, 20L, 30L});
+        assertThrows(ClientException.class, () -> guard.checkWorkspace(new Object[]{actor, 20L, 30L}));
         verify(workspaces).selectOne(any());
     }
 }

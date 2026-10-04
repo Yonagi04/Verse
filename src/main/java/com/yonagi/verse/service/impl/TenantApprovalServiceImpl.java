@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -35,6 +37,9 @@ import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -51,6 +56,8 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
     private final TenantActivityRecorder activityRecorder;
 
     @Override
+    @QueryCached(keyPrefix = TENANT_JOIN_REQUEST_LIST_KEY, seconds = MINUTES_30, access = Access.TEAM,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_tenant_join_request"})
     public TenantJoinReqListRespDTO listJoinRequests(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
         if (pageSize == null) {
             pageSize = 10;
@@ -139,6 +146,8 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
     }
 
     @Override
+    @QueryCached(keyPrefix = TENANT_JOIN_REQUEST_UNREVIEWED_COUNT_KEY, seconds = MINUTES_30, access = Access.TEAM,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_tenant_join_request"})
     public Long getUnreviewedJoinReqCount(Long userId, Long tenantId) {
         validationHelper.validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
         Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);

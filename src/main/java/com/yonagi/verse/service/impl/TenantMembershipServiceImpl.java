@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -34,6 +36,9 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
 @Service
 @RequiredArgsConstructor
@@ -96,6 +101,8 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
     }
 
     @Override
+    @QueryCached(keyPrefix = TENANT_MEMBER_LIST_KEY, seconds = HOURS_4, access = Access.TEAM,
+            tables = {"t_tenant", "t_user_tenant", "t_user"})
     public TenantMembersListRespDTO listTenantMembers(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
         validationHelper.validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_CAN_NOT_LIST_MEMBERS);
         if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {

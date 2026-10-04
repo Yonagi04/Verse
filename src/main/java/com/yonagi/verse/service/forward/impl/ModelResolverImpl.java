@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.forward.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
@@ -20,6 +22,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 import java.util.concurrent.TimeUnit;
+
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
 /**
  * 模型解析实现；完整路由结果由核心查询切面缓存，回源时按租户校验启用状态。
@@ -42,6 +47,8 @@ public class ModelResolverImpl implements ModelResolver {
     }
 
     @Override
+    @QueryCached(keyPrefix = LLM_SERVICE_PROTOCOL_KEY, seconds = HOURS_4, access = Access.NONE,
+            tables = {"t_llm_service", "t_llm_service_capability"})
     public UpstreamProtocol protocolFor(LlmServiceDO service, ModelOperation operation) {
         if (service == null || operation == null) throw new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED);
         LlmServiceCapabilityDO binding = capabilityMapper.selectOne(Wrappers.lambdaQuery(LlmServiceCapabilityDO.class)
@@ -70,6 +77,8 @@ public class ModelResolverImpl implements ModelResolver {
     }
 
     @Override
+    @QueryCached(keyPrefix = LLM_SERVICE_INFO_KEY, seconds = HOURS_4, access = Access.NONE,
+            tables = {"t_llm_service"})
     public LlmServiceDO resolve(Long tenantId, String model) {
         if (tenantId == null || !StringUtils.hasText(model)) {
             throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_FOUND);

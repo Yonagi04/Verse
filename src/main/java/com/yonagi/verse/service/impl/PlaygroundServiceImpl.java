@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
@@ -45,6 +47,9 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /** PlayGround 私有会话编排；查询和修改始终带租户与创建者条件。 */
 @Service
 @RequiredArgsConstructor
@@ -80,6 +85,8 @@ public class PlaygroundServiceImpl implements PlaygroundService {
     }
 
     @Override
+    @QueryCached(keyPrefix = PLAYGROUND_MODELS_KEY, seconds = HOURS_4, access = Access.PLAYGROUND,
+            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_llm_service_capability"})
     public PlaygroundDtos.Models models(UserContext actor, Long tenantId) {
         requireEnabled(actor, tenantId);
         List<PlaygroundDtos.Model> items = serviceMapper.selectList(Wrappers.lambdaQuery(LlmServiceDO.class)

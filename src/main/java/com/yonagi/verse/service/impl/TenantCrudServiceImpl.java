@@ -2,6 +2,8 @@ package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
@@ -43,6 +45,9 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
@@ -76,6 +81,8 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     private Integer maxNotificationSendPerDay;
 
     @Override
+    @QueryCached(keyPrefix = TENANT_LIST_KEY, seconds = HOURS_4, access = Access.NONE,
+            tables = {"t_user", "t_tenant", "t_user_tenant"})
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
         Long currentTenantId = currentTenantStateService.resolveCurrentTenant(userId).getTenantId();
         List<UserTenantDO> userTenants = userTenantService.getUserTenantList(userId, Boolean.FALSE, 10L);
@@ -184,6 +191,8 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     }
 
     @Override
+    @QueryCached(keyPrefix = TENANT_INFO_KEY, seconds = HOURS_4, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant"})
     public TenantInfoRespDTO getTenantInfo(Long userId, Long tenantId) {
         if (tenantId == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);

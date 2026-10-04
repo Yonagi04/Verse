@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -31,6 +33,9 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
+
 /**
  * LLM 调用审计查询实现 — 列表按租户 + 角色隔离分页，详情回源 S3 取完整内容。
  *
@@ -50,6 +55,8 @@ public class LlmAuditServiceImpl implements LlmAuditService {
     private String bucket;
 
     @Override
+    @QueryCached(keyPrefix = LLM_AUDIT_LIST_KEY, seconds = MINUTES_30, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_audit_log"})
     public LlmAuditListRespDTO listAudit(UserContext ctx, Long tenantId, Integer pageNum, Integer pageSize, Long userId) {
         validateMembership(ctx, tenantId);
         boolean isAdmin = isAdmin(ctx);
@@ -95,6 +102,8 @@ public class LlmAuditServiceImpl implements LlmAuditService {
     }
 
     @Override
+    @QueryCached(keyPrefix = LLM_AUDIT_INFO_KEY, seconds = HOURS_24, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_audit_log"})
     public LlmAuditDetailRespDTO getAuditDetail(UserContext ctx, Long tenantId, Long auditId) {
         validateMembership(ctx, tenantId);
         boolean isAdmin = isAdmin(ctx);

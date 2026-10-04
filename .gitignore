@@ -60,6 +60,6 @@ build/
 ### Mac OS ###
 .DS_Store
 
-docs/
+dev_docs_local/
 openspec/
 .claude/

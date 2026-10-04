@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
@@ -55,6 +57,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
 /**
  * LLM 转发服务实现 — 非事务同步阻塞编排：解析模型 → 限流 → 熔断 → 转发 → 失败降级 → 结算/发 Token 事件。
@@ -726,6 +731,8 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     }
 
     @Override
+    @QueryCached(keyPrefix = LLM_SERVICE_OPENAI_MODELS_KEY, seconds = HOURS_4, access = Access.NONE,
+            tables = {"t_llm_service"})
     public List<String> listModels(Long tenantId) {
         if (tenantId == null) {
             return List.of();

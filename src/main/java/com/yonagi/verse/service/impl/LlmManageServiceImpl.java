@@ -2,6 +2,8 @@ package com.yonagi.verse.service.impl;
 
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
+import com.yonagi.verse.common.cache.QueryCached;
+import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -55,6 +57,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+
+import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
+import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
 /**
  * @author Yonagi
@@ -168,6 +173,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
+    @QueryCached(keyPrefix = LLM_SERVICE_MANAGE_LIST_KEY, seconds = HOURS_4, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_service", "t_llm_service_capability", "t_llm_service_tag", "t_llm_tag", "t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum,
                                                 Integer pageSize, String keyword, String tagCodes) {
         validateTenantAndMembership(userId, tenantId);
@@ -447,6 +454,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
+    @QueryCached(keyPrefix = LLM_SERVICE_MANAGE_INFO_KEY, seconds = HOURS_4, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_service", "t_llm_service_capability", "t_llm_service_tag", "t_llm_tag", "t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public LlmServiceInfoRespDTO getLlmInfo(Long userId, Long tenantId, Long serviceId) {
         validateTenantAndMembership(userId, tenantId);
         LlmServiceDO llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
@@ -649,6 +658,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
+    @QueryCached(keyPrefix = LLM_SERVICE_COUNT_KEY, seconds = HOURS_4, access = Access.TENANT,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_service", "t_llm_service_capability", "t_llm_service_tag", "t_llm_tag", "t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public Integer getLlmServiceCount(Long userId, Long tenantId) {
         validateTenantAndMembership(userId, tenantId);
         List<LlmServiceListRespDTO.LlmServiceInfo> infos = loadServiceInfos(tenantId);
@@ -656,6 +667,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
+    @QueryCached(keyPrefix = LLM_SERVICE_TAG_LIST_KEY, seconds = HOURS_12, access = Access.NONE,
+            tables = {"t_llm_tag"})
     public List<com.yonagi.verse.dto.resp.TagInfoRespDTO> listTags() {
         return metadataService.catalogue();
     }
