@@ -7,9 +7,9 @@ spring:
       max-file-size: 25MB
       max-request-size: 26MB
   datasource:
-    username: root
-    password: 20040401
-    url: jdbc:mysql://127.0.0.1:3306/verse?characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&transformedBitIsBoolean=true&serverTimezone=GMT%2B8
+    username: ${DB_USERNAME:root}
+    password: ${DB_PASSWORD}
+    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/verse?characterEncoding=utf-8&zeroDateTimeBehavior=convertToNull&transformedBitIsBoolean=true&serverTimezone=GMT%2B8}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       connection-test-query: select 1
@@ -20,8 +20,8 @@ spring:
       minimum-idle: 5
   data:
     redis:
-      host: 127.0.0.1
-      port: 6379
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
       timeout: 3000ms
       lettuce:
         pool:
@@ -170,7 +170,7 @@ verse:
     base-url: ${S3_BASE_URL:https://s3.amazonaws.com}
 
 rocketmq:
-  name-server: 127.0.0.1:9876
+  name-server: ${MQ_NAME_SRV:127.0.0.1:9876}
   producer:
     group: verse-event-producer
     topic: verse-event

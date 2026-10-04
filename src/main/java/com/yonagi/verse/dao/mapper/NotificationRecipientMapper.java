@@ -29,7 +29,7 @@ public interface NotificationRecipientMapper extends BaseMapper<NotificationReci
             "JOIN t_notification n ON r.notification_id = n.notification_id " +
             "WHERE r.user_id = #{userId} AND " +
             "n.tenant_id = #{tenantId} AND " +
-            "n.create_time >= FROM_UNIXTIME(#{startTime} / 1000) AND " +
+            "n.create_time >= FROM_UNIXTIME(#{startTime} / 1000.0) AND " +
             "n.type = 'ANNOUNCEMENT' " +
             "ORDER BY r.create_time DESC")
     @Results({
@@ -46,7 +46,7 @@ public interface NotificationRecipientMapper extends BaseMapper<NotificationReci
     @Select("<script>SELECT n.notification_id, n.title, n.content, n.type, n.severity, r.is_read, r.create_time " +
             "FROM t_notification_recipient r " +
             "JOIN t_notification n ON r.notification_id = n.notification_id " +
-            "WHERE r.user_id = #{userId} AND r.create_time >= FROM_UNIXTIME(#{startTime} / 1000) " +
+            "WHERE r.user_id = #{userId} AND r.create_time >= FROM_UNIXTIME(#{startTime} / 1000.0) " +
             "<if test='query.type != null'>AND n.type = #{query.type} </if>" +
             "<if test='query.severity != null'>AND n.severity = #{query.severity} </if>" +
             "<if test='query.isRead != null'>AND r.is_read = #{query.isRead} </if>" +

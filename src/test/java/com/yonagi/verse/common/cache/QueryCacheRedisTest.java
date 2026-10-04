@@ -340,6 +340,83 @@ class QueryCacheRedisTest {
         verify(fixture.mapper, times(2)).selectPage(any(Page.class), any());
     }
 
+    @Test void notificationListCachesRepeatedFiltersAndSeparatesEveryQueryParameter() {
+        var fixture = new NotificationListFixture();
+        var query = new com.yonagi.verse.dto.req.NotificationListReqDTO();
+        fixture.service.getNotificationList(10L, query);
+        // 相同字段的新 DTO 也应命中缓存，而不是依赖对象身份。
+        fixture.service.getNotificationList(10L, new com.yonagi.verse.dto.req.NotificationListReqDTO());
+        verify(fixture.mapper, times(1)).selectPageByUserIdAndStartTime(any(Page.class), anyLong(), anyLong(), any());
+
+        query.setType("SYSTEM");
+        fixture.service.getNotificationList(10L, query);
+        query.setSeverity("WARNING");
+        fixture.service.getNotificationList(10L, query);
+        query.setIsRead(0);
+        var unread = fixture.service.getNotificationList(10L, query);
+        assertFalse(unread.getRecords().getFirst().getIsRead());
+        fixture.service.getNotificationList(10L, query);
+        query.setIsRead(1);
+        var read = fixture.service.getNotificationList(10L, query);
+        assertTrue(read.getRecords().getFirst().getIsRead());
+        query.setPageNum(2);
+        fixture.service.getNotificationList(10L, query);
+        query.setPageSize(20);
+        fixture.service.getNotificationList(10L, query);
+        fixture.service.getNotificationList(11L, query);
+        fixture.service.getNotificationList(11L, query);
+        verify(fixture.mapper, times(8)).selectPageByUserIdAndStartTime(any(Page.class), anyLong(), anyLong(), any());
+        assertEquals(8, redis.opsForZSet().size(cache.indexKey("t_notification")));
+    }
+
+    @Test void notificationWritesInvalidateFilteredListCaches() throws Exception {
+        var fixture = new NotificationListFixture();
+        var query = new com.yonagi.verse.dto.req.NotificationListReqDTO();
+        query.setIsRead(0);
+        fixture.service.getNotificationList(10L, query);
+        fixture.service.getNotificationList(10L, query);
+        var db = mock(org.apache.ibatis.executor.Executor.class);
+        when(db.update(any(), any())).thenReturn(1);
+        var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache).plugin(db);
+        // 接收状态更新和通知写入均应失效，确保已读操作与新通知刷新能获取新数据。
+        for (String sql : List.of("UPDATE t_notification_recipient SET is_read=1 WHERE user_id=10",
+                "INSERT INTO t_notification (title) VALUES ('new')")) {
+            var configuration = new org.apache.ibatis.session.Configuration();
+            var statement = new org.apache.ibatis.mapping.MappedStatement.Builder(configuration, "test.notifications",
+                    new org.apache.ibatis.builder.StaticSqlSource(configuration, sql),
+                    sql.startsWith("INSERT") ? org.apache.ibatis.mapping.SqlCommandType.INSERT : org.apache.ibatis.mapping.SqlCommandType.UPDATE).build();
+            executor.update(statement, null);
+            fixture.service.getNotificationList(10L, query);
+            fixture.service.getNotificationList(10L, query);
+        }
+        verify(fixture.mapper, times(3)).selectPageByUserIdAndStartTime(any(Page.class), anyLong(), anyLong(), any());
+    }
+
+    /** 使用真实缓存切面、DTO 键序列化与 Redis，统计实际回源次数。 */
+    private class NotificationListFixture {
+        final NotificationRecipientMapper mapper = mock(NotificationRecipientMapper.class);
+        final com.yonagi.verse.service.NotificationService service;
+
+        NotificationListFixture() {
+            when(mapper.selectPageByUserIdAndStartTime(any(Page.class), anyLong(), anyLong(), any())).thenAnswer(call -> {
+                var query = (com.yonagi.verse.dto.req.NotificationListReqDTO) call.getArgument(3);
+                var record = new com.yonagi.verse.dto.resp.NotificationListRespDTO.NotificationInfo()
+                        .setNotificationId(30L).setType(query.getType()).setSeverity(query.getSeverity())
+                        .setIsRead(Integer.valueOf(1).equals(query.getIsRead()));
+                return new Page<com.yonagi.verse.dto.resp.NotificationListRespDTO.NotificationInfo>(query.getPageNum(), query.getPageSize())
+                        .setTotal(1).setRecords(List.of(record));
+            });
+            var target = new com.yonagi.verse.service.impl.NotificationServiceImpl(mapper,
+                    mock(org.springframework.messaging.simp.SimpMessagingTemplate.class),
+                    mock(com.yonagi.verse.async.api.DomainEventPublisher.class), mock(TenantMapper.class),
+                    mock(UserTenantService.class), mock(NotificationMapper.class), cache);
+            var proxy = new AspectJProxyFactory(target);
+            proxy.setProxyTargetClass(true);
+            proxy.addAspect(new CoreQueryCacheAspect(cache, mock(QueryAccessGuard.class)));
+            service = proxy.getProxy();
+        }
+    }
+
     /** 使用真实切面和 Redis；Mapper 只提供可控列表事实，不模拟缓存行为。 */
     private class KeyListFixture {
         final ApiKeyMapper mapper = mock(ApiKeyMapper.class);
