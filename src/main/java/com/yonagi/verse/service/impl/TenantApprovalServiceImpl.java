@@ -86,9 +86,10 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
         if (!isJoinedTenant) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
-        TenantJoinRequestDO requestDO = validateJoinRequest(userId, requestId);
+        TenantJoinRequestDO requestDO = validateJoinRequest(userId, tenantId, requestId);
         LambdaUpdateWrapper<TenantJoinRequestDO> updateWrapper = Wrappers.lambdaUpdate(TenantJoinRequestDO.class)
                 .eq(TenantJoinRequestDO::getRequestId, requestId)
+                .eq(TenantJoinRequestDO::getTenantId, tenantId)
                 .eq(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.PENDING.name())
                 .set(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.APPROVED.name())
                 .set(TenantJoinRequestDO::getReviewedAt, new Date())
@@ -123,9 +124,10 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
         if (!isJoinedTenant) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
-        TenantJoinRequestDO tenantJoinRequestDO = validateJoinRequest(userId, requestId);
+        TenantJoinRequestDO tenantJoinRequestDO = validateJoinRequest(userId, tenantId, requestId);
         int update = tenantJoinRequestMapper.update(Wrappers.lambdaUpdate(TenantJoinRequestDO.class)
                 .eq(TenantJoinRequestDO::getRequestId, requestId)
+                .eq(TenantJoinRequestDO::getTenantId, tenantId)
                 .eq(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.PENDING.name())
                 .set(TenantJoinRequestDO::getStatus, TenantJoinRequestStatusEnum.REJECTED.name())
                 .set(TenantJoinRequestDO::getReviewedAt, new Date())
@@ -194,10 +196,12 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
                 null, adminIdList);
     }
 
-    private TenantJoinRequestDO validateJoinRequest(Long userId, Long requestId) {
+    private TenantJoinRequestDO validateJoinRequest(Long userId, Long tenantId, Long requestId) {
         // 审批状态属于写操作前置条件，实时读取数据库，不能接受缓存中的旧状态。
+        // 按租户限定资源，跨租户与不存在使用同一错误，避免泄露其他租户的申请信息。
         TenantJoinRequestDO requestDO = tenantJoinRequestMapper.selectOne(Wrappers.lambdaQuery(TenantJoinRequestDO.class)
-                .eq(TenantJoinRequestDO::getRequestId, requestId));
+                .eq(TenantJoinRequestDO::getRequestId, requestId)
+                .eq(TenantJoinRequestDO::getTenantId, tenantId));
         if (requestDO == null) {
             throw new ClientException(TenantErrorCodeEnum.REQUEST_NOT_FOUND);
         }

@@ -10,8 +10,10 @@ public interface TenantApprovalService {
 
     TenantJoinReqListRespDTO listJoinRequests(Long userId, Long tenantId, Integer pageNum, Integer pageSize);
 
+    /** 批准指定租户的待审批申请；跨租户申请按不存在处理，状态更新受相同租户约束。 */
     Boolean approveJoinRequest(Long userId, Long tenantId, Long requestId);
 
+    /** 拒绝指定租户的待审批申请；跨租户申请按不存在处理，状态更新受相同租户约束。 */
     Boolean rejectJoinRequest(Long userId, Long tenantId, Long requestId, TenantJoinRejectReqDTO requestParam);
 
     Long getUnreviewedJoinReqCount(Long userId, Long tenantId);
