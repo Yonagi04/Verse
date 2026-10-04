@@ -35,7 +35,7 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/** 显式指定本机测试账号后创建随机临时库；从不迁移或清理现有业务库。 */
+/** 显式指定测试服务后，按当前 schema 创建随机临时库；从不迁移或清理现有业务库。 */
 @EnabledIfEnvironmentVariable(named = "VERSE_BUDGET_TEST_URL", matches = ".+")
 class CostBudgetMySqlIntegrationTest {
     private DriverManagerDataSource server;
@@ -65,12 +65,13 @@ class CostBudgetMySqlIntegrationTest {
         database = new DriverManagerDataSource(databaseUrl, user, password);
         jdbc = new JdbcTemplate(database);
         String schema = Files.readString(Path.of("src/main/resources/schema.sql"));
-        String oldKey = table(schema, "t_api_key").replaceAll("(?m)^\\s*cost_[^\\n]+\\n", "");
         try (var connection = database.getConnection()) {
-            ScriptUtils.executeSqlScript(connection, new ByteArrayResource(oldKey.getBytes(StandardCharsets.UTF_8)));
-            ScriptUtils.executeSqlScript(connection, new ByteArrayResource(table(schema, "t_token_usage_outbox").getBytes(StandardCharsets.UTF_8)));
-            ScriptUtils.executeSqlScript(connection, new org.springframework.core.io.FileSystemResource(
-                    "src/main/resources/db/migration/V20261004_01__api_key_cost_budget.sql"));
+            // CI checkout 仅依赖已跟踪的当前 schema，不依赖本地增量 SQL。
+            for (String name : List.of("t_api_key", "t_token_usage_outbox", "t_cost_budget_invocation",
+                    "t_cost_budget_settlement", "t_cost_budget_period")) {
+                ScriptUtils.executeSqlScript(connection,
+                        new ByteArrayResource(table(schema, name).getBytes(StandardCharsets.UTF_8)));
+            }
         }
         MybatisConfiguration config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         for (Class<?> mapper : List.of(ApiKeyMapper.class, CostBudgetSettlementMapper.class,
@@ -98,7 +99,7 @@ class CostBudgetMySqlIntegrationTest {
         }
     }
     private static String table(String schema, String name) {
-        var matcher = Pattern.compile("(?s)CREATE TABLE IF NOT EXISTS `" + name + "`.*?;").matcher(schema);
+        var matcher = Pattern.compile("(?s)CREATE TABLE IF NOT EXISTS `?" + Pattern.quote(name) + "`?\\s*\\(.*?;").matcher(schema);
         assertTrue(matcher.find()); return matcher.group();
     }
     private void configure(String json) throws Exception {

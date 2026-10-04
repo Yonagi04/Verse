@@ -210,7 +210,23 @@ mvn test -Dtest=ClassName      # 指定测试类
 mvn clean package -DskipTests  # 构建可执行 JAR
 ```
 
-测试覆盖认证与租户上下文、全局异常、限流、协议适配与能力路由、模型转发事件发布、用量归一化与成本计算、Outbox Relay/DLQ、报表与导出、租户概览与偏好、Playground 流式调用及工作台、外部认证等关键链路。GitHub Actions CI 使用 Java 21 执行 `mvn --batch-mode clean verify`。
+测试覆盖认证与租户上下文、全局异常、限流、协议适配与能力路由、模型转发事件发布、用量归一化与成本计算、Outbox Relay/DLQ、报表与导出、租户概览与偏好、Playground 流式调用及工作台、外部认证等关键链路。
+
+GitHub Actions CI 在推送到 `master`、向 `master` 提交 PR 或手动触发时，使用 Java 21、独立的 MySQL 8.0 和 Redis 7.2 服务执行 `clean verify`，同时启用真实数据库与 Redis 集成测试。测试缺失或被跳过会使 CI 失败；测试与 JaCoCo 报告无论成功、失败均作为任务制品保存 7 天。CodeCov 上传失败不影响构建结果。
+
+本地 `mvn test` 默认跳过需要真实服务的测试。需要完整验证时，设置以下环境变量并启用 Redis 测试：
+
+```bash
+export VERSE_BUDGET_TEST_URL='jdbc:mysql://127.0.0.1:3306?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai'
+export VERSE_BUDGET_TEST_USER='<测试账号>'
+export VERSE_BUDGET_TEST_PASSWORD='<测试密码>'
+export VERSE_BUDGET_TEST_REDIS='redis://127.0.0.1:6379'
+mvn --batch-mode --no-transfer-progress clean verify \
+  -Dquery.cache.redis-it=true \
+  -Dquery.cache.redis-address=redis://127.0.0.1:6379
+```
+
+MySQL 测试账号需要创建和删除临时数据库的权限。测试从已跟踪的 `schema.sql` 初始化随机测试库，不依赖本地迁移目录；Redis 测试使用隔离的测试键，并验证 `maxmemory-policy=noeviction`。请使用独立测试服务。
 
 ## 代码结构
 

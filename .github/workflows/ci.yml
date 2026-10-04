@@ -7,15 +7,50 @@ on:
   pull_request:
     branches:
       - master
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
-    name: Java 21 / Maven Tests & Coverage
+    name: Unit Tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
+
+    # 仅连接本次任务创建的服务；MySQL 测试自行创建、销毁随机临时库。
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: verse-ci-only
+          MYSQL_ROOT_HOST: "%"
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -pverse-ci-only --silent"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      VERSE_BUDGET_TEST_URL: "jdbc:mysql://127.0.0.1:3306?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
+      VERSE_BUDGET_TEST_USER: root
+      VERSE_BUDGET_TEST_PASSWORD: verse-ci-only
+      VERSE_BUDGET_TEST_REDIS: "redis://127.0.0.1:6379"
 
     steps:
       - name: Checkout repository
@@ -28,19 +63,49 @@ jobs:
           java-version: "21"
           cache: maven
 
-      - name: Run unit tests
-        run: mvn --batch-mode clean verify
+      - name: Run all tests and build
+        run: >-
+          mvn --batch-mode --no-transfer-progress clean verify
+          -Dquery.cache.redis-it=true
+          -Dquery.cache.redis-address=redis://127.0.0.1:6379
+
+      - name: Require executed integration tests
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          reports = [ET.parse(path).getroot() for path in Path("target/surefire-reports").glob("TEST-*.xml")]
+          required = {
+              "com.yonagi.verse.common.cache.QueryCacheRedisTest",
+              "com.yonagi.verse.service.budget.BudgetExecutionRegistryIntegrationTest",
+              "com.yonagi.verse.service.budget.CostBudgetMySqlIntegrationTest",
+          }
+          executed = {report.attrib["name"] for report in reports if int(report.attrib["tests"]) > 0}
+          missing = required - executed
+          skipped = {report.attrib["name"]: int(report.attrib.get("skipped", 0))
+                     for report in reports if int(report.attrib.get("skipped", 0)) > 0}
+          total = sum(int(report.attrib["tests"]) for report in reports)
+          print(f"Tests: {total}; skipped: {sum(skipped.values())}")
+          if missing or skipped:
+              raise SystemExit(f"Incomplete test baseline: missing={sorted(missing)}, skipped={skipped}")
+          PY
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-coverage-reports
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          retention-days: 7
 
       - name: Upload to CodeCov
+        if: success() && github.event.pull_request.head.repo.fork != true
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./target/site/jacoco/jacoco.xml
-          fail_ci_if_error: true
-
-      - name: Upload JaCoCo HTML report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: jacoco-report
-          path: target/site/jacoco/
+          # 覆盖率报告已有任务制品留存，外部上传故障不应改变测试结果。
+          fail_ci_if_error: false
