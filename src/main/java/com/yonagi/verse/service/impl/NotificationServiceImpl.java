@@ -21,6 +21,7 @@ import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.mapper.NotificationMapper;
 import com.yonagi.verse.dao.mapper.NotificationRecipientMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
+import com.yonagi.verse.dto.req.NotificationListReqDTO;
 import com.yonagi.verse.dto.resp.NotificationInfoRespDTO;
 import com.yonagi.verse.dto.resp.NotificationListRespDTO;
 import com.yonagi.verse.dto.resp.NotificationRecentListRespDTO;
@@ -60,10 +61,12 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     private final com.yonagi.verse.common.cache.QueryCache queryCache;
 
     @Override
-    public NotificationListRespDTO getNotificationList(Long userId, Integer pageNum, Integer pageSize) {
+    public NotificationListRespDTO getNotificationList(Long userId, NotificationListReqDTO requestParam) {
         long startTime = System.currentTimeMillis() - Duration.ofDays(90).toMillis();
+        // 筛选在数据库分页前执行，确保总条数与当前页使用相同条件。
         Page<NotificationListRespDTO.NotificationInfo> page = notificationRecipientMapper
-                .selectPageByUserIdAndStartTime(new Page<>(pageNum, pageSize), userId, startTime);
+                .selectPageByUserIdAndStartTime(new Page<>(requestParam.getPageNum(), requestParam.getPageSize()),
+                        userId, startTime, requestParam);
         return new NotificationListRespDTO()
                 .setTotal((int) page.getTotal())
                 .setRecords(page.getRecords());

@@ -6,6 +6,7 @@ import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.enums.NotificationErrorCodeEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.CurrentUser;
+import com.yonagi.verse.dto.req.NotificationListReqDTO;
 import com.yonagi.verse.dto.resp.NotificationInfoRespDTO;
 import com.yonagi.verse.dto.resp.NotificationListRespDTO;
 import com.yonagi.verse.dto.resp.NotificationRecentListRespDTO;
@@ -31,12 +32,8 @@ public class NotificationController {
 
     @GetMapping
     public Result<NotificationListRespDTO> getNotificationList(@CurrentUser Long userId,
-                                                               @RequestParam @Valid Integer pageNum,
-                                                               @RequestParam Integer pageSize) {
-        if (pageSize == null) {
-            pageSize = 10;
-        }
-        return Results.success(notificationService.getNotificationList(userId, pageNum, pageSize));
+                                                               @Valid @ModelAttribute NotificationListReqDTO requestParam) {
+        return Results.success(notificationService.getNotificationList(userId, requestParam));
     }
 
     @GetMapping("/{notificationId}")

@@ -2,6 +2,7 @@ package com.yonagi.verse.service;
 
 import com.baomidou.mybatisplus.extension.service.IService;
 import com.yonagi.verse.dao.entity.NotificationDO;
+import com.yonagi.verse.dto.req.NotificationListReqDTO;
 import com.yonagi.verse.dto.resp.NotificationInfoRespDTO;
 import com.yonagi.verse.dto.resp.NotificationListRespDTO;
 import com.yonagi.verse.dto.resp.NotificationRecentListRespDTO;
@@ -18,7 +19,7 @@ import java.util.List;
  */
 public interface NotificationService extends IService<NotificationDO> {
 
-    NotificationListRespDTO getNotificationList(Long userId, Integer pageNum, Integer pageSize);
+    NotificationListRespDTO getNotificationList(Long userId, NotificationListReqDTO requestParam);
 
     NotificationInfoRespDTO getNotification(Long userId, Long notificationId);
 

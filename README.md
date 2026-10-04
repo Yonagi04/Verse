@@ -177,8 +177,6 @@ Spring Boot 的标准外部化配置同样可用于覆盖 `spring.datasource.*`�
 
 登录流程入口为 `/api/v1/auth/external`，已登录用户的绑定管理入口为 `/api/v1/users/me/external-accounts`。前端发起受来源校验的操作时需携带匹配的 `Origin`、`Content-Type: application/json` 和 `X-Requested-With: XMLHttpRequest`，并保留流程 Cookie。绑定与解绑需要近期身份验证；系统阻止移除最后一种可用登录方式。
 
-飞书的应用创建、凭证获取、重定向 URL、可用范围与验收步骤见 [飞书登录配置](src/main/resources/feishu-login-setup.md)。
-
 ### 启动与验证
 
 ```bash
