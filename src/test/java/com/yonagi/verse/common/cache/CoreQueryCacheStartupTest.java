@@ -5,6 +5,7 @@ import com.yonagi.verse.service.forward.*;
 import com.yonagi.verse.service.forward.impl.ModelResolverImpl;
 import com.yonagi.verse.service.impl.LlmForwardServiceImpl;
 import com.yonagi.verse.service.LlmForwardService;
+import com.yonagi.verse.service.budget.CostBudgetService;
 import com.yonagi.verse.service.pricing.PricingResolver;
 import com.yonagi.verse.service.pricing.CostCalculator;
 import com.yonagi.verse.service.usage.UsageNormalizerRegistry;
@@ -28,6 +29,7 @@ class CoreQueryCacheStartupTest {
             .withBean(AesUtil.class, () -> mock(AesUtil.class))
             .withBean(DomainEventPublisher.class, () -> mock(DomainEventPublisher.class))
             .withBean(TokenUsageEventPublisher.class, () -> mock(TokenUsageEventPublisher.class))
+            .withBean(CostBudgetService.class, () -> mock(CostBudgetService.class))
             .withBean(RateLimiter.class, () -> mock(RateLimiter.class))
             .withBean(CircuitBreaker.class, () -> mock(CircuitBreaker.class))
             .withBean(FallbackExecutor.class, () -> mock(FallbackExecutor.class));

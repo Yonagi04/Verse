@@ -19,6 +19,7 @@ class QueryCatalogueCoverageTest {
         add("/api/v1/tenants/{tenantId}/settings", "TenantSettingsServiceImpl.getSettings");
         add("/api/v1/tenants/{tenantId}/activities/status", "TenantActivityQueryServiceImpl.getStatus");
         add("/api/v1/tenants/{tenantId}/activities", "TenantActivityQueryServiceImpl.listActivities");
+        add("/api/v1/api-keys/{tenantId}/list", "ApiKeyServiceImpl.listApiKeys");
         add("/api/v1/tenants/invites/{inviteCode}/info", "TenantInviteServiceImpl.getTenantAndInviteCodeInfo");
         add("/api/v1/tenants/{tenantId}/members", "TenantMembershipServiceImpl.listTenantMembers");
         add("/api/v1/tenants/{tenantId}/invites", "TenantInviteServiceImpl.listTenantInviteCodes");
@@ -53,7 +54,9 @@ class QueryCatalogueCoverageTest {
             "/api/v1/auth/external/callback/{provider}", "/api/v1/auth/external/flows/{id}",
             "/api/v1/tenants/{tenantId}/playground/status", "/api/v1/tenants/{tenantId}/playground/prompts",
             "/api/v1/tenants/{tenantId}/playground/sessions", "/api/v1/tenants/{tenantId}/playground/sessions/{sessionId}",
-            "/api/v1/api-keys/{tenantId}/list", "/api/v1/notifications/{notificationId}",
+            "/api/v1/notifications/{notificationId}",
+            // 实时成本快照参与熔断判断，不允许通过查询缓存返回旧状态。
+            "/api/v1/api-keys/{tenantId}/{apiKeyId}/cost-status",
             "/api/v1/usage/{tenantId}/export", "/api/v1/usage-events/{tenantId}/reconciliation");
 
     @Test void everyCoreGetHasPolicyAndEveryGetIsClassified() throws Exception {
@@ -72,7 +75,7 @@ class QueryCatalogueCoverageTest {
         }
         Set<String> classified = new TreeSet<>(CORE.keySet()); classified.addAll(EXCEPTIONS);
         assertEquals(classified, routes, "新增 GET 必须明确缓存策略或业务例外");
-        assertEquals(34, CORE.size());
+        assertEquals(35, CORE.size());
         for (String entry : CORE.values()) {
             int split = entry.lastIndexOf('.');
             assertNotNull(QueryCatalogue.find(entry.substring(0, split), entry.substring(split+1)), entry);

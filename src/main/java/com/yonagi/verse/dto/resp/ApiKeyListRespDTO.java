@@ -34,7 +34,7 @@ public class ApiKeyListRespDTO {
     private String keyPrefix;
 
     /**
-     * 状态：0=已吊销, 1=正常
+     * 状态：0=已吊销, 1=正常, 2=已过期
      */
     private Integer status;
 
@@ -62,4 +62,6 @@ public class ApiKeyListRespDTO {
      * 创建时间
      */
     private Date createTime;
+    /** 正式成本配置。 */
+    private CostLimitConfig costLimit;
 }

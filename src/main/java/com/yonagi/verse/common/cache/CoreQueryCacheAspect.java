@@ -5,6 +5,8 @@ import com.alibaba.fastjson2.JSONObject;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.enums.UsageGranularity;
 import com.yonagi.verse.dto.resp.TenantInviteListRespDTO;
+import com.yonagi.verse.dto.resp.ApiKeyPageRespDTO;
+import com.yonagi.verse.service.impl.ApiKeyServiceImpl;
 import com.yonagi.verse.service.impl.PlaygroundWorkbenchServiceImpl;
 import com.yonagi.verse.service.impl.TenantInviteServiceImpl;
 import lombok.RequiredArgsConstructor;
@@ -76,6 +78,9 @@ public class CoreQueryCacheAspect {
                             result = ((PlaygroundWorkbenchServiceImpl) point.getTarget()).modelMetadata((UserContext) args[0], (Long) args[1]);
                         } else if (policy.name().equals("TenantInviteServiceImpl.listTenantInviteCodes")) {
                             result = ((TenantInviteServiceImpl) point.getTarget()).inviteCandidates((Long) args[0], (Long) args[1]);
+                        } else if (policy.name().equals("ApiKeyServiceImpl.listApiKeys")) {
+                            result = ((ApiKeyServiceImpl) point.getTarget()).listApiKeyMetadata(
+                                    (Long) args[0], (Long) args[1], (Integer) args[2], (Integer) args[3]);
                         } else result = point.proceed();
                         healthy.set(!QueryCacheHealth.isDegraded());
                         return result;
@@ -113,6 +118,11 @@ public class CoreQueryCacheAspect {
         if (policy.name().equals("TenantInviteServiceImpl.listTenantInviteCodes")) {
             return ((TenantInviteServiceImpl) target).pageAvailableInvites((TenantInviteListRespDTO) cached,
                     (Integer) args[2], (Integer) args[3]);
+        }
+        if (policy.name().equals("ApiKeyServiceImpl.listApiKeys")) {
+            // 高频使用时间只按当前页批量回源，不让每次模型调用清空稳定的列表缓存。
+            return cache.check(() -> ((ApiKeyServiceImpl) target).withCurrentListState(
+                    (Long) args[0], (Long) args[1], (ApiKeyPageRespDTO) cached));
         }
         return cached;
     }

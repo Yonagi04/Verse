@@ -34,6 +34,16 @@ import java.util.Optional;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+    /** 精确金额解码失败仍返回管理接口业务错误，不能落入未知服务异常。 */
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public Result<?> unreadable(org.springframework.http.converter.HttpMessageNotReadableException exception) {
+        Throwable cause = exception;
+        while (cause != null) {
+            if (cause instanceof AbstractException business) return Results.failure(business);
+            cause = cause.getCause();
+        }
+        return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), "请求参数格式不正确");
+    }
     /** 保留来源拒绝及限频的真实HTTP状态，供外部认证界面就地处理。 */
     @ExceptionHandler(org.springframework.web.server.ResponseStatusException.class)
     public org.springframework.http.ResponseEntity<Result<Void>> responseStatus(org.springframework.web.server.ResponseStatusException ex) {

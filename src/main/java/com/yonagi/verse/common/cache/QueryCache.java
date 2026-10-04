@@ -8,6 +8,7 @@ import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.convention.errorcode.IErrorCode;
+import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RedissonClient;
@@ -48,6 +49,7 @@ public class QueryCache {
             return 1
             """, Long.class);
     private static final DefaultRedisScript<Long> PUBLISH = new DefaultRedisScript<>("""
+            if redis.replicate_commands then redis.replicate_commands() end
             for i=2,#KEYS,3 do
                 local n = (i-2)/3+1
                 if redis.call('SCARD',KEYS[i+1]) > 0 or (redis.call('GET',KEYS[i]) or '0') ~= ARGV[n+2] then return 0 end
@@ -102,7 +104,7 @@ public class QueryCache {
         if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) return loader.get();
         try { return type.cast(get(name, keyPrefix, parameters, type, tables, ttlMillis, () -> { }, loader::get, value -> true)); }
         catch (RuntimeException | Error error) { throw error; }
-        catch (Throwable error) { throw new ServerException("查询缓存构建失败"); }
+        catch (Throwable error) { throw new ServerException("查询缓存构建失败", error, BaseErrorCode.SERVICE_ERROR); }
     }
 
     public Object get(String name, String keyPrefix, Object parameters, Type type, List<String> tables, long ttlMillis,
@@ -155,8 +157,8 @@ public class QueryCache {
                         Object value;
                         JSONObject envelope = new JSONObject();
                         try {
-                            accessCheck.run();
-                            value = loader.load();
+                            checkAccess(accessCheck);
+                            value = loadData(loader);
                             envelope.put("value", value);
                         } catch (ClientException error) {
                             if (NEGATIVE_CODES.contains(error.getErrorCode())) {
@@ -180,7 +182,32 @@ public class QueryCache {
             Thread.currentThread().interrupt(); throw busy();
         } catch (org.springframework.dao.DataAccessException | org.redisson.client.RedisException error) {
             count(name, "unavailable");
-            throw new ServerException("查询缓存暂不可用，请稍后重试");
+            // 只有缓存基础设施异常到达这里；业务 SQL 异常在调用边界保留原因，不能冒充 Redis 故障。
+            log.warn("[query-cache] 读缓存异常，使用有界数据库回源: query={}", name, error);
+            boolean ownsPermit = !loading.get();
+            if (ownsPermit && !permits.tryAcquire()) { count(name, "rejected"); throw busy(); }
+            loading.set(true);
+            try {
+                checkAccess(accessCheck);
+                Object value = loadData(loader);
+                count(name, "fallback");
+                return value;
+            } finally { if (ownsPermit) { loading.remove(); permits.release(); } }
+        }
+    }
+
+    /** 业务读取失败与 Redis 读写失败分开，向异常处理器保留底层 SQL/连接错误。 */
+    private Object loadData(Loader loader) throws Throwable {
+        try { return loader.load(); }
+        catch (org.springframework.dao.DataAccessException error) {
+            throw new ServerException("数据查询失败，请稍后重试", error, BaseErrorCode.SERVICE_ERROR);
+        }
+    }
+
+    private void checkAccess(Runnable check) {
+        try { check.run(); }
+        catch (org.springframework.dao.DataAccessException error) {
+            throw new ServerException("权限数据查询失败，请稍后重试", error, BaseErrorCode.SERVICE_ERROR);
         }
     }
 
@@ -204,9 +231,9 @@ public class QueryCache {
     }
 
     private void guarded(Runnable check) {
-        if (loading.get()) { check.run(); return; }
+        if (loading.get()) { checkAccess(check); return; }
         if (!permits.tryAcquire()) throw busy();
-        try { check.run(); } finally { permits.release(); }
+        try { checkAccess(check); } finally { permits.release(); }
     }
 
     @SuppressWarnings("unchecked")

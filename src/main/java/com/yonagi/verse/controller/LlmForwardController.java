@@ -153,6 +153,7 @@ public class LlmForwardController {
                         .header(HttpHeaders.CACHE_CONTROL, "no-cache")
                         .header(HEADER_REQUEST_ID, requestId).body(events);
             }
+            llmForwardService.preflight(ctx, operation, body);
             String response;
             String responseId = requestId;
             if (operation == ModelOperation.IMAGE_GENERATION) {
@@ -196,6 +197,7 @@ public class LlmForwardController {
             return streamCompletion(ctx, body, requestId, requestStartedAt);
         }
         try {
+            llmForwardService.preflight(ctx, ModelOperation.CHAT_COMPLETIONS, body);
             InFlightRequestCoalescer.CoalescedResponse response = inFlightRequestCoalescer.execute(
                     ctx,
                     body,
@@ -286,6 +288,11 @@ public class LlmForwardController {
      * 业务异常 → OpenAI error 格式。
      */
     private ResponseEntity<Publisher<String>> toOpenAiError(AbstractException e, String requestId) {
+        llmForwardService.recordCostRejection(UserContextHolder.get(), requestId, e);
+        if (com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(e)) {
+            return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
+                    .body(Mono.just(com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.body(e, requestId)));
+        }
         String code = e.getErrorCode();
         HttpStatus status = statusFor(code);
         ResponseEntity.BodyBuilder builder = errorHeaders(status, requestId);
@@ -294,6 +301,11 @@ public class LlmForwardController {
 
     /** 二进制接口的错误体必须是实际 JSON 字符串，不能把 Mono 交给 Jackson 序列化。 */
     private ResponseEntity<String> toOpenAiMediaError(AbstractException e, String requestId) {
+        llmForwardService.recordCostRejection(UserContextHolder.get(), requestId, e);
+        if (com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(e)) {
+            return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
+                    .body(com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.body(e, requestId));
+        }
         return errorHeaders(statusFor(e.getErrorCode()), requestId).body(openAiErrorJson(e));
     }
 

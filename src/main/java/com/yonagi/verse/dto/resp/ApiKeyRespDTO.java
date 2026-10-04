@@ -47,4 +47,6 @@ public class ApiKeyRespDTO {
      * 固定文案
      */
     private String createKeyTip;
+    /** 正式成本配置。 */
+    private CostLimitConfig costLimit;
 }

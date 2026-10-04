@@ -54,11 +54,13 @@ class LlmForwardUsagePublicationTest {
     private ModelResolver modelResolver;
     private ProviderAdapter providerAdapter;
     private TokenUsageEventPublisher usagePublisher;
+    private com.yonagi.verse.service.budget.CostBudgetService budgets;
     private DomainEventPublisher eventPublisher;
     private FallbackExecutor fallbackExecutor;
     private Resilience4jTimeLimiter timeLimiter;
     private PricingResolver pricingResolver;
     private RateLimiter rateLimiter;
+    private CircuitBreaker circuitBreaker;
     private LlmServiceMapper serviceMapper;
     private LlmForwardServiceImpl service;
     private LlmServiceDO primary;
@@ -72,10 +74,13 @@ class LlmForwardUsagePublicationTest {
         AesUtil aesUtil = mock(AesUtil.class);
         eventPublisher = mock(DomainEventPublisher.class);
         usagePublisher = mock(TokenUsageEventPublisher.class);
+        budgets = mock(com.yonagi.verse.service.budget.CostBudgetService.class);
+        // 原计费断言继续捕获同一终态，API 的真实生产入口现在是同步结算。
+        doAnswer(invocation -> { usagePublisher.publish(invocation.getArgument(0)); return null; }).when(budgets).settle(any());
         TenantMapper tenantMapper = mock(TenantMapper.class);
         serviceMapper = mock(LlmServiceMapper.class);
         rateLimiter = mock(RateLimiter.class);
-        CircuitBreaker circuitBreaker = mock(CircuitBreaker.class);
+        circuitBreaker = mock(CircuitBreaker.class);
         fallbackExecutor = mock(FallbackExecutor.class);
         timeLimiter = mock(Resilience4jTimeLimiter.class);
         pricingResolver = mock(PricingResolver.class);
@@ -87,7 +92,7 @@ class LlmForwardUsagePublicationTest {
                 new OpenAiCompatibleUsageNormalizer()));
         service = new LlmForwardServiceImpl(modelResolver, providerAdapter, aesUtil, eventPublisher,
                 usagePublisher, tenantMapper, serviceMapper, rateLimiter, circuitBreaker, fallbackExecutor,
-                timeLimiter, registry, pricingResolver, new CostCalculator());
+                timeLimiter, registry, pricingResolver, new CostCalculator(), budgets);
         ReflectionTestUtils.setField(service, "maxRetries", 0);
         ReflectionTestUtils.setField(service, "streamIdleTimeoutMs", 5000L);
         ReflectionTestUtils.setField(service, "costingEnabled", true);
@@ -101,6 +106,53 @@ class LlmForwardUsagePublicationTest {
         when(modelResolver.resolve(2L, "alias")).thenReturn(primary);
         when(aesUtil.decrypt(anyString())).thenReturn("plain-key");
         context = new UserContext().setUserId(1L).setCurrentTenantId(2L).setApiKeyId(3L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CHAT_COMPLETIONS", "RESPONSES", "EMBEDDINGS", "IMAGE_GENERATION", "RERANK"})
+    void initialBudgetRejectionNeverSendsChargesRetriesOrChangesHealth(String operation) {
+        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).begin(any(), any(), any());
+        assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.jsonCompletion(
+                context, ModelOperation.valueOf(operation), "{\"model\":\"alias\"}", "budget-rejected", Instant.now()));
+        verifyNoInteractions(providerAdapter, timeLimiter, fallbackExecutor, circuitBreaker, usagePublisher, rateLimiter);
+        verify(budgets, never()).settle(any());
+    }
+
+    @Test void streamsRejectBeforeHeadersAndPermitCannotBeSubscribedTwice() {
+        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context);
+        assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.chatCompletionStream(
+                context, "{\"model\":\"alias\",\"stream\":true}", "stream-budget", Instant.now()));
+        assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.responsesStream(
+                context, "{\"model\":\"alias\",\"stream\":true}", "responses-budget", Instant.now()));
+        verifyNoInteractions(providerAdapter, rateLimiter, circuitBreaker, usagePublisher);
+        doNothing().when(budgets).check(context);
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(ServerSentEvent.builder("[DONE]").build()));
+        var stream = service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}", "single-permit", Instant.now());
+        stream.blockLast();
+        assertThrows(IllegalStateException.class, stream::blockLast);
+        verify(providerAdapter, times(1)).stream(any()); verify(budgets, times(1)).settle(any());
+    }
+
+    @Test void retryBudgetRejectionStopsAttemptsAndPreservesOneOriginalFailureTerminal() {
+        ReflectionTestUtils.setField(service, "maxRetries", 3);
+        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        doNothing().doNothing().doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context);
+        when(budgets.hasUpstream("retry-budget")).thenReturn(true);
+        assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.chatCompletion(
+                context, "{\"model\":\"alias\"}", "retry-budget", Instant.now()));
+        verify(timeLimiter, times(1)).execute(any()); verifyNoInteractions(fallbackExecutor);
+        verify(circuitBreaker, times(1)).recordFailure("10");
+        ArgumentCaptor<TokenUsageEvent> terminal = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(budgets, times(1)).settle(terminal.capture());
+        assertEquals(CostStatus.NOT_CHARGEABLE, terminal.getValue().getCostResult().status());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"SPEECH", "TRANSCRIPTION"})
+    void audioBudgetRejectionOccursBeforeRateLimitOrAdapter(String operation) {
+        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context);
+        assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.media(
+                context, ModelOperation.valueOf(operation), "alias", null, "audio-budget", Instant.now()));
+        verifyNoInteractions(providerAdapter, rateLimiter, circuitBreaker, usagePublisher);
     }
 
     @Test

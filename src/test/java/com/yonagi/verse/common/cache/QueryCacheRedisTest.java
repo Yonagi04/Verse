@@ -1,6 +1,19 @@
 package com.yonagi.verse.common.cache;
 
 import com.alibaba.fastjson2.TypeReference;
+import com.alibaba.fastjson2.JSON;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.yonagi.verse.dao.entity.*;
+import com.yonagi.verse.dao.mapper.*;
+import com.yonagi.verse.service.UserTenantService;
+import com.yonagi.verse.service.budget.CostBudgetService;
+import com.yonagi.verse.service.impl.ApiKeyServiceImpl;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
+import org.springframework.aop.aspectj.annotation.AspectJProxyFactory;
+import org.springframework.test.util.ReflectionTestUtils;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -18,6 +31,8 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
 
 /** 真实 Redis/Lua/Redisson 测试，仅操作带独立随机测试后缀的键。 */
 @EnabledIfSystemProperty(named="query.cache.redis-it", matches="true")
@@ -29,8 +44,11 @@ class QueryCacheRedisTest {
     private QueryCacheProperties properties;
     private QueryCache cache;
     @BeforeAll static void connect() throws Exception {
+        for (Class<?> type : List.of(ApiKeyDO.class, TenantDO.class))
+            TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), "key-list-cache"), type);
         Config config=new Config(); config.setThreads(2).setNettyThreads(2);
-        config.useSingleServer().setAddress("redis://127.0.0.1:6379").setConnectionMinimumIdleSize(1).setConnectionPoolSize(8);
+        config.useSingleServer().setAddress(System.getProperty("query.cache.redis-address", "redis://127.0.0.1:6379"))
+                .setConnectionMinimumIdleSize(1).setConnectionPoolSize(8);
         client=Redisson.create(config);
         factory=new RedissonConnectionFactory(client); factory.afterPropertiesSet();
         redis=new StringRedisTemplate(factory);
@@ -224,6 +242,141 @@ class QueryCacheRedisTest {
                 assertEquals("committed", cached.get());
             }
         } finally { database.shutdown(); }
+    }
+
+    @Test void keyListCachesMetadataButRefreshesUsageAndNaturalExpiry() {
+        var fixture = new KeyListFixture();
+        fixture.key.setExpiresAt(new Date(System.currentTimeMillis() - 1000));
+        var first = fixture.service.listApiKeys(10L, 20L, 1, 10);
+        assertEquals(2, first.getRecords().getFirst().getStatus());
+        fixture.usedAt = new Date(2000);
+        var second = fixture.service.listApiKeys(10L, 20L, 1, 10);
+        assertEquals(new Date(2000), second.getRecords().getFirst().getLastUsedAt());
+        assertEquals(2, second.getRecords().getFirst().getStatus());
+        verify(fixture.mapper, times(1)).selectPage(any(Page.class), any());
+        verify(fixture.mapper, times(2)).selectList(any());
+        verify(fixture.mapper, never()).update(any(), any());
+        String key = redis.opsForZSet().range(cache.indexKey("t_api_key"), 0, -1).iterator().next();
+        var metadata = JSON.parseObject(redis.opsForValue().get(key)).getJSONObject("value").getJSONArray("records").getJSONObject(0);
+        assertEquals(1, metadata.getInteger("status"));
+        assertNull(metadata.get("lastUsedAt"));
+        assertFalse(metadata.containsKey("apiKey"));
+        assertEquals(new Date(1000), first.getRecords().getFirst().getLastUsedAt(), "补充最新状态不修改已有响应");
+    }
+
+    @Test void keyListCacheSeparatesUserTenantAndPagination() {
+        var fixture = new KeyListFixture();
+        fixture.service.listApiKeys(10L, 20L, 1, 10);
+        fixture.service.listApiKeys(10L, 20L, 1, 10);
+        fixture.service.listApiKeys(11L, 20L, 1, 10);
+        fixture.service.listApiKeys(10L, 21L, 1, 10);
+        fixture.service.listApiKeys(10L, 20L, 2, 10);
+        fixture.service.listApiKeys(10L, 20L, 1, 20);
+        verify(fixture.mapper, times(5)).selectPage(any(Page.class), any());
+        assertEquals(5, redis.opsForZSet().size(cache.indexKey("t_api_key")));
+    }
+
+    @Test void keyListCreatesEditsAndRevokesInvalidateWarmResults() throws Exception {
+        var fixture = new KeyListFixture();
+        fixture.key.setStatus(0);
+        assertTrue(fixture.service.listApiKeys(10L, 20L, 1, 10).getRecords().isEmpty());
+        var db = mock(org.apache.ibatis.executor.Executor.class);
+        when(db.update(any(), any())).thenReturn(1);
+        var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache).plugin(db);
+        List<String> mutations = List.of("INSERT INTO t_api_key (name) VALUES ('created')",
+                "UPDATE t_api_key SET cost_config_version=1", "UPDATE t_api_key SET status=0");
+        for (int i = 0; i < mutations.size(); i++) {
+            fixture.key.setStatus(i == 2 ? 0 : 1);
+            fixture.key.setName(i == 0 ? "created" : "edited");
+            fixture.key.setCostConfigVersion((long) i);
+            var configuration = new org.apache.ibatis.session.Configuration();
+            var statement = new org.apache.ibatis.mapping.MappedStatement.Builder(configuration, "test.key-list",
+                    new org.apache.ibatis.builder.StaticSqlSource(configuration, mutations.get(i)),
+                    i == 0 ? org.apache.ibatis.mapping.SqlCommandType.INSERT : org.apache.ibatis.mapping.SqlCommandType.UPDATE).build();
+            executor.update(statement, null);
+            var result = fixture.service.listApiKeys(10L, 20L, 1, 10);
+            if (i == 2) assertTrue(result.getRecords().isEmpty());
+            else {
+                assertEquals(fixture.key.getName(), result.getRecords().getFirst().getName());
+                assertEquals(String.valueOf(i), result.getRecords().getFirst().getCostLimit().version());
+            }
+        }
+        verify(fixture.mapper, times(4)).selectPage(any(Page.class), any());
+    }
+
+    @Test void warmKeyListStillRejectsRemovedMembershipAndDisabledTenant() {
+        var fixture = new KeyListFixture();
+        fixture.service.listApiKeys(10L, 20L, 1, 10);
+        when(fixture.memberships.selectActiveMembership(10L, 20L)).thenReturn(null);
+        assertThrows(ClientException.class, () -> fixture.service.listApiKeys(10L, 20L, 1, 10));
+        when(fixture.memberships.selectActiveMembership(10L, 20L)).thenReturn(new UserTenantDO());
+        when(fixture.tenants.selectOne(any())).thenReturn(null);
+        assertThrows(ClientException.class, () -> fixture.service.listApiKeys(10L, 20L, 1, 10));
+        verify(fixture.mapper, times(1)).selectPage(any(Page.class), any());
+        verify(fixture.mapper, times(1)).selectList(any());
+    }
+
+    @Test void keyListSqlFailureIsNotMisreportedAsRedisFailure() {
+        var fixture = new KeyListFixture();
+        var sql = new org.springframework.jdbc.BadSqlGrammarException("key-list", "SELECT cost_config_version",
+                new java.sql.SQLException("Unknown column cost_config_version", "42S22", 1054));
+        when(fixture.mapper.selectPage(any(Page.class), any())).thenThrow(sql);
+        ServerException error = assertThrows(ServerException.class, () -> fixture.service.listApiKeys(10L, 20L, 1, 10));
+        assertSame(sql, error.getCause());
+        assertEquals("数据查询失败，请稍后重试", error.getErrorMessage());
+        verify(fixture.mapper, times(1)).selectPage(any(Page.class), any());
+    }
+
+    @Test void transactionalKeyListBypassesWarmCache() {
+        var fixture = new KeyListFixture();
+        fixture.service.listApiKeys(10L, 20L, 1, 10);
+        org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            fixture.key.setName("transaction-value");
+            assertEquals("transaction-value", fixture.service.listApiKeys(10L, 20L, 1, 10).getRecords().getFirst().getName());
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+        verify(fixture.mapper, times(2)).selectPage(any(Page.class), any());
+    }
+
+    /** 使用真实切面和 Redis；Mapper 只提供可控列表事实，不模拟缓存行为。 */
+    private class KeyListFixture {
+        final ApiKeyMapper mapper = mock(ApiKeyMapper.class);
+        final TenantMapper tenants = mock(TenantMapper.class);
+        final UserTenantMapper memberships = mock(UserTenantMapper.class);
+        final ApiKeyDO key = new ApiKeyDO();
+        final ApiKeyServiceImpl service;
+        Date usedAt = new Date(1000);
+        @SuppressWarnings("unchecked") KeyListFixture() {
+            key.setApiKeyId(30L); key.setStatus(1); key.setName("original"); key.setKeyPrefix("sk_prefix");
+            key.setApiKey("hash-must-not-be-cached"); key.setCostLimitEnabled(false); key.setCostConfigVersion(0L);
+            when(tenants.selectOne(any())).thenReturn(new TenantDO());
+            when(memberships.selectActiveMembership(anyLong(), anyLong())).thenReturn(new UserTenantDO());
+            var users = mock(UserTenantService.class);
+            when(users.isUserJoinedTenant(anyLong(), anyLong())).thenReturn(true);
+            when(mapper.selectPage(any(Page.class), any())).thenAnswer(call -> {
+                Page<ApiKeyDO> page = call.getArgument(0);
+                LambdaQueryWrapper<ApiKeyDO> query = call.getArgument(1);
+                assertFalse(Arrays.asList(query.getSqlSelect().split(",")).contains("api_key"));
+                assertFalse(query.getSqlSelect().contains("last_used_at"));
+                page.setRecords(key.getStatus() == 0 ? List.of() : List.of(key));
+                page.setTotal(page.getRecords().size()); return page;
+            });
+            when(mapper.selectList(any())).thenAnswer(call -> {
+                LambdaQueryWrapper<ApiKeyDO> query = call.getArgument(0);
+                assertTrue(query.getSqlSegment().contains("user_id"));
+                assertTrue(query.getSqlSegment().contains("tenant_id"));
+                ApiKeyDO current = new ApiKeyDO(); current.setApiKeyId(key.getApiKeyId()); current.setLastUsedAt(usedAt);
+                return List.of(current);
+            });
+            var target = new ApiKeyServiceImpl(mock(CostBudgetService.class), tenants, users, redis);
+            ReflectionTestUtils.setField(target, "baseMapper", mapper);
+            var guard = new QueryAccessGuard(cache, tenants, memberships, mock(TenantInviteMapper.class),
+                    mock(PlaygroundWorkspaceMapper.class), mock(org.springframework.beans.factory.ObjectProvider.class));
+            var proxy = new AspectJProxyFactory(target); proxy.setProxyTargetClass(true);
+            proxy.addAspect(new CoreQueryCacheAspect(cache, guard)); service = proxy.getProxy();
+        }
     }
 
     public record Item(Long id,String name){}

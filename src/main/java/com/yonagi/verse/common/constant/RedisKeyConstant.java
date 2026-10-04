@@ -240,6 +240,9 @@ public class RedisKeyConstant {
     /** API Key 哈希到 ID 的定位缓存，授权状态每次实时复核。 */
     public static final String API_KEY_AUTH_ID_KEY = "verse:api-key:auth:id:";
 
+    /** 用户在指定租户下的 Key 列表元数据，不含最近使用时间。 */
+    public static final String API_KEY_LIST_KEY = "verse:api-key:list:";
+
     /** 核心查询重建锁：业务前缀摘要:参数摘要。 */
     public static final String CORE_QUERY_CACHE_LOCK_KEY = "verse:lock_core-query:";
 

@@ -79,4 +79,18 @@ public class ApiKeyDO {
      * Key 级 TPM 上限（NULL=不限）
      */
     private Integer rateLimitTpm;
+    /** 成本限制开关。 */
+    private Boolean costLimitEnabled;
+    /** 日限额，整数分。 */
+    private java.math.BigDecimal costLimitDailyFen;
+    /** 周限额，整数分。 */
+    private java.math.BigDecimal costLimitWeeklyFen;
+    /** 月限额，整数分。 */
+    private java.math.BigDecimal costLimitMonthlyFen;
+    /** 成本配置版本。 */
+    private Long costConfigVersion;
+    /** 成本数据完整性状态。 */
+    private String costDataState;
+    /** 内部不可用原因。 */
+    private String costDataReason;
 }

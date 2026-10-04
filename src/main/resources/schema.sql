@@ -110,6 +110,13 @@ CREATE TABLE IF NOT EXISTS `t_api_key` (
     `expires_at`    DATETIME     DEFAULT NULL COMMENT '过期时间（NULL=永不过期）',
     `rate_limit_rpm` INT         DEFAULT NULL COMMENT 'Key 级 RPM 上限（NULL=不限）',
     `rate_limit_tpm` INT         DEFAULT NULL COMMENT 'Key 级 TPM 上限（NULL=不限）',
+    cost_limit_enabled TINYINT NOT NULL DEFAULT 0 COMMENT '成本限制开关',
+    cost_limit_daily_fen DECIMAL(20,0) NULL COMMENT '日限额，分',
+    cost_limit_weekly_fen DECIMAL(20,0) NULL COMMENT '周限额，分',
+    cost_limit_monthly_fen DECIMAL(20,0) NULL COMMENT '月限额，分',
+    cost_config_version BIGINT NOT NULL DEFAULT 0 COMMENT '成本配置版本',
+    cost_data_state VARCHAR(24) NOT NULL DEFAULT 'INITIALIZING' COMMENT '成本数据完整性',
+    cost_data_reason VARCHAR(64) NULL COMMENT '内部不可用原因',
     `create_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_api_key` (`api_key`),
@@ -679,3 +686,67 @@ CREATE TABLE IF NOT EXISTS t_user_external_auth_audit (
  outcome VARCHAR(32) NOT NULL, create_time DATETIME(3) NOT NULL DEFAULT (UTC_TIMESTAMP(3)),
  UNIQUE KEY uk_user_operation(user_id,operation_id), KEY idx_audit_cleanup(create_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS t_cost_budget_invocation (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '接管主键',
+    tenant_id BIGINT NOT NULL COMMENT '租户标识',
+    api_key_id BIGINT NOT NULL COMMENT 'Key 标识',
+    request_id VARCHAR(64) NOT NULL COMMENT '逻辑请求标识',
+    event_id VARCHAR(64) NOT NULL COMMENT '预分配稳定终态标识',
+    request_started_at DATETIME(6) NOT NULL COMMENT '上海请求开始时间',
+    owner_id VARCHAR(64) NOT NULL COMMENT '实例标识',
+    owner_generation VARCHAR(64) NOT NULL COMMENT '启动代次',
+    state VARCHAR(24) NOT NULL COMMENT 'RUNNING/FINALIZING/SETTLED/UNKNOWN/NO_UPSTREAM',
+    lease_until DATETIME(6) NULL COMMENT '执行租约',
+    last_heartbeat_at DATETIME(6) NULL COMMENT '执行心跳',
+    last_error_code VARCHAR(64) NULL COMMENT '恢复原因',
+    update_time DATETIME(6) NOT NULL COMMENT '更新时间',
+    PRIMARY KEY(id), UNIQUE KEY uk_budget_invocation_request(request_id),
+    UNIQUE KEY uk_budget_invocation_event(event_id),
+    KEY idx_budget_invocation_key(tenant_id,api_key_id,request_started_at,state),
+    KEY idx_budget_invocation_recovery(state,update_time)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成本调用接管及异常栅栏';
+
+CREATE TABLE IF NOT EXISTS t_cost_budget_settlement (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '账本主键',
+    event_id VARCHAR(64) NOT NULL COMMENT '稳定终态标识',
+    tenant_id BIGINT NOT NULL COMMENT '租户标识',
+    user_id BIGINT NOT NULL COMMENT '用户标识',
+    api_key_id BIGINT NOT NULL COMMENT 'Key 标识',
+    service_id BIGINT NOT NULL COMMENT '实际服务标识',
+    source VARCHAR(16) NOT NULL COMMENT '调用来源',
+    operation VARCHAR(40) NOT NULL COMMENT '能力',
+    request_id VARCHAR(64) NOT NULL COMMENT '逻辑请求标识',
+    request_started_at DATETIME(6) NOT NULL COMMENT '上海请求开始时间',
+    cost_status VARCHAR(24) NOT NULL COMMENT '原始费用状态',
+    estimated_cost_fen DECIMAL(38,18) NULL COMMENT '原始预估费用，分',
+    currency VARCHAR(8) NOT NULL COMMENT '币种',
+    event_payload_json LONGTEXT NOT NULL COMMENT '可重放费用终态',
+    payload_hash CHAR(64) NOT NULL COMMENT '不可变快照摘要',
+    budget_applied TINYINT NOT NULL DEFAULT 0 COMMENT '累计和 Outbox 是否原子提交',
+    origin VARCHAR(24) NOT NULL COMMENT 'LIVE/HISTORY_IMPORT',
+    create_time DATETIME(6) NOT NULL COMMENT '暂存时间',
+    applied_at DATETIME(6) NULL COMMENT '同步结算时间',
+    PRIMARY KEY(id), UNIQUE KEY uk_budget_settlement_event(event_id),
+    UNIQUE KEY uk_budget_settlement_request(tenant_id,source,request_id),
+    KEY idx_budget_settlement_rebuild(tenant_id,api_key_id,request_started_at,id),
+    KEY idx_budget_settlement_pending(budget_applied,id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成本同步不可变账本';
+
+CREATE TABLE IF NOT EXISTS t_cost_budget_period (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '累计主键',
+    tenant_id BIGINT NOT NULL COMMENT '租户标识',
+    scope_type VARCHAR(16) NOT NULL COMMENT 'API_KEY；后续复用 LLM/TENANT',
+    scope_id BIGINT NOT NULL COMMENT '作用域标识',
+    period_type VARCHAR(8) NOT NULL COMMENT 'DAY/WEEK/MONTH',
+    period_start DATETIME(6) NOT NULL COMMENT '上海周期开始，含',
+    period_end DATETIME(6) NOT NULL COMMENT '上海周期结束，不含',
+    used_cost_fen DECIMAL(65,18) NOT NULL DEFAULT 0 COMMENT '原精度已用费用，分',
+    calculated_count BIGINT NOT NULL DEFAULT 0 COMMENT '已计算数量',
+    unpriced_count BIGINT NOT NULL DEFAULT 0 COMMENT '未计价数量',
+    uncalculable_count BIGINT NOT NULL DEFAULT 0 COMMENT '不可计算数量',
+    not_chargeable_count BIGINT NOT NULL DEFAULT 0 COMMENT '不计费数量',
+    rebuild_version BIGINT NOT NULL DEFAULT 0 COMMENT '重建版本',
+    update_time DATETIME(6) NOT NULL COMMENT '更新时间',
+    PRIMARY KEY(id), UNIQUE KEY uk_budget_period(tenant_id,scope_type,scope_id,period_type,period_start)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成本日周月持久化累计';

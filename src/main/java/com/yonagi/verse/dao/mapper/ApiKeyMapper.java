@@ -28,4 +28,10 @@ public interface ApiKeyMapper extends BaseMapper<ApiKeyDO> {
             + "WHERE api_key_id = #{apiKeyId} "
             + "AND (last_used_at IS NULL OR last_used_at < #{usedAt})")
     int updateLastUsedAtIfLater(@Param("apiKeyId") Long apiKeyId, @Param("usedAt") Date usedAt);
+    /** 主库锁定 Key，统一配置、放行和结算的写入顺序。 */
+    @Select("SELECT * FROM t_api_key WHERE tenant_id=#{tenantId} AND api_key_id=#{keyId} FOR UPDATE")
+    ApiKeyDO lockBudgetKey(@Param("tenantId") Long tenantId, @Param("keyId") Long keyId);
+    /** 管理查询在 SQL 层同时约束创建者和租户。 */
+    @Select("SELECT * FROM t_api_key WHERE tenant_id=#{tenantId} AND api_key_id=#{keyId} AND user_id=#{userId} FOR UPDATE")
+    ApiKeyDO lockOwnedBudgetKey(@Param("tenantId") Long tenantId, @Param("keyId") Long keyId, @Param("userId") Long userId);
 }

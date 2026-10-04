@@ -4,6 +4,8 @@ import java.util.Set;
 
 /** 首批租户动态事件目录及其详情白名单。 */
 public enum TenantActivityType {
+    API_KEY_COST_CONFIGURED(TenantActivityCategory.TENANT, Set.of("version", "enabled")),
+    API_KEY_COST_REJECTED(TenantActivityCategory.TENANT, Set.of("version", "requestId", "businessCode", "period", "retryAt")),
     ACTIVITY_RECORDING_ENABLED(TenantActivityCategory.TENANT, Set.of("changedFields")),
     ACTIVITY_RECORDING_DISABLED(TenantActivityCategory.TENANT, Set.of("changedFields")),
     TENANT_SETTINGS_UPDATED(TenantActivityCategory.TENANT, Set.of("changedFields")),

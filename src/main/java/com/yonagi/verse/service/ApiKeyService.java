@@ -37,4 +37,6 @@ public interface ApiKeyService extends IService<ApiKeyDO> {
      * 更新 API Key
      */
     Boolean updateApiKey(Long userId, Long tenantId, Long apiKeyId, ApiKeyUpdateReqDTO requestParam);
+    /** 创建者在所属活跃租户内查询即时预算。 */
+    com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO costStatus(Long userId, Long tenantId, Long keyId);
 }

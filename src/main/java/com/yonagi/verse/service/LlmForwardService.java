@@ -28,6 +28,11 @@ public interface LlmForwardService {
      */
     String chatCompletion(UserContext ctx, String body, String requestId, Instant requestStartedAt);
 
+    /** 合并前仍执行完整身份、租户、能力与预算校验。 */
+    default void preflight(UserContext ctx, ModelOperation operation, String body) { }
+    /** 拒绝审计不进入费用账本。 */
+    default void recordCostRejection(UserContext ctx, String requestId, com.yonagi.verse.common.convention.exception.AbstractException error) { }
+
     /** 按显式能力绑定转发非流式 JSON 操作。 */
     default String jsonCompletion(UserContext ctx, ModelOperation operation, String body,
                                   String requestId, Instant requestStartedAt) {

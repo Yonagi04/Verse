@@ -41,6 +41,13 @@ public class ApiKeyController {
         return Results.success(apiKeyService.createApiKey(userId, tenantId, requestParam));
     }
 
+    @GetMapping("/{tenantId}/{apiKeyId}/cost-status")
+    public Result<com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO> costStatus(@CurrentUser Long userId,
+            @PathVariable Long tenantId, @PathVariable Long apiKeyId, jakarta.servlet.http.HttpServletResponse response) {
+        response.setHeader("Cache-Control", "no-store");
+        return Results.success(apiKeyService.costStatus(userId, tenantId, apiKeyId));
+    }
+
     @GetMapping("/{tenantId}/list")
     public Result<ApiKeyPageRespDTO> listApiKeys(@CurrentUser Long userId,
                                                  @PathVariable Long tenantId,

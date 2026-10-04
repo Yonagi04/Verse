@@ -33,7 +33,7 @@ public class QueryWriteInterceptor implements Interceptor {
     public Object intercept(Invocation invocation) throws Throwable {
         MappedStatement statement = (MappedStatement) invocation.getArgs()[0];
         String sql = statement.getBoundSql(invocation.getArgs()[1]).getSql();
-        // 最近使用时间不在任何结果缓存中；只豁免这个固定 SQL，撤销、续期和限流变更仍统一失效。
+        // 最近使用时间由 Key 列表每次批量补充，不进入结果缓存；只豁免固定 SQL。
         if (statement.getId().equals("com.yonagi.verse.dao.mapper.ApiKeyMapper.updateLastUsedAtIfLater")
                 && LAST_USED_SQL.equalsIgnoreCase(sql.replaceAll("\\s+", " ").trim()))
             return invocation.proceed();

@@ -41,6 +41,8 @@ public final class QueryCatalogue {
                 "t_tenant,t_user_tenant");
         add("TenantActivityQueryServiceImpl", "listActivities", TENANT_ACTIVITY_LIST_KEY, MINUTES_30, Access.ACTIVITY,
                 "t_tenant,t_user_tenant,t_user,t_tenant_activity_log");
+        add("ApiKeyServiceImpl", "listApiKeys", API_KEY_LIST_KEY, HOURS_4, Access.TENANT,
+                "t_tenant,t_user_tenant,t_api_key");
         add("LlmManageServiceImpl", "listLlmService", LLM_SERVICE_MANAGE_LIST_KEY, HOURS_4, Access.TENANT,
                 "t_tenant,t_user_tenant,t_user,t_llm_service,t_llm_service_capability,t_llm_service_tag,t_llm_tag,t_llm_service_pricing,t_llm_pricing_peak_period");
         add("LlmManageServiceImpl", "getLlmInfo", LLM_SERVICE_MANAGE_INFO_KEY, HOURS_4, Access.TENANT,

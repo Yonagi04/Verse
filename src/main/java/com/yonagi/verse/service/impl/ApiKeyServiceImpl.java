@@ -49,6 +49,7 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
     private static final String CREATE_API_KEY_MESSAGE = "请将此 API key 保存在安全且易于访问的地方。出于安全原因，你将无法通过 API keys 管理界面再次查看它。如果你丟失了这个 key，将需要重新创建。";
     private static final String CREATE_API_KEY_TIP = "提示：不要与他人共享你的 API key，或将其暴露在浏览器或其他客户端代码中。";
 
+    private final com.yonagi.verse.service.budget.CostBudgetService costBudgetService;
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;
     private final StringRedisTemplate stringRedisTemplate;
@@ -77,6 +78,10 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         apiKeyDO.setRateLimitRpm(normalizeLimit(requestParam.getRpm()));
         apiKeyDO.setRateLimitTpm(normalizeLimit(requestParam.getTpm()));
         apiKeyDO.setCreateTime(new Date());
+        apiKeyDO.setCostLimitEnabled(false);
+        apiKeyDO.setCostConfigVersion(0L);
+        apiKeyDO.setCostDataState("READY");
+        costBudgetService.merge(apiKeyDO, requestParam.getCostLimit());
         int inserted = baseMapper.insert(apiKeyDO);
         if (inserted < 1) {
             log.error("Create API key failed, userId: {}, tenantId: {}", userId, tenantId);
@@ -88,6 +93,7 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         respDTO.setName(apiKeyDO.getName());
         respDTO.setExpiresAt(apiKeyDO.getExpiresAt());
         respDTO.setApiKey(apiKey);
+        respDTO.setCostLimit(com.yonagi.verse.dto.resp.CostLimitConfig.from(apiKeyDO));
         respDTO.setCreateKeyMessage(CREATE_API_KEY_MESSAGE);
         respDTO.setCreateKeyTip(CREATE_API_KEY_TIP);
         return respDTO;
@@ -95,6 +101,11 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
 
     @Override
     public ApiKeyPageRespDTO listApiKeys(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
+        return withCurrentListState(userId, tenantId, listApiKeyMetadata(userId, tenantId, pageNum, pageSize));
+    }
+
+    /** 缓存稳定的分页配置，不含 Key 哈希和高频最近使用时间，也不在读取中回写过期状态。 */
+    public ApiKeyPageRespDTO listApiKeyMetadata(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
         validateTenantAndMembership(userId, tenantId);
         if (pageNum == null) {
             pageNum = 1;
@@ -103,24 +114,39 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
             pageSize = 10;
         }
         Page<ApiKeyDO> page = baseMapper.selectPage(new Page<>(pageNum, pageSize), Wrappers.lambdaQuery(ApiKeyDO.class)
+                .select(ApiKeyDO::getApiKeyId, ApiKeyDO::getName, ApiKeyDO::getKeyPrefix, ApiKeyDO::getStatus,
+                        ApiKeyDO::getExpiresAt, ApiKeyDO::getRateLimitRpm, ApiKeyDO::getRateLimitTpm, ApiKeyDO::getCreateTime,
+                        ApiKeyDO::getCostLimitEnabled, ApiKeyDO::getCostLimitDailyFen, ApiKeyDO::getCostLimitWeeklyFen,
+                        ApiKeyDO::getCostLimitMonthlyFen, ApiKeyDO::getCostConfigVersion)
                 .eq(ApiKeyDO::getUserId, userId)
                 .eq(ApiKeyDO::getTenantId, tenantId)
                 .in(ApiKeyDO::getStatus, 1, 2)
                 .orderByDesc(ApiKeyDO::getCreateTime));
-        Date now = new Date();
         List<ApiKeyDO> apiKeyList = page.getRecords();
-        for (ApiKeyDO apiKeyDO : apiKeyList) {
-            // 仅当仍为正常状态且已过期时，标记为过期状态（status=2）
-            if (Integer.valueOf(1).equals(apiKeyDO.getStatus())
-                    && apiKeyDO.getExpiresAt() != null && apiKeyDO.getExpiresAt().before(now)) {
-                baseMapper.update(Wrappers.lambdaUpdate(ApiKeyDO.class)
-                        .eq(ApiKeyDO::getApiKeyId, apiKeyDO.getApiKeyId())
-                        .set(ApiKeyDO::getStatus, 2));
-                apiKeyDO.setStatus(2);
-            }
-        }
         List<ApiKeyListRespDTO> records = apiKeyList.stream().map(this::toListRespDTO).toList();
         return new ApiKeyPageRespDTO(records, page.getTotal(), page.getPages(), pageNum, pageSize);
+    }
+
+    /** 元数据命中后仍显示最新使用时间与自然过期状态；复制响应，避免污染缓存内容。 */
+    public ApiKeyPageRespDTO withCurrentListState(Long userId, Long tenantId, ApiKeyPageRespDTO metadata) {
+        List<Long> ids = metadata.getRecords().stream().map(ApiKeyListRespDTO::getApiKeyId).toList();
+        java.util.Map<Long, Date> lastUsed = new java.util.HashMap<>();
+        if (!ids.isEmpty()) {
+            baseMapper.selectList(Wrappers.lambdaQuery(ApiKeyDO.class)
+                    .select(ApiKeyDO::getApiKeyId, ApiKeyDO::getLastUsedAt)
+                    .eq(ApiKeyDO::getUserId, userId).eq(ApiKeyDO::getTenantId, tenantId)
+                    .in(ApiKeyDO::getApiKeyId, ids)).forEach(key -> lastUsed.put(key.getApiKeyId(), key.getLastUsedAt()));
+        }
+        Date now = new Date();
+        List<ApiKeyListRespDTO> records = metadata.getRecords().stream().map(record -> {
+            ApiKeyListRespDTO current = new ApiKeyListRespDTO();
+            org.springframework.beans.BeanUtils.copyProperties(record, current);
+            current.setLastUsedAt(lastUsed.get(record.getApiKeyId()));
+            if (Integer.valueOf(1).equals(current.getStatus())
+                    && current.getExpiresAt() != null && !current.getExpiresAt().after(now)) current.setStatus(2);
+            return current;
+        }).toList();
+        return new ApiKeyPageRespDTO(records, metadata.getTotal(), metadata.getTotalPages(), metadata.getPage(), metadata.getPageSize());
     }
 
     @Override
@@ -140,11 +166,11 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public Boolean updateApiKey(Long userId, Long tenantId, Long apiKeyId, ApiKeyUpdateReqDTO requestParam) {
         validateTenantAndMembership(userId, tenantId);
-        ApiKeyDO apiKey = baseMapper.selectOne(Wrappers.lambdaQuery(ApiKeyDO.class)
-                .eq(ApiKeyDO::getApiKeyId, apiKeyId));
-        if (apiKey == null) {
+        ApiKeyDO apiKey = costBudgetService.lockOwnedKey(tenantId, apiKeyId, userId);
+        if (!userId.equals(apiKey.getUserId())) {
             throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_NOT_EXIST);
         } else if (apiKey.getStatus() == 0) {
             throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_CAN_NOT_UPDATE);
@@ -154,17 +180,25 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         Date now = new Date();
         if (newExpiresAt != null && oldExpiresAt != null && newExpiresAt.before(oldExpiresAt)) {
             throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_EXPIRE_DATE_BEFORE_OLD_DATE);
-        } else if (newExpiresAt != null && newExpiresAt.before(now)) {
+        } else if (newExpiresAt != null && !newExpiresAt.equals(oldExpiresAt) && newExpiresAt.before(now)) {
             throw new ClientException(ApiKeyErrorCodeEnum.API_KEY_EXPIRE_DATE_IS_INVALID);
         }
 
+        costBudgetService.merge(apiKey, requestParam.getCostLimit());
         int updated = baseMapper.update(Wrappers.lambdaUpdate(ApiKeyDO.class)
                 .eq(ApiKeyDO::getApiKeyId, apiKeyId)
+                .eq(ApiKeyDO::getTenantId, tenantId)
+                .eq(ApiKeyDO::getUserId, userId)
+                .set(ApiKeyDO::getCostLimitEnabled, apiKey.getCostLimitEnabled())
+                .set(ApiKeyDO::getCostLimitDailyFen, apiKey.getCostLimitDailyFen())
+                .set(ApiKeyDO::getCostLimitWeeklyFen, apiKey.getCostLimitWeeklyFen())
+                .set(ApiKeyDO::getCostLimitMonthlyFen, apiKey.getCostLimitMonthlyFen())
+                .set(ApiKeyDO::getCostConfigVersion, apiKey.getCostConfigVersion())
                 .set(ApiKeyDO::getName, requestParam.getName())
                 .set(ApiKeyDO::getExpiresAt, newExpiresAt)
                 .set(ApiKeyDO::getRateLimitRpm, normalizeLimit(requestParam.getRpm()))
                 .set(ApiKeyDO::getRateLimitTpm, normalizeLimit(requestParam.getTpm()))
-                .set(ApiKeyDO::getStatus, 1));
+                .set(ApiKeyDO::getStatus, newExpiresAt != null && newExpiresAt.before(now) ? 2 : 1));
         if (updated < 1) {
             log.error("Update API key failed, userId: {}, tenantId: {}, apiKeyId: {}", userId, tenantId, apiKeyId);
             throw new ServerException(ApiKeyErrorCodeEnum.API_KEY_UPDATE_ERROR);
@@ -172,6 +206,12 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         // 失效认证缓存，使新的限流配置对后续请求立即生效
         stringRedisTemplate.delete(RedisKeyConstant.API_KEY_AUTH_KEY + apiKey.getApiKey());
         return Boolean.TRUE;
+    }
+
+    @Override
+    public com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO costStatus(Long userId, Long tenantId, Long keyId) {
+        validateTenantAndMembership(userId, tenantId);
+        return costBudgetService.status(tenantId, keyId, userId);
     }
 
     private void validateTenantAndMembership(Long userId, Long tenantId) {
@@ -193,11 +233,11 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         dto.setName(apiKeyDO.getName());
         dto.setKeyPrefix(apiKeyDO.getKeyPrefix());
         dto.setStatus(apiKeyDO.getStatus());
-        dto.setLastUsedAt(apiKeyDO.getLastUsedAt());
         dto.setExpiresAt(apiKeyDO.getExpiresAt());
         dto.setRateLimitRpm(apiKeyDO.getRateLimitRpm());
         dto.setRateLimitTpm(apiKeyDO.getRateLimitTpm());
         dto.setCreateTime(apiKeyDO.getCreateTime());
+        dto.setCostLimit(com.yonagi.verse.dto.resp.CostLimitConfig.from(apiKeyDO));
         return dto;
     }
 

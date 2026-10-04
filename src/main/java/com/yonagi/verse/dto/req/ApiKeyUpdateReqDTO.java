@@ -17,10 +17,12 @@ import java.util.Date;
 @Data
 public class ApiKeyUpdateReqDTO {
 
+    /** Key 备注名称。 */
     @NotBlank(message = "Api Key的备注名不能为空")
     @Size(max = 32, message = "Api Key的备注名长度不能超过32个字符")
     private String name;
 
+    /** 到期时间；空表示永不过期。 */
     private Date expiresAt;
 
     /**
@@ -34,4 +36,6 @@ public class ApiKeyUpdateReqDTO {
      */
     @Min(value = 0, message = "TPM 不能为负数")
     private Integer tpm;
+    /** 可选成本配置，缺失保持原配置。 */
+    private CostLimitPatch costLimit;
 }
