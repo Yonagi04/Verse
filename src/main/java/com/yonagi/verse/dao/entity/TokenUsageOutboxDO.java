@@ -15,6 +15,8 @@ public class TokenUsageOutboxDO {
     private String eventId;
     /** 租户 ID。 */
     private Long tenantId;
+    /** 用量所属用户业务 ID，用于注销时按用户分批清理。 */
+    private Long userId;
     /** RocketMQ 标签。 */
     private String eventType;
     /** RocketMQ 顺序键。 */

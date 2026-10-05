@@ -64,7 +64,9 @@ public enum TenantErrorCodeEnum implements IErrorCode {
     TENANT_BANNER_PRESET_INVALID("B000336", "租户头图预设无效"),
     TENANT_APPROVAL_MODE_INVALID("B000337", "个人租户不支持配置加入审批"),
     TENANT_CONTEXT_MISMATCH("B000338", "租户上下文已变化，请刷新后重试"),
-    TENANT_ACTIVITY_RECORDING_DISABLED("B000339", "租户未开启动态记录功能");
+    TENANT_ACTIVITY_RECORDING_DISABLED("B000339", "租户未开启动态记录功能"),
+    TENANT_ADMIN_TRANSFER_INVALID("B000340", "仅超级管理员可向本租户的有效管理员交接，请刷新后重试"),
+    TENANT_ADMIN_TRANSFER_FAILED("A000315", "超级管理员交接失败，请刷新后重试");
 
     private final String code;
     private final String message;

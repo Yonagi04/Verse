@@ -64,6 +64,7 @@ class LlmManageServiceDescriptionTest {
     private final LlmMetadataService metadataService = mock(LlmMetadataService.class);
     private final TenantActivityRecorder activityRecorder = mock(TenantActivityRecorder.class);
     private final JwtUtil jwtUtil = mock(JwtUtil.class);
+    private final UserMapper users = mock(UserMapper.class);
     private LlmManageServiceImpl service;
 
     @BeforeEach
@@ -77,7 +78,7 @@ class LlmManageServiceDescriptionTest {
                 userTenantService,
                 aesUtil,
                 redisTemplate,
-                mock(UserMapper.class),
+                users,
                 jwtUtil,
                 redissonClient,
                 metadataService,
@@ -88,6 +89,7 @@ class LlmManageServiceDescriptionTest {
         ReflectionTestUtils.setField(service, "baseMapper", llmServiceMapper);
         when(tenantMapper.selectOne(any())).thenReturn(new TenantDO());
         when(userTenantService.isUserJoinedTenant(1L, 2L)).thenReturn(true);
+        when(users.selectActiveUserForUpdate(1L)).thenReturn(new com.yonagi.verse.dao.entity.UserDO());
     }
 
     @Test

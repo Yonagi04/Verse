@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.support.MessageBuilder;
@@ -34,7 +35,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class RocketMQEventPublisher implements DomainEventPublisher {
 
     private final RocketMQTemplate rocketMQTemplate;
-    private final EventHandlerRegistry eventHandlerRegistry;
+    // 仅同步降级需要消费端处理器，构造时加载注册表会与处理器依赖的业务发布链路成环。
+    private final ObjectProvider<EventHandlerRegistry> eventHandlerRegistry;
 
     @Value("${rocketmq.producer.topic}")
     private String topic;
@@ -85,7 +87,7 @@ public class RocketMQEventPublisher implements DomainEventPublisher {
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void handleSync(DomainEvent event) {
-        DomainEventHandler handler = eventHandlerRegistry.get(event.eventType());
+        DomainEventHandler handler = eventHandlerRegistry.getObject().get(event.eventType());
         if (handler == null) {
             log.warn("[event-bus] 未注册的事件处理器，无法同步降级执行: tag={}", event.eventType());
             return;

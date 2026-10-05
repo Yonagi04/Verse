@@ -41,7 +41,9 @@ public enum UserErrorCodeEnum implements IErrorCode {
     CANNOT_KICK_CURRENT_DEVICE("B000220", "不能踢当前登录的设备下线"),
     DEVICE_NOT_FOUND("B000221", "设备不存在"),
     AVATAR_TYPE_INVALID("B000222", "头像格式不支持，仅允许PNG、JPG、WebP"),
-    AVATAR_SIZE_EXCEED("B000223", "图片大小不能超过5MB");
+    AVATAR_SIZE_EXCEED("B000223", "图片大小不能超过5MB"),
+    USER_TEAM_TENANT_HANDOVER_REQUIRED("B000224", "请先完成团体租户交接后再注销"),
+    USER_ACCOUNT_CLOSURE_TENANTS_CHANGED("B000225", "租户关系已变化，请重新提交注销");
 
     private final String code;
 

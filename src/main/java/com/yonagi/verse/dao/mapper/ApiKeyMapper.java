@@ -17,11 +17,21 @@ import java.util.Date;
  */
 @Mapper
 public interface ApiKeyMapper extends BaseMapper<ApiKeyDO> {
+    /** 创建与注销串行化，避免已通过 HTTP 鉴权的旧请求在注销后创建 Key。 */
+    @Select("SELECT user_id FROM t_user WHERE user_id=#{userId} AND status=1 AND del_flag=0 FOR UPDATE")
+    Long lockActiveKeyOwner(@Param("userId") Long userId);
 
     /** 鉴权每次按主键实时复核，缓存只能提供定位信息，不能决定 Key 是否仍然有效。 */
     @Select("SELECT api_key_id, user_id, tenant_id, status, expires_at, rate_limit_rpm, rate_limit_tpm "
-            + "FROM t_api_key WHERE api_key_id = #{id} AND api_key = #{hash}")
+            + "FROM t_api_key k WHERE api_key_id = #{id} AND api_key = #{hash} "
+            + "AND EXISTS (SELECT 1 FROM t_user u WHERE u.user_id=k.user_id AND u.status=1 AND u.del_flag=0) "
+            + "AND EXISTS (SELECT 1 FROM t_tenant t WHERE t.tenant_id=k.tenant_id AND t.status=1 AND t.del_flag=0) "
+            + "AND EXISTS (SELECT 1 FROM t_user_tenant m WHERE m.user_id=k.user_id AND m.tenant_id=k.tenant_id AND m.left_at IS NULL)")
     ApiKeyDO selectAuthState(@Param("id") Long id, @Param("hash") String hash);
+
+    @Update("UPDATE t_api_key SET status=0 WHERE user_id=#{userId} AND status<>0 "
+            + "AND EXISTS (SELECT 1 FROM t_user WHERE user_id=#{userId} AND status=2 AND del_flag=1)")
+    int revokeClosedUserKeys(@Param("userId") Long userId);
 
     /** 仅在本次使用时间更新时回写，避免异步任务乱序使最近使用时间倒退。 */
     @Update("UPDATE t_api_key SET last_used_at = #{usedAt} "

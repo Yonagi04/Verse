@@ -18,6 +18,43 @@ import java.util.List;
 @Mapper
 public interface UserTenantMapper extends BaseMapper<UserTenantDO> {
 
+    /** 仅有其他未退出成员的启用团队需要交接，停用或仅本人在内的团队不阻断注销。 */
+    @Select("""
+            SELECT t.name FROM t_user_tenant ut
+            JOIN t_tenant t ON t.tenant_id=ut.tenant_id AND t.type='TEAM' AND t.status=1 AND t.del_flag=0
+            WHERE ut.user_id=#{userId} AND ut.left_at IS NULL AND ut.role='SUPER_ADMIN'
+              AND EXISTS (
+                  SELECT 1 FROM t_user_tenant other_ut
+                  WHERE other_ut.tenant_id=ut.tenant_id AND other_ut.user_id<>ut.user_id
+                    AND other_ut.left_at IS NULL
+              )
+            ORDER BY t.tenant_id
+            """)
+    List<String> selectUntransferredTeamTenantNames(@Param("userId") Long userId);
+
+    /** 调用方持有租户和双方成员行锁；同时交换角色，任一前置角色变化时由事务回滚。 */
+    @Update("""
+            UPDATE t_user_tenant
+            SET role = CASE WHEN user_id = #{operatorId} THEN 'ADMIN' ELSE 'SUPER_ADMIN' END
+            WHERE tenant_id = #{tenantId} AND left_at IS NULL
+              AND ((user_id = #{operatorId} AND role = 'SUPER_ADMIN')
+                OR (user_id = #{targetId} AND role = 'ADMIN'))
+            """)
+    int transferSuperAdminRoles(@Param("tenantId") Long tenantId,
+                                @Param("operatorId") Long operatorId, @Param("targetId") Long targetId);
+
+    /** 先锁租户，再锁用户，避免与租户成员写入的锁顺序相反。 */
+    @Select("SELECT tenant_id FROM t_tenant WHERE tenant_id=#{tenantId} AND status=1 AND del_flag=0 FOR UPDATE")
+    Long lockActiveJoiningTenant(@Param("tenantId") Long tenantId);
+
+    @Select("SELECT user_id FROM t_user WHERE user_id=#{userId} AND status=1 AND del_flag=0 FOR UPDATE")
+    Long lockActiveJoiningUser(@Param("userId") Long userId);
+
+    @Update("UPDATE t_user_tenant SET left_at=CURRENT_TIMESTAMP,favorite=0,pinned=0 "
+            + "WHERE user_id=#{userId} AND left_at IS NULL "
+            + "AND EXISTS (SELECT 1 FROM t_user WHERE user_id=#{userId} AND status=2 AND del_flag=1)")
+    int leaveClosedUsersTenants(@Param("userId") Long userId);
+
     /** 批量概览缓存键包含有效租户与实时角色，移除成员或停用租户后不能复用旧摘要。 */
     @Select("""
             SELECT ut.user_id, ut.tenant_id, ut.role FROM t_user_tenant ut

@@ -76,7 +76,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private static final List<String> CLOSE_ACCOUNT_WARNING_TIPS = List.of(
             "账号将无法登录 Verse",
             "您将退出所有租户",
-            "个人版租户将被删除",
+            "个人租户及仅有您一人的团体租户将被删除",
             "您创建的 API Key 将全部失效",
             "您注册的 LLM Service 将停止提供服务",
             "历史 Token 统计数据将被清除"
@@ -91,6 +91,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final PasswordEncoder passwordEncoder;
     private final AesUtil aesUtil;
     private final TenantService tenantService;
+    private final UserTenantService userTenantService;
+    private final TenantCrudService tenantCrudService;
     private final CurrentTenantStateService currentTenantStateService;
     private final NotificationService notificationService;
     private final LoginDeviceService loginDeviceService;
@@ -588,6 +590,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
+        validateAccountClosureHandover(userId);
         PrepareCloseAccountRespDTO resp = new PrepareCloseAccountRespDTO();
         resp.setWarningDescription(CLOSE_ACCOUNT_WARNING_DESCRIPTION);
         resp.setWarningTips(CLOSE_ACCOUNT_WARNING_TIPS);
@@ -600,6 +603,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
+        validateAccountClosureHandover(userId);
         // 检查是否发送过于频繁（60 秒间隔，按用户 ID 区分）
         String rateKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + "rate:" + userId;
         Boolean isAbsent = stringRedisTemplate.opsForValue().setIfAbsent(rateKey, "1", 60, TimeUnit.SECONDS);
@@ -618,6 +622,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Override
     @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean confirmCloseAccount(Long userId, ConfirmCloseAccountReqDTO requestParam) {
+        // 与加入流程保持租户锁在用户锁之前，锁一直持有至注销和租户停用一起提交。
+        List<Long> lockedTeamTenantIds = tenantCrudService.lockOwnedTeamTenantsForAccountClosure(userId);
         securityGuards.ensure(userId); securityGuards.lock(userId);
         // 注销与绑定共用身份锁序，删除当前关系并释放外部身份名额。
         var bindings = externalBindings.selectList(Wrappers.lambdaQuery(com.yonagi.verse.dao.entity.UserExternalBindingDO.class)
@@ -631,6 +637,10 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         emailQuota.lock(userDO.getEmailHash());
         securityGuards.lockUser(userId);
+
+        // 锁范围变化时要求重试，不在用户锁后补拿租户锁；角色和人数仍实时复核。
+        validateAccountClosureHandover(userId);
+        tenantCrudService.validateAccountClosureTenantLocks(userId, lockedTeamTenantIds);
 
         // 验证验证码是否正确
         String codeKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + userId;
@@ -666,6 +676,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
                     userId, identity.getId(), binding.getId(), null, null, "UNBOUND");
         }
         securityGuards.invalidate(userId);
+
+        // 提交前关闭单人团队，免审批加入即使已通过入口校验，也会在租户行锁后被拒绝。
+        tenantCrudService.deleteClosedUsersPersonalAndSoleMemberTenants(userId);
+
+        // 清理任务与注销状态原子提交；Broker 故障由现有 Outbox Relay 重试。
+        reliableEvents.publish(com.yonagi.verse.async.event.UserClosedEvent.initial(userId), 0L);
 
         // 删除用户缓存
         stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
@@ -721,6 +737,14 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         stringRedisTemplate.delete(RedisKeyConstant.USER_PROFILE_KEY + userId);
         stringRedisTemplate.delete(RedisKeyConstant.USER_PUBLIC_PROFILE_KEY + userId);
         return Boolean.TRUE;
+    }
+
+    private void validateAccountClosureHandover(Long userId) {
+        List<String> tenants = userTenantService.listUntransferredTeamTenantNames(userId);
+        if (!tenants.isEmpty()) {
+            throw new ClientException("您仍担任以下团体租户的超级管理员，请先完成租户交接后再注销："
+                    + String.join("、", tenants), UserErrorCodeEnum.USER_TEAM_TENANT_HANDOVER_REQUIRED);
+        }
     }
 
     private Long getEmailBindCount(String email) {

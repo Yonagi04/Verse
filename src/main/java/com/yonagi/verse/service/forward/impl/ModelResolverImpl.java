@@ -15,6 +15,8 @@ import com.yonagi.verse.dao.mapper.LlmServiceMapper;
 import com.yonagi.verse.dao.mapper.LlmServiceCapabilityMapper;
 import com.yonagi.verse.service.forward.ModelResolver;
 import com.yonagi.verse.service.forward.AdapterRegistry;
+import com.yonagi.verse.service.cache.LiveModelBindingCacheBehavior;
+import com.yonagi.verse.service.cache.LiveModelRouteCacheBehavior;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -48,9 +50,11 @@ public class ModelResolverImpl implements ModelResolver {
 
     @Override
     @QueryCached(keyPrefix = LLM_SERVICE_PROTOCOL_KEY, seconds = HOURS_4, access = Access.NONE,
-            tables = {"t_llm_service", "t_llm_service_capability"})
+            tables = {"t_llm_service", "t_llm_service_capability", "t_user", "t_tenant"},
+            behavior = LiveModelBindingCacheBehavior.class)
     public UpstreamProtocol protocolFor(LlmServiceDO service, ModelOperation operation) {
         if (service == null || operation == null) throw new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED);
+        requireAvailable(service);
         LlmServiceCapabilityDO binding = capabilityMapper.selectOne(Wrappers.lambdaQuery(LlmServiceCapabilityDO.class)
                 .eq(LlmServiceCapabilityDO::getServiceId, service.getServiceId())
                 .eq(LlmServiceCapabilityDO::getOperation, operation.name()));
@@ -78,7 +82,8 @@ public class ModelResolverImpl implements ModelResolver {
 
     @Override
     @QueryCached(keyPrefix = LLM_SERVICE_INFO_KEY, seconds = HOURS_4, access = Access.NONE,
-            tables = {"t_llm_service"})
+            tables = {"t_llm_service", "t_user", "t_tenant"},
+            behavior = LiveModelRouteCacheBehavior.class)
     public LlmServiceDO resolve(Long tenantId, String model) {
         if (tenantId == null || !StringUtils.hasText(model)) {
             throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_FOUND);
@@ -94,7 +99,15 @@ public class ModelResolverImpl implements ModelResolver {
                 || !Integer.valueOf(1).equals(service.getStatus())) {
             throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_CONFIGURED);
         }
+        requireAvailable(service);
         return service;
+    }
+
+    /** 资源和提供者状态不能由配置缓存决定；备用模型、Playground 也经绑定校验进入此处。 */
+    public void requireAvailable(LlmServiceDO service) {
+        if (service == null || llmServiceMapper.countCallableService(service.getTenantId(), service.getServiceId()) != 1) {
+            throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_CONFIGURED);
+        }
     }
 
     /**

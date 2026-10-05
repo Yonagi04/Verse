@@ -13,6 +13,11 @@ import java.util.List;
  * @date 2026/07/25 10:15
  */
 public interface UserTenantService extends IService<UserTenantDO> {
+    /** 注销前实时读取本人仍担任超级管理员且有其他未退出成员的启用、未删除团队名称。 */
+    List<String> listUntransferredTeamTenantNames(Long userId);
+
+    /** 内部注销流程：幂等退出该用户的全部租户。 */
+    void leaveClosedUsersTenants(Long userId);
 
     Boolean createUserTenant(Long userId, Long tenantId, String role);
 

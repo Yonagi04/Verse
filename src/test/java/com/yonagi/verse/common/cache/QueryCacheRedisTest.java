@@ -163,6 +163,7 @@ class QueryCacheRedisTest {
         var metadata = new org.apache.ibatis.builder.MapperBuilderAssistant(new com.baomidou.mybatisplus.core.MybatisConfiguration(), "proxy-cache");
         com.baomidou.mybatisplus.core.metadata.TableInfoHelper.initTableInfo(metadata, com.yonagi.verse.dao.entity.LlmServiceDO.class);
         var mapper = org.mockito.Mockito.mock(com.yonagi.verse.dao.mapper.LlmServiceMapper.class);
+        org.mockito.Mockito.when(mapper.countCallableService(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(1);
         var service = com.yonagi.verse.dao.entity.LlmServiceDO.builder().serviceId(10L).tenantId(20L)
                 .name("alias").provider("custom").status(1).build(); service.setDelFlag(0);
         org.mockito.Mockito.when(mapper.selectOne(org.mockito.ArgumentMatchers.any())).thenReturn(service, service, null);

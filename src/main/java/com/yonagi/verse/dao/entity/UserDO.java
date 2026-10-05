@@ -97,4 +97,6 @@ public class UserDO extends BaseDO {
      * 账号注销时间
      */
     private Date cancelTime;
+    /** 注销关联资源清理完成时间；空值表示尚未完成。 */
+    private java.time.LocalDateTime resourceCleanupAt;
 }

@@ -64,6 +64,8 @@ class CostBudgetMySqlIntegrationTest {
         String databaseUrl = url.contains("?") ? url.replace("?", "/" + databaseName + "?") : url + "/" + databaseName;
         database = new DriverManagerDataSource(databaseUrl, user, password);
         jdbc = new JdbcTemplate(database);
+        jdbc.execute("CREATE TABLE t_user(user_id BIGINT PRIMARY KEY,status INT NOT NULL,del_flag INT NOT NULL)");
+        jdbc.update("INSERT INTO t_user VALUES(1,1,0),(4,1,0)");
         String schema = Files.readString(Path.of("src/main/resources/schema.sql"));
         try (var connection = database.getConnection()) {
             // CI checkout 仅依赖已跟踪的当前 schema，不依赖本地增量 SQL。
@@ -75,14 +77,14 @@ class CostBudgetMySqlIntegrationTest {
         }
         MybatisConfiguration config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         for (Class<?> mapper : List.of(ApiKeyMapper.class, CostBudgetSettlementMapper.class,
-                CostBudgetInvocationMapper.class, CostBudgetPeriodMapper.class, TokenUsageOutboxMapper.class)) config.addMapper(mapper);
+                CostBudgetInvocationMapper.class, CostBudgetPeriodMapper.class, TokenUsageOutboxMapper.class, UserMapper.class)) config.addMapper(mapper);
         MybatisSqlSessionFactoryBean factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(database); factory.setConfiguration(config);
         SqlSessionTemplate session = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
         keys = session.getMapper(ApiKeyMapper.class); settlements = session.getMapper(CostBudgetSettlementMapper.class);
         invocations = session.getMapper(CostBudgetInvocationMapper.class); periods = session.getMapper(CostBudgetPeriodMapper.class);
         manager = new DataSourceTransactionManager(database);
         registry = new BudgetExecutionRegistry(mock(RedissonClient.class));
-        outbox = spy(new UsageOutboxStager(session.getMapper(TokenUsageOutboxMapper.class), new UsageOutboxProperties()));
+        outbox = spy(new UsageOutboxStager(session.getMapper(TokenUsageOutboxMapper.class), new UsageOutboxProperties(), session.getMapper(UserMapper.class)));
         instanceA = service(registry); instanceB = service(new BudgetExecutionRegistry(mock(RedissonClient.class)));
         jdbc.update("INSERT INTO t_api_key(api_key_id,user_id,tenant_id,api_key,key_prefix,name,cost_data_state) "
                 + "VALUES (3,1,2,'hash','sk_test','测试 Key','READY'),(5,4,2,'hash2','sk_other','其他 Key','READY')");

@@ -62,8 +62,17 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public void revokeClosedUsersKeys(Long userId) {
+        baseMapper.revokeClosedUserKeys(userId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public ApiKeyRespDTO createApiKey(Long userId, Long tenantId, ApiKeyCreateReqDTO requestParam) {
         validateTenantAndMembership(userId, tenantId);
+        if (baseMapper.lockActiveKeyOwner(userId) == null) {
+            throw new ClientException(com.yonagi.verse.common.enums.UserErrorCodeEnum.USER_ACCOUNT_CLOSED);
+        }
 
         Date expiresAt = requestParam.getExpiresAt();
         if (expiresAt != null && expiresAt.before(new Date())) {

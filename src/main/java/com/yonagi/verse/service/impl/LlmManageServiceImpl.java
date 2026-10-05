@@ -73,6 +73,12 @@ import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 @RequiredArgsConstructor
 public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServiceDO> implements LlmManageService {
 
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteClosedUsersServices(Long userId) {
+        baseMapper.deleteClosedUsersServices(userId);
+    }
+
     private static final String LLM_SERVICE_PREPARE_REMOVE_INFO = "此LLM将会被删除。删除后租户成员将无法再访问此模型，依赖此LLM的其他服务也会受到影响。" +
             "删除模型后将无法恢复。由于模型实例与模型服务ID唯一绑定，因此在删除模型后即使重新添加完全相同的模型也有可能会对存量业务带来影响。" +
             "建议在删除模型前观测模型的使用情况，并利用租户内公告进行周知租户成员，提前完成资源迁移。如有疑问，请联系技术支持。";
@@ -93,6 +99,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     @Transactional(rollbackFor = Exception.class)
     public Boolean addLlmService(Long userId, Long tenantId, LlmServiceAddReqDTO requestParam) {
         validateTenantAndMembership(userId, tenantId);
+        if (userMapper.selectActiveUserForUpdate(userId) == null) {
+            throw new ClientException(com.yonagi.verse.common.enums.UserErrorCodeEnum.USER_ACCOUNT_CLOSED);
+        }
 
         Long exists = baseMapper.selectCount(Wrappers.lambdaQuery(LlmServiceDO.class)
                 .eq(LlmServiceDO::getTenantId, tenantId)

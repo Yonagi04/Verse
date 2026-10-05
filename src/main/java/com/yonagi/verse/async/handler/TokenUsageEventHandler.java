@@ -7,6 +7,7 @@ import com.yonagi.verse.dao.entity.TokenUsageDO;
 import com.yonagi.verse.dao.entity.TokenUsageCostDO;
 import com.yonagi.verse.dao.mapper.TokenUsageCostMapper;
 import com.yonagi.verse.dao.mapper.TokenUsageMapper;
+import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.common.enums.CostStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,7 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
 
     private final TokenUsageMapper tokenUsageMapper;
     private final TokenUsageCostMapper tokenUsageCostMapper;
+    private final UserMapper users;
 
     @Override
     public String eventType() {
@@ -44,6 +46,9 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
     @Transactional(rollbackFor = Exception.class)
     public void onEvent(TokenUsageEvent event) {
         validate(event);
+        // 与注销共用用户行锁：关闭前已提交的数据由清理删除，关闭后的事件不再落库。
+        var owner = users.lockResourceOwner(event.getUserId());
+        if (owner == null || Integer.valueOf(2).equals(owner.getStatus()) || !Integer.valueOf(0).equals(owner.getDelFlag())) return;
         TokenUsageDO tokenUsage = new TokenUsageDO();
         tokenUsage.setUserId(event.getUserId());
         tokenUsage.setTenantId(event.getTenantId());

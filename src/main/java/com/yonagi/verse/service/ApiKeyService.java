@@ -17,6 +17,8 @@ import jakarta.validation.Valid;
  * @date 2026/08/16
  */
 public interface ApiKeyService extends IService<ApiKeyDO> {
+    /** 内部注销流程：幂等吊销已注销用户在所有租户中的 Key。 */
+    void revokeClosedUsersKeys(Long userId);
 
     /**
      * 创建 API Key，仅本次返回完整 Key

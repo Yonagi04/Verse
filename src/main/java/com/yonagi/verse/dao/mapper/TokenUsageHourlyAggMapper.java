@@ -15,6 +15,9 @@ import org.apache.ibatis.annotations.Select;
 /** Token 用量小时预聚合 Mapper。 */
 @Mapper
 public interface TokenUsageHourlyAggMapper extends BaseMapper<TokenUsageHourlyAggDO> {
+    /** 重建与注销删除共用事务锁，防止旧聚合快照在清理完成后重新写入。 */
+    @Select("SELECT id FROM t_usage_projection_guard WHERE id=1 FOR UPDATE")
+    Integer lockProjection();
     /** 删除待重算时间窗，随后写入绝对聚合值。 */
     @Delete("DELETE FROM t_token_usage_hourly_agg WHERE bucket_start>=#{from} AND bucket_start<#{to}")
     int deleteRange(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
@@ -38,6 +41,7 @@ public interface TokenUsageHourlyAggMapper extends BaseMapper<TokenUsageHourlyAg
           SUM(c.cost_status='CALCULATED'),SUM(c.cost_status='UNPRICED'),SUM(c.cost_status='UNCALCULABLE'),
           SUM(c.cost_status='NOT_CHARGEABLE')
         FROM t_token_usage u JOIN t_token_usage_cost c ON c.usage_id=u.id
+        JOIN t_user usr ON usr.user_id=u.user_id AND usr.status<>2 AND usr.del_flag=0
         WHERE u.source='API_KEY' AND COALESCE(u.request_started_at,u.create_time)>=#{from}
           AND COALESCE(u.request_started_at,u.create_time)<#{to}
         GROUP BY u.tenant_id,u.user_id,u.api_key_id,u.service_id,u.model,

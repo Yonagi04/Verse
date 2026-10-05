@@ -8,6 +8,13 @@ import java.util.List;
 
 /** 通用可靠领域事件 Outbox Mapper。 */
 public interface DomainEventOutboxMapper extends BaseMapper<DomainEventOutboxDO> {
+    @Select("SELECT COUNT(*) FROM t_domain_event_outbox WHERE event_id=#{eventId}")
+    int countEvent(@Param("eventId") String eventId);
+
+    /** 消费与下一批任务暂存同事务，允许消费者先于 Relay 标记发布完成。 */
+    @Update("UPDATE t_domain_event_outbox SET reconciled_at=COALESCE(reconciled_at,#{now}),update_time=#{now} "
+            + "WHERE event_id=#{eventId} AND event_type='USER_CLOSED'")
+    int reconcileUserCleanup(@Param("eventId") String eventId, @Param("now") LocalDateTime now);
     @Select("""
             SELECT * FROM t_domain_event_outbox
             WHERE ((status IN ('PENDING','RETRY') AND next_retry_at <= #{now})

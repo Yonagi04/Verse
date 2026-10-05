@@ -1,6 +1,8 @@
 package com.yonagi.verse.common.cache;
 
 import com.yonagi.verse.service.cache.QueryCacheBehaviors;
+import com.yonagi.verse.service.cache.LiveModelBindingCacheBehavior;
+import com.yonagi.verse.service.cache.LiveModelRouteCacheBehavior;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.core.type.filter.AnnotationTypeFilter;
@@ -36,6 +38,8 @@ final class QueryCacheTestSupport {
         beans.registerSingleton("workbenchDetail", new QueryCacheBehaviors.WorkbenchDetail(guard));
         beans.registerSingleton("invites", new QueryCacheBehaviors.Invites());
         beans.registerSingleton("apiKeys", new QueryCacheBehaviors.ApiKeys(cache));
+        beans.registerSingleton("liveModelRoute", new LiveModelRouteCacheBehavior());
+        beans.registerSingleton("liveModelBinding", new LiveModelBindingCacheBehavior());
         return new CoreQueryCacheAspect(cache, guard, beans);
     }
 }

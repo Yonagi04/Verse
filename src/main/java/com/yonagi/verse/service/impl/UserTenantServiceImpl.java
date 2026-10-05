@@ -12,6 +12,7 @@ import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.enums.UserTenantErrorCodeEnum;
+import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.service.UserTenantService;
@@ -19,6 +20,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
 import java.util.List;
@@ -39,12 +41,34 @@ public class UserTenantServiceImpl extends ServiceImpl<UserTenantMapper, UserTen
     private final StringRedisTemplate stringRedisTemplate;
 
     @Override
+    public List<String> listUntransferredTeamTenantNames(Long userId) {
+        if (userId == null) {
+            throw new ClientException(UserTenantErrorCodeEnum.USER_ID_IS_NULL);
+        }
+        // 角色和成员变化影响交接要求，低频索引查询不缓存，保证注销校验读取最新状态。
+        return baseMapper.selectUntransferredTeamTenantNames(userId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void leaveClosedUsersTenants(Long userId) {
+        baseMapper.leaveClosedUsersTenants(userId);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public Boolean createUserTenant(Long userId, Long tenantId, String role) {
         if (userId == null) {
             throw new ClientException(UserTenantErrorCodeEnum.USER_ID_IS_NULL);
         }
         if (tenantId == null) {
             throw new ClientException(UserTenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        }
+        if (baseMapper.lockActiveJoiningTenant(tenantId) == null) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        }
+        if (baseMapper.lockActiveJoiningUser(userId) == null) {
+            throw new ClientException(UserErrorCodeEnum.USER_ACCOUNT_CLOSED);
         }
         // 查询是否已经有用户-租户联系（曾经离开过，后来重新加入），如果有就更新角色、加入日期、离开日期
         LambdaQueryWrapper<UserTenantDO> queryWrapper = Wrappers.lambdaQuery(UserTenantDO.class)

@@ -80,6 +80,7 @@ jobs:
               "com.yonagi.verse.common.cache.QueryCacheRedisTest",
               "com.yonagi.verse.service.budget.BudgetExecutionRegistryIntegrationTest",
               "com.yonagi.verse.service.budget.CostBudgetMySqlIntegrationTest",
+              "com.yonagi.verse.service.impl.UserAccountClosureIntegrationTest",
           }
           executed = {report.attrib["name"] for report in reports if int(report.attrib["tests"]) > 0}
           missing = required - executed

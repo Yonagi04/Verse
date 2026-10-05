@@ -37,7 +37,7 @@ public class TenantDO extends BaseDO {
     private String type;
 
     /**
-     * 创建者用户ID
+     * 租户所有者用户ID，团队租户随超级管理员交接更新
      */
     private Long ownerId;
 

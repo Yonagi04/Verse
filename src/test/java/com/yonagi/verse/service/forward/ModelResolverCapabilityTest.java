@@ -24,6 +24,7 @@ class ModelResolverCapabilityTest {
     void cachedCustomServiceRetainsLegacyChatAndTenantIsolation() {
         StringRedisTemplate redis = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
         LlmServiceMapper services = mock(LlmServiceMapper.class);
+        when(services.countCallableService(anyLong(), anyLong())).thenReturn(1);
         LlmServiceCapabilityMapper capabilities = mock(LlmServiceCapabilityMapper.class);
         AdapterRegistry registry = new AdapterRegistry(List.of(
                 registration(ModelOperation.CHAT_COMPLETIONS, UpstreamProtocol.OPENAI_COMPAT)));

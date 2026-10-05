@@ -6,6 +6,8 @@ import com.yonagi.verse.dao.projection.CurrentTenantState;
 import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
+import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * @author Yonagi
@@ -16,6 +18,26 @@ import org.apache.ibatis.annotations.Update;
  */
 
 public interface UserMapper extends BaseMapper<UserDO> {
+
+    /** 用量写入和注销清理共用用户行锁；注销后不允许统计重新落库。 */
+    @Select("SELECT user_id,status,del_flag FROM t_user WHERE user_id=#{userId} FOR UPDATE")
+    UserDO lockResourceOwner(@Param("userId") Long userId);
+
+    @Select("SELECT user_id,status,del_flag,resource_cleanup_at FROM t_user WHERE user_id=#{userId}")
+    UserDO selectCleanupState(@Param("userId") Long userId);
+
+    /** 有界补齐历史已注销用户的首次清理事件。 */
+    @Select("""
+            SELECT u.user_id FROM t_user u
+            WHERE u.status=2 AND u.del_flag=1 AND u.resource_cleanup_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM t_domain_event_outbox o WHERE o.event_id=CONCAT('user-closed-',u.user_id))
+            ORDER BY u.user_id LIMIT #{limit}
+            """)
+    List<Long> selectUnscheduledClosedUsers(@Param("limit") int limit);
+
+    @Update("UPDATE t_user SET resource_cleanup_at=#{now},last_active_tenant_id=NULL "
+            + "WHERE user_id=#{userId} AND status=2 AND del_flag=1 AND resource_cleanup_at IS NULL")
+    int completeResourceCleanup(@Param("userId") Long userId, @Param("now") LocalDateTime now);
 
     /** 查询用户保存值及其对应的有效当前租户。 */
     @Select("""

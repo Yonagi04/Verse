@@ -21,6 +21,8 @@ import java.util.List;
  * @date 2026/08/22 11:07
  */
 public interface LlmManageService extends IService<LlmServiceDO> {
+    /** 内部注销流程：删除并停用用户创建的全部服务，清除上游凭证。 */
+    void deleteClosedUsersServices(Long userId);
 
     Boolean addLlmService(Long userId, Long tenantId, @Valid LlmServiceAddReqDTO requestParam);
 

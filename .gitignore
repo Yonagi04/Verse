@@ -63,3 +63,4 @@ build/
 dev_docs_local/
 openspec/
 .claude/
+.agents/

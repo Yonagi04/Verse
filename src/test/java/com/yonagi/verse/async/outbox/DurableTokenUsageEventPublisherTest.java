@@ -17,9 +17,14 @@ class DurableTokenUsageEventPublisherTest {
         TokenUsageOutboxMapper mapper = mock(TokenUsageOutboxMapper.class);
         UsageOutboxMetrics metrics = mock(UsageOutboxMetrics.class);
         UsageOutboxProperties properties = new UsageOutboxProperties();
-        DurableTokenUsageEventPublisher publisher = new DurableTokenUsageEventPublisher(mapper, properties, metrics);
+        var users = mock(com.yonagi.verse.dao.mapper.UserMapper.class);
+        var user = new com.yonagi.verse.dao.entity.UserDO();
+        user.setStatus(1); user.setDelFlag(0);
+        when(users.lockResourceOwner(8L)).thenReturn(user);
+        DurableTokenUsageEventPublisher publisher = new DurableTokenUsageEventPublisher(mapper, properties, metrics, users);
         TokenUsageEvent event = new TokenUsageEvent();
         event.setTenantId(7L);
+        event.setUserId(8L);
 
         publisher.publish(event);
 
@@ -28,6 +33,7 @@ class DurableTokenUsageEventPublisherTest {
         TokenUsageOutboxDO row = captor.getValue();
         assertEquals(event.getEventId(), row.getEventId());
         assertEquals(7L, row.getTenantId());
+        assertEquals(8L, row.getUserId());
         assertEquals(UsageOutboxStatus.PENDING.name(), row.getStatus());
         assertTrue(row.getPayloadJson().contains(event.getEventId()));
         verify(metrics).staged();

@@ -15,7 +15,9 @@ CREATE TABLE IF NOT EXISTS `t_user` (
     `email_hash`            VARCHAR(128)  NOT NULL COMMENT '邮箱哈希（SHA-256，用于查询）',
     `phone`                 VARCHAR(256) DEFAULT NULL COMMENT '手机号（AES-256-GCM加密）',
     `phone_hash`            VARCHAR(128)  DEFAULT NULL COMMENT '手机号哈希（SHA-256，用于查询）',
-    `status`                TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=禁用, 1=正常',
+    `status`                TINYINT      NOT NULL DEFAULT 1 COMMENT '状态：0=禁用, 1=正常, 2=注销',
+    `cancel_time`           DATETIME     DEFAULT NULL COMMENT '账号注销时间',
+    `resource_cleanup_at`   DATETIME(3)  DEFAULT NULL COMMENT '注销关联资源清理完成时间',
     `last_active_tenant_id` BIGINT       DEFAULT NULL COMMENT '当前活跃租户ID',
     `avatar`    VARCHAR(512) DEFAULT NULL COMMENT '头像在 S3 中的 objectKey',
     `bio`       VARCHAR(255) DEFAULT NULL COMMENT '个人简介',
@@ -29,7 +31,8 @@ CREATE TABLE IF NOT EXISTS `t_user` (
     UNIQUE KEY `uk_username` (`username`),
     UNIQUE KEY `uk_phone_hash` (`phone_hash`),
     KEY `idx_email_hash` (`email_hash`),
-    KEY `idx_last_active_tenant_id` (`last_active_tenant_id`)
+    KEY `idx_last_active_tenant_id` (`last_active_tenant_id`),
+    KEY `idx_user_cleanup` (`status`,`del_flag`,`resource_cleanup_at`,`user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 
 -- ============================================
@@ -40,7 +43,7 @@ CREATE TABLE IF NOT EXISTS `t_tenant` (
     `tenant_id`   BIGINT       NOT NULL COMMENT '租户唯一标识（业务ID）',
     `name`        VARCHAR(100) NOT NULL COMMENT '租户名称',
     `type`        VARCHAR(20)  NOT NULL COMMENT '类型：PERSONAL / TEAM',
-    `owner_id`    BIGINT       NOT NULL COMMENT '创建者用户ID',
+    `owner_id`    BIGINT       NOT NULL COMMENT '租户所有者用户ID，团队租户随超管交接更新',
     `description` VARCHAR(255) DEFAULT NULL COMMENT '租户描述',
     `logo`        VARCHAR(512) DEFAULT NULL COMMENT '租户Logo在S3中的objectKey',
     `banner`      VARCHAR(512) DEFAULT NULL COMMENT '租户头图在S3中的objectKey',
@@ -153,6 +156,7 @@ CREATE TABLE IF NOT EXISTS `t_llm_service` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_service_id` (`service_id`),
     UNIQUE KEY `uk_tenant_name_del` (`tenant_id`, `name`, `del_flag`),
+    KEY `idx_llm_created_by` (`created_by`, `id`),
     KEY `idx_tenant_id` (`tenant_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM服务配置表';
 
@@ -213,6 +217,7 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     `create_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     KEY `idx_user_tenant_time` (`user_id`, `tenant_id`, `create_time`),
+    KEY `idx_usage_user_cleanup` (`user_id`,`id`),
     KEY `idx_tenant_time` (`tenant_id`, `create_time`),
     KEY `idx_usage_tenant_cost_started` (`tenant_id`, `cost_status`, `request_started_at`),
     KEY `idx_usage_tenant_user_cost_started` (`tenant_id`, `user_id`, `cost_status`, `request_started_at`),
@@ -271,6 +276,7 @@ CREATE TABLE IF NOT EXISTS `t_token_usage_hourly_agg` (
     UNIQUE KEY `uk_usage_hourly_grain` (`tenant_id`,`user_id`,`api_key_id`,`service_id`,`model`,`bucket_start`),
     KEY `idx_usage_hourly_tenant_bucket` (`tenant_id`,`bucket_start`),
     KEY `idx_usage_hourly_tenant_user_bucket` (`tenant_id`,`user_id`,`bucket_start`),
+    KEY `idx_usage_hourly_user` (`user_id`,`id`),
     KEY `idx_usage_hourly_tenant_apikey_bucket` (`tenant_id`,`api_key_id`,`bucket_start`),
     KEY `idx_usage_hourly_tenant_service_bucket` (`tenant_id`,`service_id`,`bucket_start`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token用量小时预聚合表';
@@ -282,6 +288,7 @@ CREATE TABLE IF NOT EXISTS `t_token_usage_outbox` (
     `id` BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `event_id` VARCHAR(64) NOT NULL COMMENT '稳定事件ID',
     `tenant_id` BIGINT NOT NULL COMMENT '租户ID',
+    `user_id` BIGINT DEFAULT NULL COMMENT '用量所属用户业务ID',
     `event_type` VARCHAR(40) NOT NULL COMMENT 'RocketMQ 标签',
     `message_key` VARCHAR(128) NOT NULL COMMENT 'RocketMQ 顺序键',
     `payload_json` JSON NOT NULL COMMENT '不可变事件载荷',
@@ -299,8 +306,16 @@ CREATE TABLE IF NOT EXISTS `t_token_usage_outbox` (
     UNIQUE KEY `uk_token_usage_outbox_event` (`event_id`),
     KEY `idx_usage_outbox_claim` (`status`, `next_retry_at`, `claim_expires_at`, `id`),
     KEY `idx_usage_outbox_retention` (`status`, `reconciled_at`),
-    KEY `idx_usage_outbox_tenant` (`tenant_id`, `event_id`)
+    KEY `idx_usage_outbox_tenant` (`tenant_id`, `event_id`),
+    KEY `idx_usage_outbox_user` (`user_id`,`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='计费用量事件持久化发送表';
+
+-- 聚合重建与注销删除共用的事务锁；必须初始化固定行。
+CREATE TABLE IF NOT EXISTS `t_usage_projection_guard` (
+    `id` INT NOT NULL COMMENT '统计投影锁标识',
+    PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='统计投影事务锁';
+INSERT IGNORE INTO `t_usage_projection_guard` (`id`) VALUES (1);
 
 -- ============================================
 -- 7.0.2 通用可靠领域事件 Outbox

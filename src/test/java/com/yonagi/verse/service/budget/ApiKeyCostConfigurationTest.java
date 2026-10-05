@@ -57,6 +57,7 @@ class ApiKeyCostConfigurationTest {
         var members = mock(UserTenantService.class);
         when(members.isUserJoinedTenant(1L, 2L)).thenReturn(true);
         when(keys.insert(any(ApiKeyDO.class))).thenReturn(1);
+        when(keys.lockActiveKeyOwner(1L)).thenReturn(1L);
         service = new ApiKeyServiceImpl(budget, tenants, members, mock(StringRedisTemplate.class));
         ReflectionTestUtils.setField(service, "baseMapper", keys);
     }

@@ -17,6 +17,7 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
+import com.yonagi.verse.common.enums.UserErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.*;
@@ -73,6 +74,34 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     private final TenantMediaService tenantMediaService;
     private final CurrentTenantStateService currentTenantStateService;
     private final TenantActivityRecorder activityRecorder;
+
+    @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public List<Long> lockOwnedTeamTenantsForAccountClosure(Long userId) {
+        // 最终注销低频且要求实时；按现有所有者索引读取候选，逐个主键加锁避免锁序不一致。
+        List<Long> locked = new ArrayList<>();
+        for (Long tenantId : tenantMapper.selectActiveOwnedTeamTenantIds(userId)) {
+            if (tenantMapper.lockActiveOwnedTeamTenantForClosure(userId, tenantId) != null) {
+                locked.add(tenantId);
+            }
+        }
+        return locked;
+    }
+
+    @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void validateAccountClosureTenantLocks(Long userId, List<Long> lockedTeamTenantIds) {
+        // 不缓存所有权；获取用户锁前可能有新租户提交，不能在用户锁后补拿租户锁。
+        if (!lockedTeamTenantIds.containsAll(tenantMapper.selectActiveOwnedTeamTenantIds(userId))) {
+            throw new ClientException(UserErrorCodeEnum.USER_ACCOUNT_CLOSURE_TENANTS_CHANGED);
+        }
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void deleteClosedUsersPersonalAndSoleMemberTenants(Long userId) {
+        tenantMapper.deleteClosedUsersPersonalAndSoleMemberTenants(userId);
+    }
 
     @Value("${verse.frontend-baseurl}")
     private String frontendBaseUrl;

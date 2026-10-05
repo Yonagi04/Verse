@@ -1,5 +1,6 @@
 package com.yonagi.verse.async.outbox;
 
+import com.yonagi.verse.dao.mapper.UserMapper;
 import com.alibaba.fastjson2.JSON;
 import com.yonagi.verse.async.api.TokenUsageEventPublisher;
 import com.yonagi.verse.async.event.TokenUsageEvent;
@@ -23,6 +24,7 @@ public class DurableTokenUsageEventPublisher implements TokenUsageEventPublisher
     private final TokenUsageOutboxMapper outboxMapper;
     private final UsageOutboxProperties properties;
     private final UsageOutboxMetrics metrics;
+    private final UserMapper users;
 
     @Override
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
@@ -32,10 +34,15 @@ public class DurableTokenUsageEventPublisher implements TokenUsageEventPublisher
             return;
         }
         try {
+            if (event == null || event.getUserId() == null) throw new IllegalArgumentException("用量事件缺少用户");
+            var owner = users.lockResourceOwner(event.getUserId());
+            if (owner == null) throw new IllegalStateException("用量用户不存在");
+            if (Integer.valueOf(2).equals(owner.getStatus()) || !Integer.valueOf(0).equals(owner.getDelFlag())) return;
             LocalDateTime now = LocalDateTime.now();
             TokenUsageOutboxDO row = new TokenUsageOutboxDO();
             row.setEventId(event.getEventId());
             row.setTenantId(event.getTenantId());
+            row.setUserId(event.getUserId());
             row.setEventType(event.eventType());
             row.setMessageKey(event.getKey());
             row.setPayloadJson(JSON.toJSONString(event));

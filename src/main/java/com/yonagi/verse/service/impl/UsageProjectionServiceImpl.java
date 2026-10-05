@@ -5,6 +5,7 @@ import com.yonagi.verse.service.UsageProjectionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 import java.time.LocalDateTime;
 
@@ -15,11 +16,12 @@ public class UsageProjectionServiceImpl implements UsageProjectionService {
     private final TokenUsageHourlyAggMapper mapper;
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public void rebuild(LocalDateTime from, LocalDateTime to) {
         if (from == null || to == null || !from.isBefore(to)) {
             throw new IllegalArgumentException("用量投影时间范围不合法");
         }
+        if (mapper.lockProjection() == null) throw new IllegalStateException("缺少统计投影锁初始化行");
         mapper.deleteRange(from, to);
         mapper.rebuildRange(from, to);
     }

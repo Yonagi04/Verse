@@ -26,6 +26,7 @@ class TokenUsageEventHandlerTest {
         try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
             context.registerBean(TokenUsageMapper.class, () -> mock(TokenUsageMapper.class));
             context.registerBean(TokenUsageCostMapper.class, () -> mock(TokenUsageCostMapper.class));
+            context.registerBean(com.yonagi.verse.dao.mapper.UserMapper.class, TokenUsageEventHandlerTest::activeUsers);
             context.register(TokenUsageEventHandler.class);
 
             context.refresh();
@@ -37,7 +38,7 @@ class TokenUsageEventHandlerTest {
     @Test
     void preservesNormalizedSnapshotInFact() {
         TokenUsageMapper mapper = mock(TokenUsageMapper.class);
-        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper, null);
+        TokenUsageEventHandler handler = handler(mapper, null);
         TokenUsageEvent event = validEvent();
 
         handler.onEvent(event);
@@ -64,7 +65,7 @@ class TokenUsageEventHandlerTest {
         event.setNormalizedUsage(null);
         event.setUsageSource("UNKNOWN");
         event.setCostResult(CostResult.of(CostStatus.UNPRICED));
-        new TokenUsageEventHandler(mapper, null).onEvent(event);
+        handler(mapper, null).onEvent(event);
         ArgumentCaptor<TokenUsageDO> captor = ArgumentCaptor.forClass(TokenUsageDO.class);
         verify(mapper).insert(captor.capture());
         assertEquals("IMAGE_GENERATION", captor.getValue().getOperation());
@@ -79,7 +80,7 @@ class TokenUsageEventHandlerTest {
         event.setSource("PLAYGROUND");
         event.setApiKeyId(null);
 
-        new TokenUsageEventHandler(mapper, null).onEvent(event);
+        handler(mapper, null).onEvent(event);
 
         ArgumentCaptor<TokenUsageDO> captor = ArgumentCaptor.forClass(TokenUsageDO.class);
         verify(mapper).insert(captor.capture());
@@ -94,7 +95,7 @@ class TokenUsageEventHandlerTest {
         TokenUsageEvent event = validEvent();
         event.setSource("PLAYGROUND");
         assertThrows(IllegalArgumentException.class,
-                () -> new TokenUsageEventHandler(mock(TokenUsageMapper.class), null).onEvent(event));
+                () -> handler(mock(TokenUsageMapper.class), null).onEvent(event));
     }
 
     @Test
@@ -102,7 +103,7 @@ class TokenUsageEventHandlerTest {
         TokenUsageMapper usageMapper=mock(TokenUsageMapper.class);
         TokenUsageCostMapper costMapper=mock(TokenUsageCostMapper.class);
         doAnswer(invocation->{invocation.<TokenUsageDO>getArgument(0).setId(99L);return 1;}).when(usageMapper).insert(any());
-        new TokenUsageEventHandler(usageMapper,costMapper).onEvent(validEvent());
+        handler(usageMapper,costMapper).onEvent(validEvent());
         ArgumentCaptor<TokenUsageCostDO> captor=ArgumentCaptor.forClass(TokenUsageCostDO.class);
         verify(costMapper).insert(captor.capture());
         assertEquals(99L,captor.getValue().getUsageId());
@@ -113,7 +114,7 @@ class TokenUsageEventHandlerTest {
     @Test
     void duplicateEventIsAcknowledgedButOtherUniqueConflictPropagates() {
         TokenUsageMapper mapper = mock(TokenUsageMapper.class);
-        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper, null);
+        TokenUsageEventHandler handler = handler(mapper, null);
         TokenUsageEvent event = validEvent();
         doThrow(new DuplicateKeyException("duplicate")).when(mapper).insert(any());
         when(mapper.countByEventId(event.getEventId())).thenReturn(1L);
@@ -125,7 +126,7 @@ class TokenUsageEventHandlerTest {
 
     @Test
     void invalidPayloadPropagatesForRocketMqRetry() {
-        TokenUsageEventHandler handler = new TokenUsageEventHandler(mock(TokenUsageMapper.class), null);
+        TokenUsageEventHandler handler = handler(mock(TokenUsageMapper.class), null);
         assertThrows(IllegalArgumentException.class, () -> handler.onEvent(new TokenUsageEvent()));
     }
 
@@ -133,8 +134,34 @@ class TokenUsageEventHandlerTest {
     void transientDatabaseFailurePropagatesForRocketMqRetry() {
         TokenUsageMapper mapper = mock(TokenUsageMapper.class);
         doThrow(new IllegalStateException("database unavailable")).when(mapper).insert(any());
-        TokenUsageEventHandler handler = new TokenUsageEventHandler(mapper, null);
+        TokenUsageEventHandler handler = handler(mapper, null);
         assertThrows(IllegalStateException.class, () -> handler.onEvent(validEvent()));
+    }
+
+    private static com.yonagi.verse.dao.mapper.UserMapper activeUsers() {
+        var users = mock(com.yonagi.verse.dao.mapper.UserMapper.class);
+        var active = new com.yonagi.verse.dao.entity.UserDO();
+        active.setStatus(1); active.setDelFlag(0);
+        when(users.lockResourceOwner(anyLong())).thenReturn(active);
+        return users;
+    }
+
+    private TokenUsageEventHandler handler(TokenUsageMapper mapper, TokenUsageCostMapper costs) {
+        return new TokenUsageEventHandler(mapper, costs, activeUsers());
+    }
+
+    @Test
+    void closedAndMissingUsersCannotRecreateUsageAfterCleanup() {
+        var users = activeUsers();
+        var closed = new com.yonagi.verse.dao.entity.UserDO();
+        closed.setStatus(2); closed.setDelFlag(1);
+        var usage = mock(TokenUsageMapper.class);
+        var costs = mock(TokenUsageCostMapper.class);
+        when(users.lockResourceOwner(1L)).thenReturn(closed).thenReturn(null);
+        var handler = new TokenUsageEventHandler(usage, costs, users);
+        handler.onEvent(validEvent());
+        handler.onEvent(validEvent());
+        verifyNoInteractions(usage, costs);
     }
 
     private TokenUsageEvent validEvent() {
