@@ -94,6 +94,8 @@ jobs:
               "com.yonagi.verse.service.budget.BudgetExecutionRegistryIntegrationTest",
               "com.yonagi.verse.service.budget.CostBudgetMySqlIntegrationTest",
               "com.yonagi.verse.service.impl.UserAccountClosureIntegrationTest",
+              "com.yonagi.verse.service.impl.UserPasswordResetRedisIntegrationTest",
+              "com.yonagi.verse.service.messaging.VerificationCodeRedisIntegrationTest",
           }
           executed = {report.attrib["name"] for report in reports if int(report.attrib["tests"]) > 0}
           missing = required - executed

@@ -64,6 +64,7 @@ public class JwtUtil {
 
         return Jwts.builder()
                 .subject(phone)
+                .id(java.util.UUID.randomUUID().toString())
                 .claim("code", code)
                 .issuedAt(now)
                 .expiration(expiryDate)

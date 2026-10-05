@@ -33,6 +33,7 @@ import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.*;
 import com.yonagi.verse.service.messaging.VerificationSmsService;
+import com.yonagi.verse.service.messaging.VerificationCodeStore;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import com.alibaba.fastjson2.JSON;
@@ -111,6 +112,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final com.yonagi.verse.async.api.ReliableDomainEventPublisher reliableEvents;
     private final com.yonagi.verse.common.security.UserSecurityLocks securityLocks;
     private final VerificationSmsService verificationSms;
+    private final VerificationCodeStore verificationCodes;
+    private final PasswordResetCredentialStore resetCredentials;
 
     @Lazy
     @Autowired
@@ -522,18 +525,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Override
     public UserVerifyPhoneCodeRespDTO verifyCode(UserVerifyPhoneCodeReqDTO requestParam) {
         String phoneHash = aesUtil.hashForLookup(requestParam.getPhone());
-        String codeKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + phoneHash;
-        String storedCode = stringRedisTemplate.opsForValue().get(codeKey);
-        if (storedCode == null || !storedCode.equals(requestParam.getCode())) {
-            throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_ERROR);
-        }
-        // 验证成功后删除验证码
-        stringRedisTemplate.delete(codeKey);
-
         String token = jwtUtil.generateResetPasswordToken(requestParam.getPhone(), requestParam.getCode());
         String tokenHash = DigestUtil.md5Hex(token);
-        stringRedisTemplate.opsForValue().set(RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + phoneHash,
-                tokenHash, 10, TimeUnit.MINUTES);
+        verificationCodes.verifyPasswordResetCode(phoneHash, requestParam.getCode(), tokenHash);
         UserVerifyPhoneCodeRespDTO resp = new UserVerifyPhoneCodeRespDTO();
         resp.setToken(token);
         return resp;
@@ -543,31 +537,34 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     public Boolean resetPassword(UserResetPasswordReqDTO requestParam) {
         String phoneHash = aesUtil.hashForLookup(requestParam.getPhone());
         String tokenHash = DigestUtil.md5Hex(requestParam.getToken());
-        String phoneKey = RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + phoneHash;
-        String storedTokenHash = stringRedisTemplate.opsForValue().get(phoneKey);
-        if (storedTokenHash == null || !storedTokenHash.equals(tokenHash)) {
-            throw new ClientException(UserErrorCodeEnum.USER_RESET_PASSWORD_FAIL);
-        }
-
         LambdaQueryWrapper<UserDO> queryWrapper = Wrappers.lambdaQuery(UserDO.class)
-                .eq(UserDO::getPhoneHash, phoneHash);
+                .eq(UserDO::getPhoneHash, phoneHash)
+                .eq(UserDO::getDelFlag, 0);
         UserDO userDO = baseMapper.selectOne(queryWrapper);
         if (userDO == null) {
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
-        securityLocks.withUser(userDO.getUserId(), () -> self.resetPasswordCore(userDO.getUserId(), requestParam.getPassword()));
-
-        // 密码更新成功后才删除 token，防止重复使用
-        stringRedisTemplate.delete(phoneKey);
-        return true;
+        return securityLocks.withUser(userDO.getUserId(), () -> self.resetPasswordCore(
+                userDO.getUserId(), phoneHash, tokenHash, requestParam.getPassword()));
     }
 
     @Transactional(rollbackFor = Exception.class)
-    public Boolean resetPasswordCore(Long userId, String password) {
-        securityGuards.ensure(userId); securityGuards.lock(userId);
-        securityGuards.lockUser(userId);
-        baseMapper.update(Wrappers.lambdaUpdate(UserDO.class).eq(UserDO::getUserId, userId)
+    public Boolean resetPasswordCore(Long userId, String phoneHash, String tokenHash, String password) {
+        securityGuards.ensure(userId);
+        securityGuards.lock(userId);
+        UserDO user = securityGuards.lockUser(userId);
+        if (user == null || !Integer.valueOf(0).equals(user.getDelFlag())
+                || !UserStatusEnum.USER_STATUS_ACTIVE.getStatusCode().equals(user.getStatus())
+                || !Objects.equals(phoneHash, user.getPhoneHash())) {
+            throw new ClientException(UserErrorCodeEnum.USER_RESET_PASSWORD_FAIL);
+        }
+        // Redis 与 SQL 不能一起提交：先消费，后续回滚或提交结果不确定时都不恢复授权。
+        resetCredentials.consume(phoneHash, tokenHash);
+        int updated = baseMapper.update(Wrappers.lambdaUpdate(UserDO.class).eq(UserDO::getUserId, userId)
+                .eq(UserDO::getPhoneHash, phoneHash).eq(UserDO::getDelFlag, 0)
+                .eq(UserDO::getStatus, UserStatusEnum.USER_STATUS_ACTIVE.getStatusCode())
                 .set(UserDO::getPassword, passwordEncoder.encode(password)));
+        if (updated != 1) throw new ServerException(UserErrorCodeEnum.USER_UPDATE_ERROR);
         securityGuards.invalidate(userId);
         logoutAllDevices(userId);
         return true;

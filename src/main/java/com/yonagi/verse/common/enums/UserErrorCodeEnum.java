@@ -18,6 +18,7 @@ public enum UserErrorCodeEnum implements IErrorCode {
     AVATAR_PROCESS_ERROR("A000204", "头像图片处理失败，请重新上传头像"),
     AVATAR_UPLOAD_ERROR("A000205", "头像图片上传失败"),
     USER_PRIVACY_UPDATE_ERROR("A000206", "隐私设置更新失败"),
+    USER_RESET_CREDENTIAL_STATE_ERROR("A000207", "重置凭证状态异常，请重新获取验证码"),
 
     USER_NOT_EXIST("B000200", "用户不存在"),
     USER_EXIST("B000201", "用户已存在"),

@@ -3,6 +3,8 @@ package com.yonagi.verse.service.messaging;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.MessageSendException;
+import com.yonagi.verse.service.PasswordResetCredentialStore;
+import cn.hutool.crypto.digest.DigestUtil;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.redisson.Redisson;
@@ -34,6 +36,7 @@ class VerificationCodeRedisIntegrationTest {
     @AfterEach void clear() {
         var keys = redis.keys(prefix + "*"); if (keys != null && !keys.isEmpty()) redis.delete(keys);
         redis.delete(RedisKeyConstant.VERIFICATION_SMS_DAILY_KEY + prefix);
+        redis.delete(RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + prefix);
     }
     @Test void concurrentReservationHasOneWinnerAndSharedPhoneLimit() throws Exception {
         try (var pool = Executors.newFixedThreadPool(8)) {
@@ -74,5 +77,23 @@ class VerificationCodeRedisIntegrationTest {
         assertTrue(codes.isCurrent(reservation));
         redis.delete(prefix + ":code"); assertFalse(codes.isCurrent(reservation)); codes.restore(reservation);
         assertNull(redis.opsForValue().get(prefix + ":code"));
+    }
+
+    @Test void concurrentTokenConsumptionHasOneWinnerWithoutUserLock() throws Exception {
+        String tokenHash = DigestUtil.md5Hex("reset-token");
+        redis.opsForValue().set(RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + prefix, tokenHash, 10, TimeUnit.MINUTES);
+        var credentials = new PasswordResetCredentialStore(redis);
+        try (var pool = Executors.newFixedThreadPool(8)) {
+            var start = new CountDownLatch(1); var futures = new ArrayList<Future<Boolean>>();
+            for (int n = 0; n < 8; n++) futures.add(pool.submit(() -> {
+                assertTrue(start.await(5, TimeUnit.SECONDS));
+                try { credentials.consume(prefix, tokenHash); return true; }
+                catch (ClientException rejected) { return false; }
+            }));
+            start.countDown(); int consumed = 0;
+            for (var future : futures) if (future.get(5, TimeUnit.SECONDS)) consumed++;
+            assertEquals(1, consumed);
+        }
+        assertNull(redis.opsForValue().get(RedisKeyConstant.USER_RESET_PHONE_TOKEN_KEY + prefix));
     }
 }
