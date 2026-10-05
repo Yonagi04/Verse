@@ -1,5 +1,6 @@
 package com.yonagi.verse.dao.mapper;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import org.apache.ibatis.session.SqlSession;
 import org.apache.ibatis.session.SqlSessionFactory;
 import org.junit.jupiter.api.AfterEach;
@@ -7,9 +8,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mybatis.spring.SqlSessionFactoryBean;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -20,21 +18,20 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class ApiKeyMapperIntegrationTest {
 
-    private EmbeddedDatabase database;
+    private MySqlTestDatabase database;
     private JdbcTemplate jdbcTemplate;
     private SqlSession session;
     private ApiKeyMapper mapper;
 
     @BeforeEach
     void setUp() throws Exception {
-        database = new EmbeddedDatabaseBuilder().generateUniqueName(true)
-                .setType(EmbeddedDatabaseType.H2).build();
+        database = MySqlTestDatabase.create();
         jdbcTemplate = new JdbcTemplate(database);
         jdbcTemplate.execute("CREATE TABLE t_api_key (api_key_id BIGINT PRIMARY KEY, user_id BIGINT, tenant_id BIGINT, "
-                + "api_key VARCHAR(64), status INT, expires_at TIMESTAMP, rate_limit_rpm INT, rate_limit_tpm INT, last_used_at TIMESTAMP NULL)");
+                + "api_key VARCHAR(64), status INT, expires_at DATETIME(3), rate_limit_rpm INT, rate_limit_tpm INT, last_used_at DATETIME(3) NULL)");
         jdbcTemplate.execute("CREATE TABLE t_user(user_id BIGINT PRIMARY KEY,status INT,del_flag INT)");
         jdbcTemplate.execute("CREATE TABLE t_tenant(tenant_id BIGINT PRIMARY KEY,status INT,del_flag INT)");
-        jdbcTemplate.execute("CREATE TABLE t_user_tenant(user_id BIGINT,tenant_id BIGINT,left_at TIMESTAMP)");
+        jdbcTemplate.execute("CREATE TABLE t_user_tenant(user_id BIGINT,tenant_id BIGINT,left_at DATETIME(3))");
         jdbcTemplate.update("INSERT INTO t_api_key(api_key_id,user_id,tenant_id,api_key,status) VALUES (30,10,20,'hash',1)");
         jdbcTemplate.update("INSERT INTO t_user VALUES (10,1,0)");
         jdbcTemplate.update("INSERT INTO t_tenant VALUES (20,1,0)");
@@ -46,7 +43,7 @@ class ApiKeyMapperIntegrationTest {
         configuration.addMapper(ApiKeyMapper.class);
         factoryBean.setConfiguration(configuration);
         SqlSessionFactory factory = factoryBean.getObject();
-        session = factory.openSession();
+        session = factory.openSession(true);
         mapper = session.getMapper(ApiKeyMapper.class);
     }
 
@@ -55,9 +52,7 @@ class ApiKeyMapperIntegrationTest {
         if (session != null) {
             session.close();
         }
-        if (database != null) {
-            database.shutdown();
-        }
+        if (database != null) database.close();
     }
 
     @Test

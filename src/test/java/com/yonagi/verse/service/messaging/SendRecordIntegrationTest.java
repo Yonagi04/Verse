@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.messaging;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
 import com.yonagi.verse.async.messaging.*;
@@ -16,7 +17,6 @@ import org.mybatis.spring.SqlSessionTemplate;
 import org.junit.jupiter.api.*;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.embedded.*;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class SendRecordIntegrationTest {
-    private EmbeddedDatabase database;
+    private MySqlTestDatabase database;
     private JdbcTemplate jdbc;
     private SendRecordStore records;
     private DataSourceTransactionManager transactions;
@@ -43,12 +43,10 @@ class SendRecordIntegrationTest {
     private final EmailProvider email = mock(EmailProvider.class);
 
     @BeforeEach void setUp() throws Exception {
-        database = new EmbeddedDatabaseBuilder().generateUniqueName(true).setType(EmbeddedDatabaseType.H2).build();
-        jdbc = new JdbcTemplate(database); jdbc.execute("SET MODE MySQL");
+        database = MySqlTestDatabase.create();
+        jdbc = new JdbcTemplate(database);
         try (var connection = database.getConnection()) {
-            for (String script : List.of("V20261005_01__message_send_records.sql", "V20261005_02__async_message_delivery.sql")) {
-                ScriptUtils.executeSqlScript(connection, new ClassPathResource("db/migration/" + script));
-            }
+            ScriptUtils.executeSqlScript(connection, new ClassPathResource("sql/message-send-records.sql"));
         }
         var configuration = new MybatisConfiguration(); configuration.setMapUnderscoreToCamelCase(true);
         configuration.addMapper(SmsSendRecordMapper.class); configuration.addMapper(EmailSendRecordMapper.class);
@@ -62,7 +60,7 @@ class SendRecordIntegrationTest {
         when(sms.send(any())).thenReturn(MessageSubmissionRespDTO.accepted("request", "message"));
         when(email.send(any())).thenReturn(MessageSubmissionRespDTO.accepted("request", "env"));
     }
-    @AfterEach void close() { database.shutdown(); metrics.close(); }
+    @AfterEach void close() { if (database != null) database.close(); metrics.close(); }
     private SmsSendReqDTO request(String id, String code) { return new SmsSendReqDTO(id, "RESET", 1L, null, "Verse", "13800138000", "SMS_1", Map.of("code", code)); }
     private SmsSendReqDTO request() { return request("same-id", "123456"); }
     private SmsSendService service() { return new SmsSendService(sms, records, metrics, properties); }
@@ -75,14 +73,14 @@ class SendRecordIntegrationTest {
         assertEquals(MessageSubmissionStatus.QUEUED, service().send(request()).status());
         assertEquals(MessageSubmissionStatus.QUEUED, service().send(request()).status()); verify(sms, never()).send(any());
         var row = jdbc.queryForMap("SELECT * FROM t_sms_send_record");
-        assertNotNull(row.get("PAYLOAD_ENCRYPTED")); assertFalse(row.toString().contains("123456")); assertFalse(row.toString().contains("13800138000"));
+        assertNotNull(row.get("payload_encrypted")); assertFalse(row.toString().contains("123456")); assertFalse(row.toString().contains("13800138000"));
         when(sms.send(any())).thenAnswer(call -> {
             assertFalse(TransactionSynchronizationManager.isActualTransactionActive()); assertEquals("SUBMITTING", status());
             assertEquals(request(), call.getArgument(0));
             return MessageSubmissionRespDTO.accepted("r", "m");
         });
         worker().execute(MessageChannel.SMS, id());
-        assertEquals("ACCEPTED", status()); assertNull(jdbc.queryForMap("SELECT * FROM t_sms_send_record").get("PAYLOAD_ENCRYPTED"));
+        assertEquals("ACCEPTED", status()); assertNull(jdbc.queryForMap("SELECT * FROM t_sms_send_record").get("payload_encrypted"));
         assertEquals("m", service().send(request()).providerMessageId()); verify(sms, times(1)).send(any());
         var conflict = assertThrows(MessageSendException.class, () -> service().send(request("same-id", "999999")));
         assertEquals(MessagingErrorCode.REQUEST_CONFLICT.code(), conflict.getErrorCode());
@@ -99,6 +97,15 @@ class SendRecordIntegrationTest {
             for (var job : jobs) job.get(5, TimeUnit.SECONDS);
             assertEquals("ACCEPTED", status()); verify(sms, times(1)).send(any());
         }
+    }
+
+    @Test void requestIdsUseCaseSensitiveUniqueness() {
+        assertEquals(MessageSubmissionStatus.QUEUED, service().send(request("Request-A", "123456")).status());
+        assertEquals(MessageSubmissionStatus.QUEUED, service().send(request("request-a", "123456")).status());
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM t_sms_send_record", Integer.class));
+        assertEquals(MessageSubmissionStatus.QUEUED, service().send(request("Request-A", "123456")).status());
+        assertEquals(2, jdbc.queryForObject("SELECT COUNT(*) FROM t_sms_send_record", Integer.class));
+        verify(sms, never()).send(any());
     }
 
     @Test void submissionReturnsWhileProviderBlockedAndEmailHasSeparatePool() throws Exception {
@@ -148,7 +155,7 @@ class SendRecordIntegrationTest {
         assertTrue(restarted.claim(MessageChannel.SMS, id()).isEmpty());
         jdbc.update("UPDATE t_sms_send_record SET update_time=?", new Date(1));
         assertEquals(1, restarted.recoverAbandoned(MessageChannel.SMS, new Date()));
-        assertEquals("UNKNOWN", status()); assertNull(jdbc.queryForMap("SELECT * FROM t_sms_send_record").get("PAYLOAD_ENCRYPTED"));
+        assertEquals("UNKNOWN", status()); assertNull(jdbc.queryForMap("SELECT * FROM t_sms_send_record").get("payload_encrypted"));
         assertThrows(IllegalStateException.class, () -> restarted.complete(old, MessageSubmissionRespDTO.accepted("r", "m"), 1));
         worker().execute(MessageChannel.SMS, id()); verify(sms, never()).send(any());
         service().send(request("restart-queued", "222222"));
@@ -213,7 +220,7 @@ class SendRecordIntegrationTest {
         worker().execute(MessageChannel.SMS, id()); verify(sms, times(1)).send(any());
         for (int i = 1; i < properties.getAsync().getMaxAttempts(); i++) { dueAgain(); worker().execute(MessageChannel.SMS, id()); }
         assertEquals("REJECTED", status()); verify(sms, times(3)).send(request());
-        assertNull(jdbc.queryForMap("SELECT * FROM t_sms_send_record").get("PAYLOAD_ENCRYPTED"));
+        assertNull(jdbc.queryForMap("SELECT * FROM t_sms_send_record").get("payload_encrypted"));
     }
 
     @Test void unknownAndTerminalPersistenceFailureNeverTriggerRetries() {
@@ -239,7 +246,7 @@ class SendRecordIntegrationTest {
         when(codes.isCurrent(any())).thenReturn(true); when(sms.send(any())).thenReturn(MessageSubmissionRespDTO.rejected("DENIED"));
         service().send(request(), verification); worker().execute(MessageChannel.SMS, id());
         assertEquals("REJECTED", status()); verify(codes).restore(verification);
-        assertNull(jdbc.queryForMap("SELECT * FROM t_sms_send_record").get("PAYLOAD_ENCRYPTED"));
+        assertNull(jdbc.queryForMap("SELECT * FROM t_sms_send_record").get("payload_encrypted"));
     }
 
     @Test void verificationRedisFailureRetriesWithoutProviderOrNewCode() {

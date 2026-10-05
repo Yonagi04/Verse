@@ -1,5 +1,6 @@
 package com.yonagi.verse.async.mq;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.alibaba.fastjson2.JSON;
 import com.yonagi.verse.async.EventTag;
 import com.yonagi.verse.async.api.DomainEventPublisher;
@@ -30,8 +31,6 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -144,8 +143,7 @@ class RocketMQEventPublisherTest {
     @CsvSource({"true, false", "true, true", "false, false", "false, true"})
     void transactionalDispatchRunsOnlyAfterCommit(boolean fallback, boolean rollback) {
         context.withPropertyValues("verse.async.login-log.sync-fallback=" + fallback).run(application -> {
-            var database = new EmbeddedDatabaseBuilder().generateUniqueName(true)
-                    .setType(EmbeddedDatabaseType.H2).build();
+            var database = MySqlTestDatabase.create();
             try {
                 LoginLogEvent event = new LoginLogEvent();
                 var transaction = new TransactionTemplate(new DataSourceTransactionManager(database));
@@ -167,7 +165,7 @@ class RocketMQEventPublisherTest {
                     verifyNoMqSend(application.getBean(RocketMQTemplate.class));
                 }
             } finally {
-                database.shutdown();
+                database.close();
             }
         });
     }

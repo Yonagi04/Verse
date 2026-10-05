@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.config.GlobalConfig;
@@ -34,8 +35,6 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.embedded.*;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -43,7 +42,6 @@ import org.springframework.transaction.annotation.AnnotationTransactionAttribute
 import org.springframework.transaction.interceptor.TransactionInterceptor;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.transaction.TransactionDefinition;
-import javax.sql.DataSource;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.time.*;
@@ -53,11 +51,9 @@ import java.util.regex.Pattern;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-/** 默认使用 H2；CI/显式测试服务使用隔离 MySQL 临时库，执行同一组事务和清理契约。 */
+/** 使用隔离 MySQL 临时库验证事务、并发锁和清理契约。 */
 public class UserAccountClosureIntegrationTest {
-    private DataSource database;
-    private DriverManagerDataSource server;
-    private String databaseName;
+    private MySqlTestDatabase database;
     private JdbcTemplate jdbc;
     private SqlSessionTemplate session;
     private DataSourceTransactionManager manager;
@@ -74,21 +70,8 @@ public class UserAccountClosureIntegrationTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        String url = System.getenv("VERSE_BUDGET_TEST_URL");
-        if (url == null || url.isBlank()) {
-            database = new EmbeddedDatabaseBuilder().generateUniqueName(true).setType(EmbeddedDatabaseType.H2).build();
-        } else {
-            server = new DriverManagerDataSource(url, System.getenv("VERSE_BUDGET_TEST_USER"), System.getenv("VERSE_BUDGET_TEST_PASSWORD"));
-            databaseName = "verse_closure_test_" + UUID.randomUUID().toString().replace("-", "");
-            new JdbcTemplate(server).execute("CREATE DATABASE " + databaseName);
-            String databaseUrl = url.contains("?") ? url.replace("?", "/" + databaseName + "?") : url + "/" + databaseName;
-            database = new DriverManagerDataSource(databaseUrl, System.getenv("VERSE_BUDGET_TEST_USER"), System.getenv("VERSE_BUDGET_TEST_PASSWORD"));
-        }
+        database = MySqlTestDatabase.create();
         jdbc = new JdbcTemplate(database);
-        if (server == null) {
-            jdbc.execute("SET MODE MySQL");
-            jdbc.execute("CREATE ALIAS DATE_FORMAT FOR 'com.yonagi.verse.service.impl.UserAccountClosureIntegrationTest.mysqlDateFormat'");
-        }
         String schema = Files.readString(Path.of("src/main/resources/schema.sql"));
         for (String table : List.of("t_user", "t_tenant", "t_user_tenant", "t_api_key", "t_llm_service",
                 "t_token_usage", "t_token_usage_cost", "t_token_usage_hourly_agg", "t_token_usage_outbox",
@@ -96,11 +79,6 @@ public class UserAccountClosureIntegrationTest {
             var matcher = Pattern.compile("(?s)CREATE TABLE IF NOT EXISTS `?" + Pattern.quote(table) + "`?\\s*\\(.*?;").matcher(schema);
             assertTrue(matcher.find(), table);
             String ddl = matcher.group();
-            // H2 的 JSON 字符串绑定语义不同；MySQL 使用原始 schema。
-            if (server == null) {
-                ddl = ddl.replace(" JSON ", " VARCHAR(20000) ")
-                        .replaceAll("(?i)(KEY\\s+`?)([a-zA-Z_][a-zA-Z0-9_]*)(`?)", "$1" + table + "_$2$3");
-            }
             try (var connection = database.getConnection()) {
                 ScriptUtils.executeSqlScript(connection, new ByteArrayResource(ddl.getBytes(StandardCharsets.UTF_8)));
             }
@@ -158,13 +136,6 @@ public class UserAccountClosureIntegrationTest {
         return result;
     }
 
-    /** H2 fixture 补充 MySQL 时间格式函数；真实 MySQL 分支使用数据库原生实现。 */
-    public static String mysqlDateFormat(java.sql.Timestamp time, String format) {
-        String pattern = format.replace("%Y", "yyyy").replace("%m", "MM").replace("%d", "dd")
-                .replace("%H", "HH").replace("%i", "mm").replace("%s", "ss");
-        return time.toLocalDateTime().format(java.time.format.DateTimeFormatter.ofPattern(pattern));
-    }
-
     @SuppressWarnings("unchecked")
     private <T> T transactional(T target) {
         ProxyFactory factory = new ProxyFactory(target);
@@ -175,10 +146,7 @@ public class UserAccountClosureIntegrationTest {
 
     @AfterEach
     void tearDown() {
-        if (database instanceof EmbeddedDatabase embedded) embedded.shutdown();
-        if (server != null && databaseName != null && databaseName.matches("verse_closure_test_[0-9a-f]{32}")) {
-            new JdbcTemplate(server).execute("DROP DATABASE " + databaseName);
-        }
+        if (database != null) database.close();
     }
 
     private void seedResources() {

@@ -1,5 +1,6 @@
 package com.yonagi.verse.async.outbox;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.async.api.ReliableDomainEventPublisher;
 import com.yonagi.verse.async.event.TenantActivityEvent;
 import com.yonagi.verse.common.enums.TenantActivityCategory;
@@ -13,9 +14,6 @@ import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.springframework.transaction.IllegalTransactionStateException;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
@@ -29,7 +27,7 @@ import static org.mockito.Mockito.when;
 
 class ReliableDomainEventTransactionIntegrationTest {
 
-    private EmbeddedDatabase database;
+    private MySqlTestDatabase database;
     private JdbcTemplate jdbcTemplate;
     private DomainEventOutboxMapper mapper;
     private ReliableDomainEventPublisher publisher;
@@ -37,10 +35,7 @@ class ReliableDomainEventTransactionIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        database = new EmbeddedDatabaseBuilder()
-                .generateUniqueName(true)
-                .setType(EmbeddedDatabaseType.H2)
-                .build();
+        database = MySqlTestDatabase.create();
         jdbcTemplate = new JdbcTemplate(database);
         jdbcTemplate.execute("CREATE TABLE business_record (id BIGINT PRIMARY KEY)");
         jdbcTemplate.execute("CREATE TABLE event_outbox (event_id VARCHAR(64) PRIMARY KEY, tenant_id BIGINT NOT NULL)");
@@ -65,7 +60,7 @@ class ReliableDomainEventTransactionIntegrationTest {
 
     @AfterEach
     void tearDown() {
-        database.shutdown();
+        if (database != null) database.close();
     }
 
     @Test

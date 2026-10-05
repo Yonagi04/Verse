@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   tests:
-    name: Unit Tests
+    name: Unit and MySQL Integration Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -47,9 +47,9 @@ jobs:
           --health-retries 5
 
     env:
-      VERSE_BUDGET_TEST_URL: "jdbc:mysql://127.0.0.1:3306?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
-      VERSE_BUDGET_TEST_USER: root
-      VERSE_BUDGET_TEST_PASSWORD: verse-ci-only
+      VERSE_TEST_MYSQL_URL: "jdbc:mysql://127.0.0.1:3306?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai"
+      VERSE_TEST_MYSQL_USER: root
+      VERSE_TEST_MYSQL_PASSWORD: verse-ci-only
       VERSE_BUDGET_TEST_REDIS: "redis://127.0.0.1:6379"
 
     steps:
@@ -68,6 +68,8 @@ jobs:
           mvn --batch-mode --no-transfer-progress clean verify
           -Dquery.cache.redis-it=true
           -Dquery.cache.redis-address=redis://127.0.0.1:6379
+          -Dmessaging.redis-it=true
+          -Dmessaging.redis-address=redis://127.0.0.1:6379
 
       - name: Require executed integration tests
         run: |
@@ -78,16 +80,36 @@ jobs:
           reports = [ET.parse(path).getroot() for path in Path("target/surefire-reports").glob("TEST-*.xml")]
           required = {
               "com.yonagi.verse.common.cache.QueryCacheRedisTest",
+              "com.yonagi.verse.support.MySqlTestDatabaseTest",
+              "com.yonagi.verse.service.messaging.SendRecordIntegrationTest",
+              "com.yonagi.verse.dao.mapper.ApiKeyMapperIntegrationTest",
+              "com.yonagi.verse.dao.mapper.NotificationRecipientMapperIntegrationTest",
+              "com.yonagi.verse.dao.mapper.TenantActivityLogMapperIntegrationTest",
+              "com.yonagi.verse.async.handler.TenantActivityPersistenceIntegrationTest",
+              "com.yonagi.verse.async.outbox.ReliableDomainEventTransactionIntegrationTest",
+              "com.yonagi.verse.async.mq.RocketMQEventPublisherTest",
+              "com.yonagi.verse.common.cache.CoreQueryCacheStartupTest",
+              "com.yonagi.verse.service.impl.TenantAdminTransferIntegrationTest",
+              "com.yonagi.verse.service.impl.TenantApprovalServiceImplTest",
               "com.yonagi.verse.service.budget.BudgetExecutionRegistryIntegrationTest",
               "com.yonagi.verse.service.budget.CostBudgetMySqlIntegrationTest",
               "com.yonagi.verse.service.impl.UserAccountClosureIntegrationTest",
           }
           executed = {report.attrib["name"] for report in reports if int(report.attrib["tests"]) > 0}
           missing = required - executed
-          skipped = {report.attrib["name"]: int(report.attrib.get("skipped", 0))
-                     for report in reports if int(report.attrib.get("skipped", 0)) > 0}
+          # CI 未部署短信/邮件模拟器；数据库、Redis 和其他测试不得跳过。
+          simulator = "com.yonagi.verse.common.messaging.LocalMessageSimulatorIntegrationTest"
+          optional = {(simulator, "sendsAndReadsSmsDevMessage"), (simulator, "sendsAndFindsMailpitMessage")}
+          skipped = {}
+          for report in reports:
+              unexpected = [test.attrib["name"] for test in report.findall("testcase")
+                            if test.find("skipped") is not None
+                            and (report.attrib["name"], test.attrib["name"]) not in optional]
+              if unexpected:
+                  skipped[report.attrib["name"]] = unexpected
           total = sum(int(report.attrib["tests"]) for report in reports)
-          print(f"Tests: {total}; skipped: {sum(skipped.values())}")
+          total_skipped = sum(int(report.attrib.get("skipped", 0)) for report in reports)
+          print(f"Tests: {total}; skipped: {total_skipped}; unexpected skips: {skipped}")
           if missing or skipped:
               raise SystemExit(f"Incomplete test baseline: missing={sorted(missing)}, skipped={skipped}")
           PY

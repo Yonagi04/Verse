@@ -8,6 +8,8 @@
 - Service 编排：隔离外部依赖，覆盖正常、拒绝、空结果和依赖失败。
 - Controller 契约、校验、鉴权和响应结构：MockMvc/Spring MVC 测试。
 - Mapper、SQL、事务、锁、唯一约束和 Outbox：数据库集成测试。
+- 数据库集成测试统一使用真实 MySQL 和 `MySqlTestDatabase` 隔离临时库，不使用 H2 模拟 MySQL 语义；缺失测试数据库配置必须明确失败。
+- 测试建表使用已跟踪的 `schema.sql` 或 `src/test/resources` 下的独立 SQL 夹具，不读取不会提交的 migration 文件。
 - 缓存：命中、未命中、隔离、失效、事务栅栏、Redis 降级和并发热点测试。
 - Provider Adapter：固定请求/响应 fixture，覆盖协议差异、错误、流式结束和取消。
 
@@ -48,7 +50,7 @@ Bug 修复应先增加能复现问题的回归测试，再修复实现。若无�
 5. 重跑失败测试，再重跑受影响集合；
 6. 若修复改变设计或范围，更新计划和相应文档。
 
-外部服务、凭据或基础设施缺失时，优先使用项目已有 fixture/Testcontainer/H2/Mock；不得伪造“测试通过”。
+外部服务、凭据或基础设施缺失时，纯单元测试优先使用已有 fixture/Mock；数据库集成测试仍需真实 MySQL，报告具体阻塞，不以 H2 替代；不得伪造“测试通过”。
 
 ## 完成定义
 

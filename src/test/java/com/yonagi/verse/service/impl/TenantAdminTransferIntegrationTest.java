@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.async.activity.TenantActivityRecorder;
 import com.yonagi.verse.async.event.TenantActivityDraft;
 import com.yonagi.verse.common.convention.exception.ClientException;
@@ -15,9 +16,6 @@ import org.mybatis.spring.SqlSessionTemplate;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
 import org.springframework.transaction.interceptor.TransactionInterceptor;
 
@@ -29,19 +27,19 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
-/** 使用真实 Mapper 和 Spring 事务代理，验证交换、回滚及竞争，不依赖本地 MySQL。 */
+/** 使用真实 Mapper 和 Spring 事务代理，验证交换、回滚及竞争，使用隔离 MySQL 测试库。 */
 class TenantAdminTransferIntegrationTest {
-    private EmbeddedDatabase database;
+    private MySqlTestDatabase database;
     private JdbcTemplate jdbc;
     private TenantAdminTransferService service;
     private TenantActivityRecorder recorder;
 
     @BeforeEach
     void setUp() throws Exception {
-        database = new EmbeddedDatabaseBuilder().generateUniqueName(true).setType(EmbeddedDatabaseType.H2).build();
+        database = MySqlTestDatabase.create();
         jdbc = new JdbcTemplate(database);
         jdbc.execute("CREATE TABLE t_tenant (tenant_id BIGINT PRIMARY KEY, owner_id BIGINT, type VARCHAR(20), status INT, del_flag INT)");
-        jdbc.execute("CREATE TABLE t_user_tenant (user_id BIGINT, tenant_id BIGINT, role VARCHAR(20), left_at TIMESTAMP, PRIMARY KEY(user_id, tenant_id))");
+        jdbc.execute("CREATE TABLE t_user_tenant (user_id BIGINT, tenant_id BIGINT, role VARCHAR(20), left_at DATETIME(3), PRIMARY KEY(user_id, tenant_id))");
         jdbc.execute("CREATE TABLE t_user (user_id BIGINT PRIMARY KEY, username VARCHAR(50), nickname VARCHAR(50), status INT, del_flag INT)");
         jdbc.update("INSERT INTO t_tenant VALUES (20, 10, 'TEAM', 1, 0), (21, 40, 'TEAM', 1, 0)");
         jdbc.update("INSERT INTO t_user_tenant VALUES (10,20,'SUPER_ADMIN',NULL),(30,20,'ADMIN',NULL),(31,20,'ADMIN',NULL),(32,20,'MEMBER',NULL),(40,21,'SUPER_ADMIN',NULL)");
@@ -65,7 +63,7 @@ class TenantAdminTransferIntegrationTest {
     }
 
     @AfterEach
-    void tearDown() { database.shutdown(); }
+    void tearDown() { if (database != null) database.close(); }
 
     @Test
     void transfersBothRolesAndOwnershipWithoutTouchingOtherMembersOrTenants() {

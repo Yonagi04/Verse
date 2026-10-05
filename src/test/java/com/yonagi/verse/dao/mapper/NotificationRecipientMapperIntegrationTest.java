@@ -1,5 +1,6 @@
 package com.yonagi.verse.dao.mapper;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.baomidou.mybatisplus.annotation.DbType;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
@@ -13,9 +14,6 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 
 import java.sql.Timestamp;
 import java.time.Instant;
@@ -28,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 
 class NotificationRecipientMapperIntegrationTest {
 
-    private EmbeddedDatabase database;
+    private MySqlTestDatabase database;
     private JdbcTemplate jdbcTemplate;
     private SqlSession session;
     private NotificationRecipientMapper mapper;
@@ -37,14 +35,12 @@ class NotificationRecipientMapperIntegrationTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        database = new EmbeddedDatabaseBuilder().generateUniqueName(true)
-                .setType(EmbeddedDatabaseType.H2).build();
+        database = MySqlTestDatabase.create();
         jdbcTemplate = new JdbcTemplate(database);
-        jdbcTemplate.execute("SET MODE MySQL");
         jdbcTemplate.execute("CREATE TABLE t_notification (notification_id BIGINT PRIMARY KEY, title VARCHAR(100), " +
                 "content VARCHAR(100), type VARCHAR(32), severity VARCHAR(32))");
         jdbcTemplate.execute("CREATE TABLE t_notification_recipient (id BIGINT PRIMARY KEY, notification_id BIGINT, " +
-                "user_id BIGINT, is_read INT, create_time TIMESTAMP)");
+                "user_id BIGINT, is_read INT, create_time DATETIME(3))");
 
         MybatisSqlSessionFactoryBean factoryBean = new MybatisSqlSessionFactoryBean();
         factoryBean.setDataSource(database);
@@ -54,14 +50,14 @@ class NotificationRecipientMapperIntegrationTest {
         MybatisPlusInterceptor interceptor = new MybatisPlusInterceptor();
         interceptor.addInnerInterceptor(new PaginationInnerInterceptor(DbType.MYSQL));
         factoryBean.setPlugins(interceptor);
-        session = factoryBean.getObject().openSession();
+        session = factoryBean.getObject().openSession(true);
         mapper = session.getMapper(NotificationRecipientMapper.class);
     }
 
     @AfterEach
     void tearDown() {
         if (session != null) session.close();
-        if (database != null) database.shutdown();
+        if (database != null) database.close();
     }
 
     @Test

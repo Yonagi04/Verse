@@ -1,5 +1,6 @@
 package com.yonagi.verse.common.cache;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.alibaba.fastjson2.TypeReference;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -208,8 +209,7 @@ class QueryCacheRedisTest {
     }
 
     @Test void springTransactionCommitAndRollbackKeepFenceUntilCompletion() throws Exception {
-        var database = new org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder().generateUniqueName(true)
-                .setType(org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType.H2).build();
+        var database = MySqlTestDatabase.create();
         try {
             var jdbc = new org.springframework.jdbc.core.JdbcTemplate(database);
             jdbc.execute("CREATE TABLE t_tenant (id BIGINT PRIMARY KEY, name VARCHAR(64))");
@@ -242,7 +242,7 @@ class QueryCacheRedisTest {
                 assertNotNull(cache.snapshot(List.of("t_tenant")));
                 assertEquals("committed", cached.get());
             }
-        } finally { database.shutdown(); }
+        } finally { database.close(); }
     }
 
     @Test void keyListCachesMetadataButRefreshesUsageAndNaturalExpiry() {

@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.budget;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
@@ -15,12 +16,10 @@ import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.dto.req.CostLimitPatch;
 import com.yonagi.verse.service.pricing.CostResult;
 import org.junit.jupiter.api.*;
-import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.mybatis.spring.SqlSessionTemplate;
 import org.redisson.api.RedissonClient;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -36,11 +35,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /** 显式指定测试服务后，按当前 schema 创建随机临时库；从不迁移或清理现有业务库。 */
-@EnabledIfEnvironmentVariable(named = "VERSE_BUDGET_TEST_URL", matches = ".+")
 class CostBudgetMySqlIntegrationTest {
-    private DriverManagerDataSource server;
-    private DriverManagerDataSource database;
-    private String databaseName;
+    private MySqlTestDatabase database;
     private JdbcTemplate jdbc;
     private ApiKeyMapper keys;
     private CostBudgetSettlementMapper settlements;
@@ -55,14 +51,7 @@ class CostBudgetMySqlIntegrationTest {
     private final Instant now = Instant.parse("2026-09-30T10:00:00Z");
 
     @BeforeEach void setup() throws Exception {
-        String url = System.getenv("VERSE_BUDGET_TEST_URL");
-        String user = System.getenv("VERSE_BUDGET_TEST_USER");
-        String password = System.getenv("VERSE_BUDGET_TEST_PASSWORD");
-        server = new DriverManagerDataSource(url, user, password);
-        databaseName = "verse_budget_test_" + UUID.randomUUID().toString().replace("-", "");
-        new JdbcTemplate(server).execute("CREATE DATABASE " + databaseName);
-        String databaseUrl = url.contains("?") ? url.replace("?", "/" + databaseName + "?") : url + "/" + databaseName;
-        database = new DriverManagerDataSource(databaseUrl, user, password);
+        database = MySqlTestDatabase.create();
         jdbc = new JdbcTemplate(database);
         jdbc.execute("CREATE TABLE t_user(user_id BIGINT PRIMARY KEY,status INT NOT NULL,del_flag INT NOT NULL)");
         jdbc.update("INSERT INTO t_user VALUES(1,1,0),(4,1,0)");
@@ -96,9 +85,7 @@ class CostBudgetMySqlIntegrationTest {
         return result;
     }
     @AfterEach void cleanup() {
-        if (server != null && databaseName != null && databaseName.matches("verse_budget_test_[0-9a-f]{32}")) {
-            new JdbcTemplate(server).execute("DROP DATABASE " + databaseName);
-        }
+        if (database != null) database.close();
     }
     private static String table(String schema, String name) {
         var matcher = Pattern.compile("(?s)CREATE TABLE IF NOT EXISTS `?" + Pattern.quote(name) + "`?\\s*\\(.*?;").matcher(schema);

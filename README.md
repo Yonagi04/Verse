@@ -212,21 +212,25 @@ mvn clean package -DskipTests  # 构建可执行 JAR
 
 测试覆盖认证与租户上下文、全局异常、限流、协议适配与能力路由、模型转发事件发布、用量归一化与成本计算、Outbox Relay/DLQ、报表与导出、租户概览与偏好、Playground 流式调用及工作台、外部认证等关键链路。
 
-GitHub Actions CI 在推送到 `master`、向 `master` 提交 PR 或手动触发时，使用 Java 21、独立的 MySQL 8.0 和 Redis 7.2 服务执行 `clean verify`，同时启用真实数据库与 Redis 集成测试。测试缺失或被跳过会使 CI 失败；测试与 JaCoCo 报告无论成功、失败均作为任务制品保存 7 天。CodeCov 上传失败不影响构建结果。
+GitHub Actions CI 在推送到 `master`、向 `master` 提交 PR 或手动触发时，使用 Java 21、独立的 MySQL 8.0 和 Redis 7.2 服务执行 `clean verify`，同时启用真实数据库与 Redis 集成测试。必需测试缺失或意外跳过会使 CI 失败；测试与 JaCoCo 报告无论成功、失败均作为任务制品保存 7 天。CodeCov 上传失败不影响构建结果。
 
-本地 `mvn test` 默认跳过需要真实服务的测试。需要完整验证时，设置以下环境变量并启用 Redis 测试：
+本地 `mvn test` 必须配置 MySQL；Redis 测试仍需显式启用。需要与 CI 一致的验证时，设置以下环境变量并启用 Redis 测试：
 
 ```bash
-export VERSE_BUDGET_TEST_URL='jdbc:mysql://127.0.0.1:3306?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai'
-export VERSE_BUDGET_TEST_USER='<测试账号>'
-export VERSE_BUDGET_TEST_PASSWORD='<测试密码>'
+export VERSE_TEST_MYSQL_URL='jdbc:mysql://127.0.0.1:3306?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai'
+export VERSE_TEST_MYSQL_USER='<测试账号>'
+export VERSE_TEST_MYSQL_PASSWORD='<测试密码>'
 export VERSE_BUDGET_TEST_REDIS='redis://127.0.0.1:6379'
 mvn --batch-mode --no-transfer-progress clean verify \
   -Dquery.cache.redis-it=true \
-  -Dquery.cache.redis-address=redis://127.0.0.1:6379
+  -Dquery.cache.redis-address=redis://127.0.0.1:6379 \
+  -Dmessaging.redis-it=true \
+  -Dmessaging.redis-address=redis://127.0.0.1:6379
 ```
 
-MySQL 测试账号需要创建和删除临时数据库的权限。测试从已跟踪的 `schema.sql` 初始化随机测试库，不依赖本地迁移目录；Redis 测试使用隔离的测试键，并验证 `maxmemory-policy=noeviction`。请使用独立测试服务。
+所有数据库测试均使用真实 MySQL，不再使用 H2。MySQL 测试账号需要创建和删除临时数据库的权限，URL 只能指定服务器地址，不能带业务库名；缺失配置或连接失败会直接报错。每个用例创建并清理独立的 `verse_test_<随机标识>` 数据库，从已跟踪的 `schema.sql` 或独立测试夹具初始化，不读取 migration。
+
+为兼容原有脚本，也支持 `VERSE_BUDGET_TEST_URL/USER/PASSWORD`，新变量优先。Redis 测试使用隔离的测试键，并验证 `maxmemory-policy=noeviction`。请使用独立测试服务。CI 必须实际执行数据库及 Redis 测试；只有未部署短信/邮件模拟器的两个可选测试允许跳过。
 
 ## 代码结构
 

@@ -1,5 +1,6 @@
 package com.yonagi.verse.common.cache;
 
+import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.service.forward.*;
 import com.yonagi.verse.service.forward.impl.ModelResolverImpl;
@@ -76,10 +77,9 @@ class CoreQueryCacheStartupTest {
     @org.mybatis.spring.annotation.MapperScan("com.yonagi.verse.dao.mapper")
     @Import({QueryCache.class, QueryCacheProperties.class, QueryAccessGuard.class, QueryWriteInterceptor.class})
     static class PersistenceConfiguration {
-        @Bean(destroyMethod = "shutdown")
-        org.springframework.jdbc.datasource.embedded.EmbeddedDatabase database() {
-            return new org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder().generateUniqueName(true)
-                    .setType(org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType.H2).build();
+        @Bean(destroyMethod = "close")
+        MySqlTestDatabase database() {
+            return MySqlTestDatabase.create();
         }
     }
 
