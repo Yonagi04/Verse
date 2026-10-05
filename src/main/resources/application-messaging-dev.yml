@@ -1,0 +1,15 @@
+verse:
+  messaging:
+    sms:
+      provider: sms-dev
+      dev-base-url: ${VERSE_SMS_DEV_URL:http://127.0.0.1:4001}
+      templates-location: ${VERSE_SMS_TEMPLATES_LOCATION:classpath:messaging/sms/templates.yml}
+      sign-name: ${VERSE_SMS_SIGN_NAME:Verse}
+      reset-template-code: ${VERSE_SMS_RESET_TEMPLATE_CODE:10001}
+      closure-template-code: ${VERSE_SMS_CLOSURE_TEMPLATE_CODE:10002}
+      daily-limit: ${VERSE_SMS_DAILY_LIMIT:10}
+    email:
+      provider: mailpit
+      account-name: ${VERSE_EMAIL_ACCOUNT_NAME:noreply@verse.test}
+      smtp-host: ${VERSE_MAILPIT_HOST:127.0.0.1}
+      smtp-port: ${VERSE_MAILPIT_PORT:1025}

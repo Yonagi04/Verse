@@ -1,0 +1,26 @@
+verse:
+  messaging:
+    connect-timeout: ${VERSE_MESSAGING_CONNECT_TIMEOUT:3s}
+    read-timeout: ${VERSE_MESSAGING_READ_TIMEOUT:10s}
+    max-concurrency: ${VERSE_MESSAGING_MAX_CONCURRENCY:8}
+    sms:
+      provider: aliyun
+      sign-name: ${VERSE_SMS_SIGN_NAME:}
+      reset-template-code: ${VERSE_SMS_RESET_TEMPLATE_CODE:}
+      closure-template-code: ${VERSE_SMS_CLOSURE_TEMPLATE_CODE:}
+      daily-limit: ${VERSE_SMS_DAILY_LIMIT:10}
+      aliyun:
+        endpoint: ${VERSE_SMS_ENDPOINT:dysmsapi.aliyuncs.com}
+        access-key-id: ${VERSE_SMS_ACCESS_KEY_ID:}
+        access-key-secret: ${VERSE_SMS_ACCESS_KEY_SECRET:}
+        security-token: ${VERSE_SMS_SECURITY_TOKEN:}
+    email:
+      provider: aliyun
+      account-name: ${VERSE_EMAIL_ACCOUNT_NAME:}
+      from-alias: ${VERSE_EMAIL_FROM_ALIAS:Verse}
+      reply-to-address: ${VERSE_EMAIL_REPLY_TO_ADDRESS:false}
+      aliyun:
+        endpoint: ${VERSE_EMAIL_ENDPOINT:dm.aliyuncs.com}
+        access-key-id: ${VERSE_EMAIL_ACCESS_KEY_ID:}
+        access-key-secret: ${VERSE_EMAIL_ACCESS_KEY_SECRET:}
+        security-token: ${VERSE_EMAIL_SECURITY_TOKEN:}

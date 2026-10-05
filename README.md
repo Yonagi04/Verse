@@ -233,13 +233,13 @@ MySQL 测试账号需要创建和删除临时数据库的权限。测试从已�
 ```text
 src/main/java/com/yonagi/verse/
 ├── controller/       # REST 与 OpenAI 兼容端点
-├── service/          # 领域服务、协议适配、Playground、外部认证、定价与用量归一化
+├── service/          # 领域服务与业务编排：Playground、外部认证、定价、消息发送等
 ├── dao/              # MyBatis-Plus Entity、Mapper 与查询投影
 ├── dto/              # 请求、响应及导出模型
 ├── resilience/       # 限流、熔断、超时与降级抽象
 ├── async/            # MQ 事件、Handler、Outbox 与 DLQ 观察
 ├── job/              # 用量聚合与补偿任务
-└── common/           # 安全上下文、配置、异常、响应与工具类
+└── common/           # 安全上下文、配置、异常、响应、通用消息适配与工具类
 
 src/main/resources/
 ├── application.yml

@@ -9,6 +9,9 @@ package com.yonagi.verse.common.constant;
  */
 public class RedisKeyConstant {
 
+    /** 同一手机号跨发码业务、首次计数起 24 小时固定窗口内的尝试计数。 */
+    public static final String VERIFICATION_SMS_DAILY_KEY = "verse:verification-sms:daily:";
+
     /**
      * 用户注册锁
      */

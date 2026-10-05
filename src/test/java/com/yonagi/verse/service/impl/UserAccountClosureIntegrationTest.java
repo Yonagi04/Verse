@@ -21,6 +21,9 @@ import com.yonagi.verse.dao.entity.DomainEventOutboxDO;
 import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.dto.req.ConfirmCloseAccountReqDTO;
 import com.yonagi.verse.dto.req.TenantCreateReqDTO;
+import com.yonagi.verse.dto.req.UserSendingPhoneCodeReqDTO;
+import com.yonagi.verse.common.util.AesUtil;
+import com.yonagi.verse.service.messaging.VerificationSmsService;
 import com.yonagi.verse.service.*;
 import com.yonagi.verse.service.pricing.CostResult;
 import org.junit.jupiter.api.*;
@@ -132,6 +135,9 @@ public class UserAccountClosureIntegrationTest {
         var tenants = transactional(bean(TenantCrudServiceImpl.class, null));
         dependencies.put(TenantCrudService.class, tenants);
         account = transactional(bean(UserServiceImpl.class, users));
+        when(((VerificationSmsService) dependencies.get(VerificationSmsService.class)).sendAccountClosure(1L, "13800138000"))
+                .thenReturn(true);
+        when(((AesUtil) dependencies.get(AesUtil.class)).decrypt("encrypted-phone")).thenReturn("13800138000");
         // 安全域的外围行为继续隔离，注销持有的用户行锁使用真实数据库实现。
         when(((UserSecurityGuardMapper) dependencies.get(UserSecurityGuardMapper.class)).lockUser(anyLong()))
                 .thenAnswer(invocation -> users.lockResourceOwner(invocation.getArgument(0)));
@@ -180,6 +186,7 @@ public class UserAccountClosureIntegrationTest {
             jdbc.update("INSERT INTO t_user(user_id,username,nickname,password,email,email_hash,phone_hash,last_active_tenant_id) "
                     + "VALUES (?, ?, '测试用户','hash','encrypted',?, ?,20)", user, "user" + user, "email" + user, "phone" + user);
         }
+        jdbc.update("UPDATE t_user SET phone='encrypted-phone' WHERE user_id=1");
         jdbc.update("INSERT INTO t_tenant(tenant_id,name,type,owner_id) VALUES (10,'本人个人','PERSONAL',1),(11,'他人个人','PERSONAL',2),(20,'团队','TEAM',1)");
         jdbc.update("INSERT INTO t_user_tenant(user_id,tenant_id,role,joined_at,favorite,pinned) VALUES (1,10,'SUPER_ADMIN',CURRENT_TIMESTAMP,1,1),(1,20,'ADMIN',CURRENT_TIMESTAMP,1,1),(2,20,'ADMIN',CURRENT_TIMESTAMP,1,1)");
         jdbc.update("INSERT INTO t_api_key(api_key_id,user_id,tenant_id,api_key,key_prefix) VALUES (101,1,10,'key101','sk_one'),(102,1,20,'key102','sk_two'),(103,2,20,'key103','sk_other')");
@@ -225,10 +232,30 @@ public class UserAccountClosureIntegrationTest {
             assertEquals("您仍担任以下团体租户的超级管理员，请先完成租户交接后再注销：研发团队、数据团队", failure.getErrorMessage());
         }
         verifyNoInteractions(redis);
+        verifyNoInteractions(dependencies.get(VerificationSmsService.class));
         assertEquals(1, scalar("SELECT status FROM t_user WHERE user_id=1"));
         assertEquals(0, scalar("SELECT del_flag FROM t_user WHERE user_id=1"));
         assertEquals(0, scalar("SELECT COUNT(*) FROM t_domain_event_outbox"));
         assertEquals(2, scalar("SELECT COUNT(*) FROM t_api_key WHERE user_id=1 AND status=1"));
+    }
+
+    @Test
+    void sendsOnlyAfterEligibilityAndUsesStoredClosurePhone() {
+        var sms = (VerificationSmsService) dependencies.get(VerificationSmsService.class);
+        assertTrue(account.closeAccountSendCode(1L));
+        verify(sms).sendAccountClosure(1L, "13800138000");
+        clearInvocations(sms);
+        var request = new UserSendingPhoneCodeReqDTO(); request.setPhone("13800138000");
+        var aes = (AesUtil) dependencies.get(AesUtil.class);
+        when(aes.hashForLookup("13800138000")).thenReturn("phone1");
+        when(sms.sendPasswordReset("13800138000")).thenReturn(true);
+        assertTrue(account.sendingPhoneCode(request));
+        verify(sms).sendPasswordReset("13800138000");
+        clearInvocations(sms);
+        request.setPhone("13900139000");
+        when(aes.hashForLookup("13900139000")).thenReturn("not-registered");
+        assertThrows(ClientException.class, () -> account.sendingPhoneCode(request));
+        verifyNoInteractions(sms);
     }
 
     @Test

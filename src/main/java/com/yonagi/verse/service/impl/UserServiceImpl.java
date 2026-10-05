@@ -32,6 +32,7 @@ import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.*;
+import com.yonagi.verse.service.messaging.VerificationSmsService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import com.alibaba.fastjson2.JSON;
@@ -54,7 +55,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
@@ -110,6 +110,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final com.yonagi.verse.dao.mapper.UserExternalBindingMapper externalBindings;
     private final com.yonagi.verse.async.api.ReliableDomainEventPublisher reliableEvents;
     private final com.yonagi.verse.common.security.UserSecurityLocks securityLocks;
+    private final VerificationSmsService verificationSms;
 
     @Lazy
     @Autowired
@@ -515,19 +516,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         if (!hasPhone(requestParam.getPhone())) {
             throw new ClientException(UserErrorCodeEnum.USER_PHONE_NOT_EXIST);
         }
-        String phoneHash = aesUtil.hashForLookup(requestParam.getPhone());
-        // 校验是否发送过于频繁（60 秒间隔，按手机号区分用户）
-        String rateKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + "rate:" + phoneHash;
-        Boolean isAbsent = stringRedisTemplate.opsForValue().setIfAbsent(rateKey, "1", 60, TimeUnit.SECONDS);
-        if (Boolean.FALSE.equals(isAbsent)) {
-            throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_SEND_FREQUENT);
-        }
-
-        String code = String.format("%06d", ThreadLocalRandom.current().nextInt(1000000));
-        // 保存验证码到 Redis，5 分钟有效
-        String codeKey = RedisKeyConstant.USER_PHONE_SENDING_CODE_KEY + phoneHash;
-        stringRedisTemplate.opsForValue().set(codeKey, code, 5, TimeUnit.MINUTES);
-        return true;
+        return verificationSms.sendPasswordReset(requestParam.getPhone());
     }
 
     @Override
@@ -604,19 +593,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
             throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);
         }
         validateAccountClosureHandover(userId);
-        // 检查是否发送过于频繁（60 秒间隔，按用户 ID 区分）
-        String rateKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + "rate:" + userId;
-        Boolean isAbsent = stringRedisTemplate.opsForValue().setIfAbsent(rateKey, "1", 60, TimeUnit.SECONDS);
-        if (Boolean.FALSE.equals(isAbsent)) {
-            throw new ClientException(UserErrorCodeEnum.USER_PHONE_CODE_SEND_FREQUENT);
-        }
-
-        // 生成验证码并保存到 Redis，5 分钟有效
-        String code = String.format("%06d", ThreadLocalRandom.current().nextInt(1000000));
-        String codeKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + userId;
-        stringRedisTemplate.opsForValue().set(codeKey, code, 5, TimeUnit.MINUTES);
-        // 返回true
-        return Boolean.TRUE;
+        return verificationSms.sendAccountClosure(userId, aesUtil.decrypt(userDO.getPhone()));
     }
 
     @Override

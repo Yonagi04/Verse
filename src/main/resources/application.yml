@@ -1,4 +1,9 @@
 spring:
+  profiles:
+    group:
+      dev: messaging-dev
+      test: messaging-dev
+      prod: messaging-prod
   application:
     name: Verse
   servlet:
