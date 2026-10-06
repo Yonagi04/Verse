@@ -1,10 +1,13 @@
 package com.yonagi.verse.support;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.service.UserTenantService;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.any;
 
@@ -12,6 +15,11 @@ import static org.mockito.ArgumentMatchers.any;
 public final class AccessTestSupport {
     private AccessTestSupport() { }
     public static TenantAccessPolicy tenant(TenantMapper tenants, UserTenantService users) {
+        // 夹具解析成员查询前自行准备元数据，避免依赖其他测试或 Spring 的初始化顺序。
+        if (TableInfoHelper.getTableInfo(UserTenantDO.class) == null) {
+            TableInfoHelper.initTableInfo(
+                    new MapperBuilderAssistant(new MybatisConfiguration(), "access-test-support"), UserTenantDO.class);
+        }
         UserTenantMapper mapper = mock(UserTenantMapper.class);
         when(mapper.selectOne(any())).thenAnswer(call -> {
             var query = (com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<UserTenantDO>) call.getArgument(0);
