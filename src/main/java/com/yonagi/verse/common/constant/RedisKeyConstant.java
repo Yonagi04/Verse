@@ -255,6 +255,15 @@ public class RedisKeyConstant {
     /** 核心查询写入标记集合：表名，不自动过期。 */
     public static final String CORE_QUERY_CACHE_WRITERS_KEY = "verse:query-cache:writers:";
 
+    /** 写栅栏创建时间有序集合：表名，不作为自动释放依据。 */
+    public static final String CORE_QUERY_CACHE_WRITER_CREATED_KEY = "verse:query-cache:writer-created:";
+
+    /** 写栅栏所属进程哈希：表名。 */
+    public static final String CORE_QUERY_CACHE_WRITER_OWNER_KEY = "verse:query-cache:writer-owner:";
+
+    /** 已确认结束、待清理的写入有序集合：表名。 */
+    public static final String CORE_QUERY_CACHE_WRITER_COMPLETED_KEY = "verse:query-cache:writer-completed:";
+
     /** 核心查询依赖索引有序集合：表名。 */
     public static final String CORE_QUERY_CACHE_INDEX_KEY = "verse:query-cache:index:";
 

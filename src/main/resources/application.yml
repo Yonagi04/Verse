@@ -44,6 +44,10 @@ verse:
     max-concurrency: 8
     negative-seconds: 600
     large-value-bytes: 1048576
+    fence-retry-delay-millis: 5000
+    fence-retry-batch: 32
+    fence-pending-limit: 512
+    fence-cleanup-batches: 5
   external-auth:
     enabled: ${VERSE_EXTERNAL_AUTH_ENABLED:false}
     frontend-origin: ${VERSE_FRONTEND_ORIGIN:http://localhost:3000}

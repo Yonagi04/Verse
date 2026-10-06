@@ -76,7 +76,7 @@ class CoreQueryCacheStartupTest {
 
     @Configuration(proxyBeanMethods = false)
     @org.mybatis.spring.annotation.MapperScan("com.yonagi.verse.dao.mapper")
-    @Import({QueryCache.class, QueryCacheProperties.class, QueryWriteInterceptor.class})
+    @Import({QueryCache.class, QueryCacheProperties.class, QueryWriteInterceptor.class, QueryFenceRecovery.class})
     static class PersistenceConfiguration {
         @Bean(destroyMethod = "close")
         MySqlTestDatabase database() {

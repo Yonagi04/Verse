@@ -33,6 +33,8 @@ class QueryCachedTest {
     private final ApplicationContextRunner context = new ApplicationContextRunner()
             .withUserConfiguration(CacheConfiguration.class)
             .withBean(QueryCache.class, () -> cache)
+            .withBean(QueryFenceRecovery.class, () -> new QueryFenceRecovery(cache, new QueryCatalogue(),
+                    new QueryCacheProperties(), new io.micrometer.core.instrument.simple.SimpleMeterRegistry()))
             .withBean(TestAccess.class, () -> guard)
             .withBean(NewQueries.class)
             .withBean(Decorated.class);
@@ -67,6 +69,7 @@ class QueryCachedTest {
             var statement = new MappedStatement.Builder(config, "test.newTable",
                     new StaticSqlSource(config, "UPDATE t_extension_items SET name='changed'"), SqlCommandType.UPDATE).build();
             intercepted.update(statement, null);
+            intercepted.commit(true);
             var order = inOrder(cache, database);
             order.verify(cache).beforeWrite(eq("t_extension_items"), anyString());
             order.verify(database).update(statement, null);

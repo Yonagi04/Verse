@@ -16,7 +16,12 @@ import java.util.regex.Pattern;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-@Intercepts(@Signature(type = Executor.class, method = "update", args = {MappedStatement.class, Object.class}))
+@Intercepts({
+        @Signature(type = Executor.class, method = "update", args = {MappedStatement.class, Object.class}),
+        @Signature(type = Executor.class, method = "commit", args = {boolean.class}),
+        @Signature(type = Executor.class, method = "rollback", args = {boolean.class}),
+        @Signature(type = Executor.class, method = "close", args = {boolean.class})
+})
 public class QueryWriteInterceptor implements Interceptor {
     private static final Object RESOURCE = new Object();
     private static final Pattern TARGET = Pattern.compile("(?is)^\\s*(?:update\\s+|insert\\s+(?:ignore\\s+)?into\\s+|replace\\s+into\\s+|delete\\s+from\\s+)`?(t_[a-z0-9_]+)`?\\b");
@@ -24,6 +29,8 @@ public class QueryWriteInterceptor implements Interceptor {
             + "AND (last_used_at IS NULL OR last_used_at < ?)";
     private final QueryCache cache;
     private final QueryCatalogue catalogue;
+    private final QueryFenceRecovery recovery;
+    private final Map<Executor, Mutation> sessions = Collections.synchronizedMap(new IdentityHashMap<>());
 
     static String table(String sql) {
         var matcher = TARGET.matcher(sql);
@@ -32,6 +39,7 @@ public class QueryWriteInterceptor implements Interceptor {
 
     @Override
     public Object intercept(Invocation invocation) throws Throwable {
+        if (!invocation.getMethod().getName().equals("update")) return finishSession(invocation);
         MappedStatement statement = (MappedStatement) invocation.getArgs()[0];
         String sql = statement.getBoundSql(invocation.getArgs()[1]).getSql();
         // 最近使用时间由 Key 列表每次批量补充，不进入结果缓存；只豁免固定 SQL。
@@ -59,28 +67,83 @@ public class QueryWriteInterceptor implements Interceptor {
                     @Override public void resume() { TransactionSynchronizationManager.bindResource(RESOURCE, registered); }
                     @Override public void afterCompletion(int status) {
                         TransactionSynchronizationManager.unbindResourceIfPossible(RESOURCE);
-                        registered.tables.forEach(t -> {
-                            try { cache.afterWrite(t, registered.token); }
-                            catch (RuntimeException error) {
-                                // 保留栅栏并告警，不能在失效失败后允许命中旧结果。
-                                log.error("查询缓存写栅栏清理失败，需要安全恢复: table={}, token={}", t, registered.token, error);
-                            }
-                        });
+                        if (status == STATUS_COMMITTED || status == STATUS_ROLLED_BACK) completed(registered);
+                        else registered.tables.forEach(t -> recovery.unknown(t, registered.token));
                     }
                 });
             }
-            if (state.tables.add(table)) cache.beforeWrite(table, state.token);
-            return invocation.proceed();
+            begin(state, table);
+            return update(invocation, state);
         }
-        String token = UUID.randomUUID().toString();
-        try {
-            cache.beforeWrite(table, token);
-            return invocation.proceed();
-        } finally { cache.afterWrite(table, token); }
+        // update 返回可能仅表示批处理已入队；SqlSessionTemplate 随后强制 commit 才是结束边界。
+        Executor executor = (Executor) invocation.getTarget();
+        Mutation state = sessions.computeIfAbsent(executor, ignored -> new Mutation());
+        begin(state, table);
+        return update(invocation, state);
+    }
+
+    private void begin(Mutation state, String table) {
+        state.tables.add(table);
+        if (!state.prepared.contains(table)) {
+            cache.beforeWrite(table, state.token);
+            state.prepared.add(table);
+        }
+    }
+
+    private Object update(Invocation invocation, Mutation state) throws Throwable {
+        try { return invocation.proceed(); }
+        catch (Throwable error) { state.uncertain = true; throw error; }
+    }
+
+    private Object finishSession(Invocation invocation) throws Throwable {
+        Executor executor = (Executor) invocation.getTarget();
+        Mutation state = sessions.get(executor);
+        if (state == null) return invocation.proceed();
+        String method = invocation.getMethod().getName();
+        if (method.equals("close")) {
+            sessions.remove(executor);
+            // BaseExecutor.close 会吞掉内部 rollback 的 SQLException，不能用 close 返回作为证明。
+            boolean ended = false;
+            try {
+                boolean confirms = confirmsEnd(executor, state);
+                executor.rollback(true);
+                ended = confirms;
+            }
+            catch (java.sql.SQLException | RuntimeException error) {
+                log.warn("[query-cache] 会话关闭前回滚失败，保留未确认栅栏", error);
+            }
+            try { return invocation.proceed(); }
+            finally {
+                if (ended) completed(state);
+                else state.tables.forEach(t -> recovery.unknown(t, state.token));
+            }
+        }
+        Object result;
+        try { result = invocation.proceed(); }
+        catch (Throwable error) { state.uncertain = true; throw error; }
+        // false 只保证 flush/local-cache 清理，不保证数据库事务已结束。
+        if (Boolean.TRUE.equals(invocation.getArgs()[0]) && confirmsEnd(executor, state)) {
+            sessions.remove(executor);
+            completed(state);
+        }
+        return result;
+    }
+
+    private boolean confirmsEnd(Executor executor, Mutation state) throws java.sql.SQLException {
+        // 自动提交时 MyBatis 的 commit/rollback 是空操作，不能证明超时 SQL 已在服务端结束。
+        if (!state.uncertain) return true;
+        var transaction = executor.getTransaction();
+        return transaction != null && !transaction.getConnection().getAutoCommit();
+    }
+
+    private void completed(Mutation state) {
+        state.tables.forEach(t -> recovery.completed(t, state.token));
     }
 
     private static class Mutation {
         private final String token = UUID.randomUUID().toString();
         private final Set<String> tables = new LinkedHashSet<>();
+        private final Set<String> prepared = new HashSet<>();
+        private boolean uncertain;
     }
 }

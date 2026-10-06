@@ -67,4 +67,5 @@ public final class QueryCatalogue implements BeanFactoryPostProcessor {
 
     public Map<Method, Policy> policies() { return Collections.unmodifiableMap(policies); }
     public boolean dependsOn(String table) { return dependencies.contains(table); }
+    public Set<String> dependencies() { return Collections.unmodifiableSet(dependencies); }
 }

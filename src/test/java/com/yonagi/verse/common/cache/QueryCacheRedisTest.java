@@ -71,6 +71,112 @@ class QueryCacheRedisTest {
     private String read(String key,java.util.function.Supplier<String> loader) {
         return cache.read("test",RedisKeyConstant.CORE_QUERY_CACHE_TEST_KEY+"test:",key,String.class,List.of("t_test"),10000,loader);
     }
+    @Test void persistedCompletionRecoversAfterRestartAndPreservesOldActiveWriter() {
+        assertEquals("old", read("recovery", () -> "old"));
+        cache.beforeWrite("t_test", "ended");
+        cache.beforeWrite("t_test", "active");
+        redis.opsForZSet().add(cache.writerCreatedKey("t_test"), "active", System.currentTimeMillis() - 3600000);
+        assertEquals(-1, redis.getExpire(cache.writerKey("t_test")));
+        assertNotNull(redis.opsForHash().get(cache.writerOwnerKey("t_test"), "active"));
+        var failing = spy(cache);
+        doThrow(new IllegalStateException("cleanup failed after recording completion")).when(failing).cleanupCompleted("t_test", "ended");
+        assertThrows(IllegalStateException.class, () -> failing.afterWrite("t_test", "ended"));
+        assertNotNull(redis.opsForZSet().score(cache.writerCompletedKey("t_test"), "ended"));
+        var metrics = new SimpleMeterRegistry();
+        var restarted = new QueryCache(redis, client, properties, metrics, testScope);
+        var catalogue = new QueryCatalogue(); catalogue.register(QueryFenceRecoveryTest.Queries.class);
+        new QueryFenceRecovery(restarted, catalogue, properties, metrics).recover();
+        assertEquals(Set.of("active"), redis.opsForSet().members(cache.writerKey("t_test")));
+        assertNull(cache.snapshot(List.of("t_test")));
+        assertEquals(1, metrics.get("verse.query.cache.fence.writers").tag("table", "t_test").gauge().value());
+        assertTrue(metrics.get("verse.query.cache.fence.oldest.seconds").tag("table", "t_test").gauge().value() >= 3600);
+        assertFalse(restarted.cleanupCompleted("t_test", "active"));
+        assertEquals(-1, redis.getExpire(cache.writerKey("t_test")));
+        cache.afterWrite("t_test", "active");
+        assertEquals("new", read("recovery", () -> "new"));
+    }
+
+    @Test void cleanupIsBoundedAndFenceRemainsUntilAllIndexedValuesAreDeleted() {
+        properties.setFenceCleanupBatches(1);
+        cache.beforeWrite("t_test", "ended");
+        List<String> keys = new ArrayList<>();
+        for (int i = 0; i < 401; i++) {
+            String key = RedisKeyConstant.CORE_QUERY_CACHE_TEST_KEY + testScope + "stale:" + i;
+            keys.add(key); redis.opsForValue().set(key, "stale");
+            redis.opsForZSet().add(cache.indexKey("t_test"), key, System.currentTimeMillis() + 600000);
+        }
+        assertFalse(cache.afterWrite("t_test", "ended"));
+        assertNull(cache.snapshot(List.of("t_test")));
+        assertEquals(201, redis.opsForZSet().size(cache.indexKey("t_test")));
+        assertFalse(cache.cleanupCompleted("t_test", "ended"));
+        assertNull(cache.snapshot(List.of("t_test")));
+        assertTrue(cache.cleanupCompleted("t_test", "ended"));
+        List<String> versions = cache.snapshot(List.of("t_test"));
+        assertNotNull(versions);
+        assertEquals(0, redis.countExistingKeys(keys));
+        assertTrue(cache.afterWrite("t_test", "ended"), "重复完成不会再次污染代际或产生残留");
+        assertEquals(versions, cache.snapshot(List.of("t_test")));
+        assertEquals("fresh", read("bounded", () -> "fresh"));
+    }
+
+    @Test void realMybatisBatchSessionKeepsFenceUntilCommitOrRollback() throws Exception {
+        var database = MySqlTestDatabase.create();
+        try {
+            var jdbc = new org.springframework.jdbc.core.JdbcTemplate(database);
+            jdbc.execute("CREATE TABLE t_tenant (id BIGINT PRIMARY KEY, name VARCHAR(64))");
+            jdbc.update("INSERT INTO t_tenant VALUES (1, 'old')");
+            var configuration = new org.apache.ibatis.session.Configuration(new org.apache.ibatis.mapping.Environment(
+                    "cache-test", new org.apache.ibatis.transaction.jdbc.JdbcTransactionFactory(), database));
+            configuration.addInterceptor(QueryCacheTestSupport.interceptor(cache));
+            configuration.addMappedStatement(new org.apache.ibatis.mapping.MappedStatement.Builder(configuration, "test.batch",
+                    new org.apache.ibatis.builder.StaticSqlSource(configuration, "UPDATE t_tenant SET name='new' WHERE id=1"),
+                    org.apache.ibatis.mapping.SqlCommandType.UPDATE).build());
+            var factory = new org.apache.ibatis.session.SqlSessionFactoryBuilder().build(configuration);
+            for (boolean rollback : List.of(true, false)) {
+                try (var session = factory.openSession(org.apache.ibatis.session.ExecutorType.BATCH, false)) {
+                    session.update("test.batch");
+                    assertNull(cache.snapshot(List.of("t_tenant")), "批处理尚未发送，必须保留栅栏");
+                    assertEquals("old", jdbc.queryForObject("SELECT name FROM t_tenant WHERE id=1", String.class));
+                    if (rollback) session.rollback(); else session.commit();
+                    assertNotNull(cache.snapshot(List.of("t_tenant")));
+                }
+                assertEquals(rollback ? "old" : "new", jdbc.queryForObject("SELECT name FROM t_tenant WHERE id=1", String.class));
+            }
+        } finally { database.close(); }
+    }
+    @Test void maintenanceRecoveryRequiresEvidenceAndStableGenerationBeforeFullInvalidation() throws Exception {
+        cache.beforeWrite("t_test", "orphan");
+        String version = redis.opsForValue().get(cache.versionKey("t_test"));
+        List<String> keys = List.of(cache.versionKey("t_test"), cache.writerKey("t_test"), cache.writerCreatedKey("t_test"),
+                cache.writerOwnerKey("t_test"), cache.writerCompletedKey("t_test"), cache.indexKey("t_test"));
+        var script = new org.springframework.data.redis.core.script.DefaultRedisScript<>(
+                java.nio.file.Files.readString(java.nio.file.Path.of("scripts/recover-query-cache.lua")), List.class);
+        List<?> dryRun = redis.execute(script, keys, "dry-run");
+        assertEquals("DRY_RUN", dryRun.getFirst());
+        assertEquals(version, dryRun.get(1));
+        assertNull(cache.snapshot(List.of("t_test")));
+        String expected = version, replacement = UUID.randomUUID().toString();
+        assertThrows(org.springframework.dao.DataAccessException.class, () -> redis.execute(script, keys, "apply", "", expected, replacement));
+        cache.beforeWrite("t_test", "another-writer");
+        assertThrows(org.springframework.dao.DataAccessException.class, () -> redis.execute(script, keys, "apply",
+                "WRITERS_STOPPED_AND_DB_TRANSACTIONS_ENDED", expected, replacement));
+        String verified = redis.opsForValue().get(cache.versionKey("t_test"));
+        List<String> stale = new ArrayList<>();
+        for (int i = 0; i < 201; i++) {
+            String key = RedisKeyConstant.CORE_QUERY_CACHE_TEST_KEY + testScope + "maintenance:" + i;
+            stale.add(key); redis.opsForValue().set(key, "stale");
+            redis.opsForZSet().add(cache.indexKey("t_test"), key, System.currentTimeMillis() + 600000);
+        }
+        List<?> partial = redis.execute(script, keys, "apply", "WRITERS_STOPPED_AND_DB_TRANSACTIONS_ENDED", verified, replacement);
+        assertEquals("PENDING", partial.getFirst());
+        assertNull(cache.snapshot(List.of("t_test")));
+        List<?> done = redis.execute(script, keys, "apply", "WRITERS_STOPPED_AND_DB_TRANSACTIONS_ENDED", verified, replacement);
+        assertEquals("RECOVERED", done.getFirst());
+        assertEquals(List.of(replacement), cache.snapshot(List.of("t_test")));
+        assertEquals(0, redis.countExistingKeys(stale));
+        assertEquals(0, redis.countExistingKeys(keys.subList(1, keys.size())));
+        assertEquals("new", read("maintenance", () -> "new"));
+    }
     @Test void missingWorkbenchKindIsNegativeCachedAndCreationInvalidatesIt() {
         var tenants = mock(TenantAccessPolicy.class);
         var tenant = new TenantDO(); tenant.setPlaygroundEnabled(1);
@@ -285,7 +391,7 @@ class QueryCacheRedisTest {
                 org.apache.ibatis.mapping.MappedStatement statement = call.getArgument(0);
                 return jdbc.update(statement.getBoundSql(null).getSql());
             });
-            var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache, QueryCacheTestSupport.catalogue()).plugin(db);
+            var executor = (org.apache.ibatis.executor.Executor) QueryCacheTestSupport.interceptor(cache).plugin(db);
             for (boolean rollback : List.of(false, true)) {
                 transaction.executeWithoutResult(status -> {
                     var config = new org.apache.ibatis.session.Configuration();
@@ -342,7 +448,7 @@ class QueryCacheRedisTest {
         assertTrue(fixture.service.listApiKeys(10L, 20L, 1, 10).getRecords().isEmpty());
         var db = mock(org.apache.ibatis.executor.Executor.class);
         when(db.update(any(), any())).thenReturn(1);
-        var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache, QueryCacheTestSupport.catalogue()).plugin(db);
+        var executor = (org.apache.ibatis.executor.Executor) QueryCacheTestSupport.interceptor(cache).plugin(db);
         List<String> mutations = List.of("INSERT INTO t_api_key (name) VALUES ('created')",
                 "UPDATE t_api_key SET cost_config_version=1", "UPDATE t_api_key SET status=0");
         for (int i = 0; i < mutations.size(); i++) {
@@ -354,6 +460,7 @@ class QueryCacheRedisTest {
                     new org.apache.ibatis.builder.StaticSqlSource(configuration, mutations.get(i)),
                     i == 0 ? org.apache.ibatis.mapping.SqlCommandType.INSERT : org.apache.ibatis.mapping.SqlCommandType.UPDATE).build();
             executor.update(statement, null);
+            executor.commit(true);
             var result = fixture.service.listApiKeys(10L, 20L, 1, 10);
             if (i == 2) assertTrue(result.getRecords().isEmpty());
             else {
@@ -437,7 +544,7 @@ class QueryCacheRedisTest {
         fixture.service.getNotificationList(10L, query);
         var db = mock(org.apache.ibatis.executor.Executor.class);
         when(db.update(any(), any())).thenReturn(1);
-        var executor = (org.apache.ibatis.executor.Executor) new QueryWriteInterceptor(cache, QueryCacheTestSupport.catalogue()).plugin(db);
+        var executor = (org.apache.ibatis.executor.Executor) QueryCacheTestSupport.interceptor(cache).plugin(db);
         // 接收状态更新和通知写入均应失效，确保已读操作与新通知刷新能获取新数据。
         for (String sql : List.of("UPDATE t_notification_recipient SET is_read=1 WHERE user_id=10",
                 "INSERT INTO t_notification (title) VALUES ('new')")) {
@@ -446,6 +553,7 @@ class QueryCacheRedisTest {
                     new org.apache.ibatis.builder.StaticSqlSource(configuration, sql),
                     sql.startsWith("INSERT") ? org.apache.ibatis.mapping.SqlCommandType.INSERT : org.apache.ibatis.mapping.SqlCommandType.UPDATE).build();
             executor.update(statement, null);
+            executor.commit(true);
             fixture.service.getNotificationList(10L, query);
             fixture.service.getNotificationList(10L, query);
         }

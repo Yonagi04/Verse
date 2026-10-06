@@ -19,6 +19,12 @@ import org.springframework.stereotype.Component;
 final class QueryCacheTestSupport {
     private QueryCacheTestSupport() { }
 
+    static QueryWriteInterceptor interceptor(QueryCache cache) {
+        QueryCatalogue catalogue = catalogue();
+        return new QueryWriteInterceptor(cache, catalogue, new QueryFenceRecovery(cache, catalogue,
+                new QueryCacheProperties(), new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+    }
+
     static QueryCatalogue catalogue() {
         QueryCatalogue catalogue = new QueryCatalogue();
         var scanner = new ClassPathScanningCandidateComponentProvider(false);

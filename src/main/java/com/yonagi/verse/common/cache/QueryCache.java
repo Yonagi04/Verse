@@ -37,15 +37,43 @@ public class QueryCache {
             return result
             """, List.class);
     private static final DefaultRedisScript<Long> BEGIN = new DefaultRedisScript<>("""
+            if redis.replicate_commands then redis.replicate_commands() end
             redis.call('SET',KEYS[1],ARGV[1])
-            redis.call('SADD',KEYS[2],ARGV[2])
+            if redis.call('SADD',KEYS[2],ARGV[2]) == 1 then
+                local time = redis.call('TIME')
+                redis.call('ZADD',KEYS[3],time[1]*1000+math.floor(time[2]/1000),ARGV[2])
+                redis.call('HSET',KEYS[4],ARGV[2],ARGV[3])
+            end
+            return 1
+            """, Long.class);
+    private static final DefaultRedisScript<Long> COMPLETED = new DefaultRedisScript<>("""
+            if redis.replicate_commands then redis.replicate_commands() end
+            if redis.call('SISMEMBER',KEYS[1],ARGV[1]) == 1 then
+                local time = redis.call('TIME')
+                redis.call('ZADD',KEYS[2],'NX',time[1]*1000+math.floor(time[2]/1000),ARGV[1])
+            end
             return 1
             """, Long.class);
     private static final DefaultRedisScript<Long> FINISH = new DefaultRedisScript<>("""
-            redis.call('SET',KEYS[1],ARGV[1])
-            redis.call('SREM',KEYS[2],ARGV[2])
+            if redis.call('SISMEMBER',KEYS[2],ARGV[2]) == 1 then
+                if not redis.call('ZSCORE',KEYS[5],ARGV[2]) then return 0 end
+                redis.call('SET',KEYS[1],ARGV[1])
+                redis.call('SREM',KEYS[2],ARGV[2])
+            end
+            redis.call('ZREM',KEYS[3],ARGV[2])
+            redis.call('HDEL',KEYS[4],ARGV[2])
+            redis.call('ZREM',KEYS[5],ARGV[2])
             return 1
             """, Long.class);
+    private static final DefaultRedisScript<List> FENCE_STATS = new DefaultRedisScript<>("""
+            local count = redis.call('SCARD',KEYS[1])
+            local oldest = redis.call('ZRANGE',KEYS[2],0,0,'WITHSCORES')
+            local time = redis.call('TIME')
+            local age = 0
+            if #oldest > 0 then age = math.max(0,time[1]*1000+math.floor(time[2]/1000)-tonumber(oldest[2])) end
+            return {count, tostring(age), redis.call('ZCARD',KEYS[3]), math.max(0,count-redis.call('ZCARD',KEYS[2]))}
+            """, List.class);
+    private static final String INSTANCE = ProcessHandle.current().pid() + ":" + UUID.randomUUID();
     private static final DefaultRedisScript<Long> PUBLISH = new DefaultRedisScript<>("""
             if redis.replicate_commands then redis.replicate_commands() end
             for i=2,#KEYS,3 do
@@ -263,25 +291,52 @@ public class QueryCache {
 
     /** 先栅栏和换代，再物理删除；任何 Redis 失败必须阻止后续 SQL。 */
     public void beforeWrite(String table, String token) {
-        require(redis.execute(BEGIN, List.of(versionKey(table), writerKey(table)), UUID.randomUUID().toString(), token));
+        require(redis.execute(BEGIN, List.of(versionKey(table), writerKey(table), writerCreatedKey(table), writerOwnerKey(table)),
+                UUID.randomUUID().toString(), token, INSTANCE));
         deleteIndexed(table);
     }
 
-    /** 完成物理清理之后才释放栅栏，回滚同样需要使旧读取失效。 */
-    public void afterWrite(String table, String token) {
-        deleteIndexed(table);
-        require(redis.execute(FINISH, List.of(versionKey(table), writerKey(table)), UUID.randomUUID().toString(), token));
+    /** 调用方必须已确认 SQL/事务结束；先持久保存证明，再清理，进程退出后仍能重试。 */
+    public boolean afterWrite(String table, String token) {
+        require(redis.execute(COMPLETED, List.of(writerKey(table), writerCompletedKey(table)), token));
+        return cleanupCompleted(table, token);
     }
 
-    private void deleteIndexed(String table) {
-        // 栅栏阻止新结果发布；分批读删，避免一次把整个失效索引拉入 JVM。
-        while (true) {
+    /** 恢复任务只读取已结束集合，不把创建时间、实例失联或年龄当作结束证明。 */
+    boolean cleanupCompleted(String table, String token) {
+        if (redis.opsForZSet().score(writerCompletedKey(table), token) == null)
+            return !Boolean.TRUE.equals(redis.opsForSet().isMember(writerKey(table), token));
+        if (!deleteIndexed(table)) return false;
+        require(redis.execute(FINISH, List.of(versionKey(table), writerKey(table), writerCreatedKey(table),
+                writerOwnerKey(table), writerCompletedKey(table)), UUID.randomUUID().toString(), token));
+        return true;
+    }
+
+    Set<String> completedWriters(String table, int limit) {
+        Set<String> tokens = redis.opsForZSet().range(writerCompletedKey(table), 0, limit - 1L);
+        if (tokens == null) throw busy();
+        return tokens;
+    }
+
+    long[] fenceStats(String table) {
+        List<?> values = redis.execute(FENCE_STATS, List.of(writerKey(table), writerCreatedKey(table), writerCompletedKey(table)));
+        if (values == null || values.size() != 4) throw busy();
+        return values.stream().mapToLong(value -> Long.parseLong(String.valueOf(value))).toArray();
+    }
+
+    private boolean deleteIndexed(String table) {
+        // 换代和栅栏已阻止旧结果命中及发布；大索引分多轮清理，避免阻塞事务完成线程。
+        for (int i = 0; i < properties.getFenceCleanupBatches(); i++) {
             Set<String> keys = redis.opsForZSet().range(indexKey(table), 0, 199);
-            if (keys == null || keys.isEmpty()) return;
+            if (keys == null) throw busy();
+            if (keys.isEmpty()) return true;
             List<String> batch = new ArrayList<>(keys);
             redis.delete(batch);
             redis.opsForZSet().remove(indexKey(table), batch.toArray());
         }
+        Long remaining = redis.opsForZSet().size(indexKey(table));
+        if (remaining == null) throw busy();
+        return remaining == 0;
     }
 
     private void require(Long result) { if (!Long.valueOf(1).equals(result)) throw busy(); }
@@ -296,5 +351,8 @@ public class QueryCache {
     }
     String versionKey(String table) { return scoped(RedisKeyConstant.CORE_QUERY_CACHE_VERSION_KEY)+table; }
     String writerKey(String table) { return scoped(RedisKeyConstant.CORE_QUERY_CACHE_WRITERS_KEY)+table; }
+    String writerCreatedKey(String table) { return scoped(RedisKeyConstant.CORE_QUERY_CACHE_WRITER_CREATED_KEY)+table; }
+    String writerOwnerKey(String table) { return scoped(RedisKeyConstant.CORE_QUERY_CACHE_WRITER_OWNER_KEY)+table; }
+    String writerCompletedKey(String table) { return scoped(RedisKeyConstant.CORE_QUERY_CACHE_WRITER_COMPLETED_KEY)+table; }
     String indexKey(String table) { return scoped(RedisKeyConstant.CORE_QUERY_CACHE_INDEX_KEY)+table; }
 }

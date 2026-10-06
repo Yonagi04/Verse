@@ -73,6 +73,7 @@ public TenantSettingsRespDTO getSettings(Long userId, Long tenantId) { ... }
 - 新增写路径必须核对其影响的所有缓存表依赖和派生视图。
 - 禁止在业务代码散落字符串 Key 和手工删除；集中使用现有常量和失效机制。
 - 需要双删、延迟失效或消息失效时，必须说明竞态窗口、幂等和失败恢复，不凭经验模板化添加。
+- 查询写栅栏禁止按 TTL、年龄或心跳过期释放。只有明确结束的写入可以自动重试清理；未确认残留按 [写栅栏恢复流程](../../dev_docs_local/query-cache-recovery.md) 停写核验、完整失效和换代后释放。
 
 ## 可观察性
 
