@@ -3,8 +3,12 @@ package com.yonagi.verse.common.cache;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.ibatis.executor.Executor;
+import org.apache.ibatis.cache.CacheKey;
+import org.apache.ibatis.mapping.BoundSql;
 import org.apache.ibatis.mapping.MappedStatement;
 import org.apache.ibatis.plugin.*;
+import org.apache.ibatis.session.ResultHandler;
+import org.apache.ibatis.session.RowBounds;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -18,6 +22,10 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 @Intercepts({
         @Signature(type = Executor.class, method = "update", args = {MappedStatement.class, Object.class}),
+        @Signature(type = Executor.class, method = "flushStatements", args = {}),
+        @Signature(type = Executor.class, method = "query", args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class}),
+        @Signature(type = Executor.class, method = "query", args = {MappedStatement.class, Object.class, RowBounds.class, ResultHandler.class, CacheKey.class, BoundSql.class}),
+        @Signature(type = Executor.class, method = "queryCursor", args = {MappedStatement.class, Object.class, RowBounds.class}),
         @Signature(type = Executor.class, method = "commit", args = {boolean.class}),
         @Signature(type = Executor.class, method = "rollback", args = {boolean.class}),
         @Signature(type = Executor.class, method = "close", args = {boolean.class})
@@ -39,7 +47,10 @@ public class QueryWriteInterceptor implements Interceptor {
 
     @Override
     public Object intercept(Invocation invocation) throws Throwable {
-        if (!invocation.getMethod().getName().equals("update")) return finishSession(invocation);
+        String method = invocation.getMethod().getName();
+        if (method.equals("flushStatements") || method.equals("query") || method.equals("queryCursor"))
+            return observeExecution(invocation);
+        if (!method.equals("update")) return finishSession(invocation);
         MappedStatement statement = (MappedStatement) invocation.getArgs()[0];
         String sql = statement.getBoundSql(invocation.getArgs()[1]).getSql();
         // 最近使用时间由 Key 列表每次批量补充，不进入结果缓存；只豁免固定 SQL。
@@ -73,13 +84,13 @@ public class QueryWriteInterceptor implements Interceptor {
                 });
             }
             begin(state, table);
-            return update(invocation, state);
+            return execute(invocation, state);
         }
         // update 返回可能仅表示批处理已入队；SqlSessionTemplate 随后强制 commit 才是结束边界。
         Executor executor = (Executor) invocation.getTarget();
         Mutation state = sessions.computeIfAbsent(executor, ignored -> new Mutation());
         begin(state, table);
-        return update(invocation, state);
+        return execute(invocation, state);
     }
 
     private void begin(Mutation state, String table) {
@@ -90,7 +101,16 @@ public class QueryWriteInterceptor implements Interceptor {
         }
     }
 
-    private Object update(Invocation invocation, Mutation state) throws Throwable {
+    private Object observeExecution(Invocation invocation) throws Throwable {
+        Mutation state = sessions.get((Executor) invocation.getTarget());
+        if (state == null && TransactionSynchronizationManager.isActualTransactionActive()
+                && TransactionSynchronizationManager.isSynchronizationActive())
+            state = (Mutation) TransactionSynchronizationManager.getResource(RESOURCE);
+        // BATCH 查询内部的 flush 是自调用，必须在外层读取入口观测失败；只读会话不创建写状态。
+        return state == null ? invocation.proceed() : execute(invocation, state);
+    }
+
+    private Object execute(Invocation invocation, Mutation state) throws Throwable {
         try { return invocation.proceed(); }
         catch (Throwable error) { state.uncertain = true; throw error; }
     }
