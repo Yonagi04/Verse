@@ -30,8 +30,8 @@ public interface NotificationService extends IService<NotificationDO> {
     NotificationRecentListRespDTO getRecentNotifications(Long userId, Long tenantId);
 
     /**
-     * 创建通知并推送给指定用户（同步）。
-     * 仅站内公告等主业务场景使用；调用者需要自己 catch 异常——通知发送失败不应阻塞主业务流程。
+     * 同步创建通知，正文和全部接收人在同一事务中落库，提交后推送。
+     * 持久化失败向调用方传播并回滚；提交后的推送失败不影响已保存的通知。
      */
     void createAndPush(Long tenantId, String type, String severity,
                        String title, String content, Long senderId,

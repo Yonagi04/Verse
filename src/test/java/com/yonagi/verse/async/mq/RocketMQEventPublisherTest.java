@@ -21,6 +21,7 @@ import com.yonagi.verse.service.helper.TenantValidationHelper;
 import com.yonagi.verse.service.impl.NotificationServiceImpl;
 import com.yonagi.verse.service.impl.TenantCrudServiceImpl;
 import com.yonagi.verse.service.impl.UserAccountCleanupService;
+import com.yonagi.verse.service.notification.NotificationCreationService;
 import org.apache.rocketmq.common.message.MessageConst;
 import org.apache.rocketmq.common.message.MessageExt;
 import org.apache.rocketmq.spring.core.RocketMQTemplate;
@@ -48,7 +49,7 @@ class RocketMQEventPublisherTest {
             .withAllowCircularReferences(false)
             .withPropertyValues("rocketmq.producer.topic=verse-event", "verse.frontend-baseurl=http://localhost")
             .withUserConfiguration(UserClosedEventHandler.class, TenantCrudServiceImpl.class,
-                    NotificationServiceImpl.class, RocketMQEventPublisher.class,
+                    NotificationServiceImpl.class, NotificationCreationService.class, RocketMQEventPublisher.class,
                     EventHandlerRegistry.class, RocketMQConsumerDispatcher.class)
             .withBean(RocketMQTemplate.class, () -> mock(RocketMQTemplate.class))
             .withBean(UserMapper.class, () -> mock(UserMapper.class))

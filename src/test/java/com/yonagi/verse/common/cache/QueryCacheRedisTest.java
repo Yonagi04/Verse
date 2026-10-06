@@ -575,9 +575,8 @@ class QueryCacheRedisTest {
                         .setTotal(1).setRecords(List.of(record));
             });
             var target = new com.yonagi.verse.service.impl.NotificationServiceImpl(mock(TenantAccessPolicy.class), mapper,
-                    mock(org.springframework.messaging.simp.SimpMessagingTemplate.class),
-                    mock(com.yonagi.verse.async.api.DomainEventPublisher.class), mock(TenantMapper.class),
-                    mock(UserTenantService.class), mock(NotificationMapper.class), cache);
+                    mock(com.yonagi.verse.async.api.DomainEventPublisher.class), cache,
+                    mock(com.yonagi.verse.service.notification.NotificationCreationService.class));
             var proxy = new AspectJProxyFactory(target);
             proxy.setProxyTargetClass(true);
             proxy.addAspect(QueryCacheTestSupport.aspect(cache));

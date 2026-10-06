@@ -362,8 +362,8 @@ public class TenantCrudServiceImpl implements TenantCrudService {
             notificationService.createAndPush(tenantId, "ANNOUNCEMENT", requestParam.getSeverity(),
                     requestParam.getTitle(), requestParam.getContent(), userId, receiverIdList);
         } catch (Exception e) {
-            log.error("Sending notification in tenant error: tenant {}", tenantId);
-            throw new ServerException(TenantErrorCodeEnum.TENANT_NOTIFICATION_PUSH_ERROR);
+            log.error("Sending notification in tenant error: tenant {}", tenantId, e);
+            throw new ServerException(null, e, TenantErrorCodeEnum.TENANT_NOTIFICATION_PUSH_ERROR);
         }
         return Boolean.TRUE;
     }

@@ -25,17 +25,15 @@ import com.yonagi.verse.dao.entity.NotificationDO;
 import com.yonagi.verse.dao.entity.NotificationRecipientDO;
 import com.yonagi.verse.dao.mapper.NotificationMapper;
 import com.yonagi.verse.dao.mapper.NotificationRecipientMapper;
-import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dto.req.NotificationListReqDTO;
 import com.yonagi.verse.dto.resp.NotificationInfoRespDTO;
 import com.yonagi.verse.dto.resp.NotificationListRespDTO;
 import com.yonagi.verse.dto.resp.NotificationRecentListRespDTO;
 import com.yonagi.verse.dto.resp.NotificationUnreadCountRespDTO;
 import com.yonagi.verse.service.NotificationService;
-import com.yonagi.verse.service.UserTenantService;
+import com.yonagi.verse.service.notification.NotificationCreationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -62,12 +60,9 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
 
     private final TenantAccessPolicy tenantAccess;
     private final NotificationRecipientMapper notificationRecipientMapper;
-    private final SimpMessagingTemplate messagingTemplate;
     private final DomainEventPublisher domainEventPublisher;
-    private final TenantMapper tenantMapper;
-    private final UserTenantService userTenantService;
-    private final NotificationMapper notificationMapper;
     private final QueryCache queryCache;
+    private final NotificationCreationService notificationCreationService;
 
     @Override
     @QueryCached(keyPrefix = NOTIFICATION_LIST_KEY, seconds = MINUTES_10, access = NoQueryAccess.class,
@@ -176,71 +171,21 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     public void createAndPush(Long tenantId, String type, String severity,
                               String title, String content, Long senderId,
                               List<Long> recipientUserIds) {
-        try {
-            Long notificationId = SnowflakeIdUtil.nextId();
-            NotificationDO notification = new NotificationDO();
-            notification.setNotificationId(notificationId);
-            notification.setTenantId(tenantId);
-            notification.setType(type);
-            notification.setSeverity(severity);
-            notification.setTitle(title);
-            notification.setContent(content);
-            notification.setSenderId(senderId);
-            baseMapper.insert(notification);
-
-            List<NotificationRecipientDO> recipients = recipientUserIds.stream().map(uid -> {
-                NotificationRecipientDO r = new NotificationRecipientDO();
-                r.setUserId(uid);
-                r.setNotificationId(notificationId);
-                r.setIsRead(0);
-                return r;
-            }).toList();
-            for (NotificationRecipientDO recipient : recipients) {
-                notificationRecipientMapper.insert(recipient);
-            }
-
-            // WebSocket 实时推送
-            try {
-                NotificationInfoRespDTO dto = new NotificationInfoRespDTO();
-                dto.setNotificationId(notificationId);
-                dto.setType(type);
-                dto.setSeverity(severity);
-                dto.setTitle(title);
-                dto.setContent(content);
-                dto.setSenderId(senderId);
-                dto.setCreateTime(notification.getCreateTime());
-
-                for (Long userId : recipientUserIds) {
-                    messagingTemplate.convertAndSendToUser(
-                            userId.toString(),
-                            "/queue/notifications",
-                            dto
-                    );
-                    Long unreadCount = notificationRecipientMapper.selectCount(
-                            Wrappers.lambdaQuery(NotificationRecipientDO.class)
-                                    .eq(NotificationRecipientDO::getUserId, userId)
-                                    .eq(NotificationRecipientDO::getIsRead, 0)
-                    );
-                    messagingTemplate.convertAndSendToUser(
-                            userId.toString(),
-                            "/queue/notifications/unread-count",
-                            new NotificationUnreadCountRespDTO(unreadCount)
-                    );
-                }
-            } catch (Exception e) {
-                log.error("[notification] WebSocket 推送失败: notificationId={}", notificationId, e);
-                // 推送失败不影响主业务
-            }
-        } catch (Exception e) {
-            log.error("[notification] 通知创建失败: tenantId={}, type={}, severity={}", tenantId, type, severity, e);
-            // 不抛出，不阻断主业务流程
-        }
+        notificationCreationService.createAndPush(notificationEvent(tenantId, type, severity,
+                title, content, senderId, recipientUserIds));
     }
 
     @Override
     public void publishNotification(Long tenantId, String type, String severity,
                                     String title, String content, Long senderId,
                                     List<Long> recipientUserIds) {
+        domainEventPublisher.publishInTx(notificationEvent(tenantId, type, severity,
+                title, content, senderId, recipientUserIds));
+    }
+
+    private NotificationEvent notificationEvent(Long tenantId, String type, String severity,
+                                                String title, String content, Long senderId,
+                                                List<Long> recipientUserIds) {
         NotificationEvent event = new NotificationEvent();
         event.setNotificationId(SnowflakeIdUtil.nextId());
         event.setTenantId(tenantId);
@@ -249,9 +194,9 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
         event.setTitle(title);
         event.setContent(content);
         event.setSenderId(senderId);
-        event.setRecipientUserIds(recipientUserIds);
+        event.setRecipientUserIds(List.copyOf(recipientUserIds));
         event.setKey(tenantId != null ? String.valueOf(tenantId) : event.getEventId());
-        domainEventPublisher.publishInTx(event);
+        return event;
     }
 
 
