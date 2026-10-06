@@ -30,10 +30,14 @@ public class PlaygroundAccessPolicy {
         return tenant;
     }
     public PlaygroundWorkspaceDO requireWorkspace(UserContext actor, Long tenantId, Long workspaceId) {
-        PlaygroundWorkspaceDO workspace = workspaces.selectOne(Wrappers.lambdaQuery(PlaygroundWorkspaceDO.class)
-                .eq(PlaygroundWorkspaceDO::getWorkspaceId, workspaceId).eq(PlaygroundWorkspaceDO::getTenantId, tenantId)
-                .eq(PlaygroundWorkspaceDO::getOwnerUserId, actor.getUserId()).eq(PlaygroundWorkspaceDO::getDelFlag, 0));
+        PlaygroundWorkspaceDO workspace = findOwnedWorkspace(actor, tenantId, workspaceId);
         if (workspace == null) throw new ClientException(PlaygroundErrorCodeEnum.SESSION_NOT_FOUND);
         return workspace;
+    }
+    /** 查询分类允许短期保存空结果，归属约束仍与业务读取共用。 */
+    public PlaygroundWorkspaceDO findOwnedWorkspace(UserContext actor, Long tenantId, Long workspaceId) {
+        return workspaces.selectOne(Wrappers.lambdaQuery(PlaygroundWorkspaceDO.class)
+                .eq(PlaygroundWorkspaceDO::getWorkspaceId, workspaceId).eq(PlaygroundWorkspaceDO::getTenantId, tenantId)
+                .eq(PlaygroundWorkspaceDO::getOwnerUserId, actor.getUserId()).eq(PlaygroundWorkspaceDO::getDelFlag, 0));
     }
 }

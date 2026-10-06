@@ -71,6 +71,34 @@ class QueryCacheRedisTest {
     private String read(String key,java.util.function.Supplier<String> loader) {
         return cache.read("test",RedisKeyConstant.CORE_QUERY_CACHE_TEST_KEY+"test:",key,String.class,List.of("t_test"),10000,loader);
     }
+    @Test void missingWorkbenchKindIsNegativeCachedAndCreationInvalidatesIt() {
+        var tenants = mock(TenantAccessPolicy.class);
+        var tenant = new TenantDO(); tenant.setPlaygroundEnabled(1);
+        when(tenants.requireContext(any(), eq(20L))).thenReturn(tenant);
+        var workspaces = mock(PlaygroundWorkspaceMapper.class);
+        var access = new com.yonagi.verse.service.playground.PlaygroundAccessPolicy(tenants, workspaces);
+        var behavior = new com.yonagi.verse.service.playground.WorkbenchDetailCacheBehavior(access, cache);
+        var actor = new com.yonagi.verse.common.security.UserContext().setUserId(10L).setCurrentTenantId(20L);
+        Object[] args = {actor, 20L, 30L};
+        for (int i = 0; i < 3; i++) {
+            ClientException error = assertThrows(ClientException.class, () -> behavior.supports(args));
+            assertEquals(com.yonagi.verse.common.enums.PlaygroundErrorCodeEnum.SESSION_NOT_FOUND.code(), error.getErrorCode());
+        }
+        verify(workspaces, times(1)).selectOne(any());
+        String key = redis.opsForZSet().range(cache.indexKey("t_playground_workspace"), 0, -1).iterator().next();
+        assertNull(JSON.parseObject(redis.opsForValue().get(key)).get("value"));
+        assertTrue(redis.getExpire(key, TimeUnit.SECONDS) <= properties.getNegativeSeconds() * 1.2);
+        actor.setApiKeyId(99L);
+        assertThrows(ClientException.class, () -> behavior.supports(args));
+        verify(workspaces, times(1)).selectOne(any());
+        actor.setApiKeyId(null);
+        var workspace = new PlaygroundWorkspaceDO(); workspace.setKind("PRESET");
+        when(workspaces.selectOne(any())).thenReturn(workspace);
+        cache.beforeWrite("t_playground_workspace", "create");
+        cache.afterWrite("t_playground_workspace", "create");
+        assertTrue(behavior.supports(args));
+        verify(workspaces, times(2)).selectOne(any());
+    }
     @Test void hotMissAcrossTwoInstancesBuildsOnce() throws Exception {
         QueryCache second=new QueryCache(redis,client,properties,new SimpleMeterRegistry(),testScope);
         AtomicInteger loads=new AtomicInteger();
