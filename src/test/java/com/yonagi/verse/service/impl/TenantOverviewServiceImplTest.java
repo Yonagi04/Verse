@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.yonagi.verse.common.config.UsageReportingProperties;
@@ -71,7 +73,7 @@ class TenantOverviewServiceImplTest {
     void disabledActivityDoesNotReadTimelineAndAggregateFailureIsNull() {
         Fixture fixture = fixture();
         when(fixture.tenants.selectOne(any())).thenReturn(tenant(21L, "TEAM", 0));
-        when(fixture.userTenants.selectActiveMembership(10L, 21L)).thenReturn(member(21L, "MEMBER"));
+        when(fixture.userTenants.selectOne(any())).thenReturn(member(21L, "MEMBER"));
         when(fixture.overview.memberCounts(anyList())).thenThrow(new IllegalStateException("counts unavailable"));
         when(fixture.overview.availableServiceCounts(anyList())).thenReturn(List.of());
         when(fixture.overview.usage(anyList(), eq(10L), any(), any())).thenReturn(List.of());
@@ -100,7 +102,12 @@ class TenantOverviewServiceImplTest {
         TenantOverviewMapper overview = mock(TenantOverviewMapper.class);
         UsageReportingProperties properties = new UsageReportingProperties();
         return new Fixture(memberships, userTenants, tenants, overview,
-                new TenantOverviewServiceImpl(memberships, userTenants, tenants, overview, properties));
+                new TenantOverviewServiceImpl(new TenantAccessPolicy(tenants, userTenants),
+                memberships,
+                userTenants,
+                tenants,
+                overview,
+                properties));
     }
 
     private static UserTenantDO member(Long tenantId, String role) {

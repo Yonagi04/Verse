@@ -16,7 +16,7 @@ public interface QueryCacheBehavior {
     /** 在统一身份转换后追加时间边界等业务维度。 */
     default void contributeParameters(List<Object> parameters, Object[] args) { }
 
-    /** 在通用权限校验后补充业务校验。 */
+    /** 在业务访问策略后执行与缓存内容相关的额外校验。 */
     default void check(Object[] args) { }
 
     default Object load(Object target, Object[] args, QueryCache.Loader original) throws Throwable {
@@ -27,4 +27,7 @@ public interface QueryCacheBehavior {
     default Object currentView(Object target, Object[] args, Object cached) { return cached; }
 
     default boolean cacheable(Object value) { return true; }
+
+    /** 仅业务明确确认的资源不存在可负缓存，授权失败默认不缓存。 */
+    default boolean cacheFailure(com.yonagi.verse.common.convention.exception.ClientException error) { return false; }
 }

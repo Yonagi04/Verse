@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantActivityAccessPolicy;
+
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -202,7 +204,10 @@ class TenantActivityQueryServiceImplTest {
         when(tenantMapper.selectOne(any())).thenReturn(tenant);
         when(userTenantMapper.selectOne(any())).thenReturn(membership);
         return new Fixture(tenantMapper, userTenantMapper, activityLogMapper,
-                new TenantActivityQueryServiceImpl(tenantMapper, userTenantMapper, activityLogMapper));
+                new TenantActivityQueryServiceImpl(new TenantActivityAccessPolicy(new TenantAccessPolicy(tenantMapper, userTenantMapper)),
+                tenantMapper,
+                userTenantMapper,
+                activityLogMapper));
     }
 
     private static TenantDO activeTenant(boolean enabled) {

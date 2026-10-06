@@ -11,12 +11,10 @@ import java.util.*;
 /** 启动时从方法注解收集查询策略与依赖，不再维护业务方法清单。 */
 @Component
 public final class QueryCatalogue implements BeanFactoryPostProcessor {
-    public enum Access { NONE, TENANT, TEAM, ADMIN, PLAYGROUND, ACTIVITY, BATCH, REPORT, INVITE }
-    public record Policy(String name, String keyPrefix, long seconds, Access access, List<String> tables,
+    public record Policy(String name, String keyPrefix, long seconds, Class<? extends QueryAccessPolicy> access, List<String> tables,
                          Class<? extends QueryCacheBehavior> behavior) { }
     private final Map<Method, Policy> policies = new LinkedHashMap<>();
-    // 直接调用 QueryCache.read 的鉴权定位和通知正文也需要写入保护。
-    private final Set<String> dependencies = new HashSet<>(Set.of("t_api_key", "t_notification"));
+    private final Set<String> dependencies = new HashSet<>();
 
     @Override
     public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) {
@@ -28,6 +26,13 @@ public final class QueryCatalogue implements BeanFactoryPostProcessor {
     }
 
     void register(Class<?> type) {
+        QueryCacheDependencies manual = type.getAnnotation(QueryCacheDependencies.class);
+        if (manual != null) {
+            for (String table : manual.value()) {
+                if (!table.matches("t_[a-z0-9_]+")) throw new IllegalStateException("查询缓存依赖表名无效: " + type);
+                dependencies.add(table);
+            }
+        }
         for (Method method : type.getMethods()) {
             Policy policy = policy(method);
             if (policy == null) continue;

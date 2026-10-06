@@ -1,8 +1,10 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantQueryAccess;
+
 import cn.hutool.core.util.StrUtil;
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.async.activity.TenantActivityRecorder;
@@ -38,6 +40,7 @@ import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 @RequiredArgsConstructor
 public class TenantSettingsServiceImpl implements TenantSettingsService {
 
+    private final TenantAccessPolicy tenantAccess;
     private final TenantMapper tenantMapper;
     private final UserTenantMapper userTenantMapper;
     private final StringRedisTemplate stringRedisTemplate;
@@ -46,7 +49,7 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
     private final TenantActivityRecorder activityRecorder;
 
     @Override
-    @QueryCached(keyPrefix = TENANT_SETTINGS_KEY, seconds = HOURS_4, access = Access.TENANT,
+    @QueryCached(keyPrefix = TENANT_SETTINGS_KEY, seconds = HOURS_4, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant"})
     public TenantSettingsRespDTO getSettings(Long userId, Long tenantId) {
         UserTenantDO membership = requireMembership(userId, tenantId);
@@ -124,31 +127,11 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
     }
 
     private UserTenantDO requireMembership(Long userId, Long tenantId) {
-        if (userId == null) {
-            throw new ClientException(TenantErrorCodeEnum.USER_ID_IS_NULL);
-        }
-        if (tenantId == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
-        }
-        UserTenantDO membership = userTenantMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
-                .eq(UserTenantDO::getUserId, userId)
-                .eq(UserTenantDO::getTenantId, tenantId)
-                .isNull(UserTenantDO::getLeftAt));
-        if (membership == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
-        return membership;
+        return tenantAccess.membership(userId, tenantId);
     }
 
     private TenantDO requireActiveTenant(Long tenantId) {
-        TenantDO tenant = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId)
-                .eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0));
-        if (tenant == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        }
-        return tenant;
+        return tenantAccess.activeTenant(tenantId);
     }
 
     private TenantSettingsRespDTO toResponse(TenantDO tenant, String role) {

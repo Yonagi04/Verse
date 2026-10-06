@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.pricing;
 
+import com.yonagi.verse.common.cache.QueryCache;
+import com.yonagi.verse.common.cache.QueryCacheDependencies;
+
 import com.yonagi.verse.common.cache.QueryCacheTtl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -19,11 +22,12 @@ import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
+@QueryCacheDependencies({"t_llm_service_pricing", "t_llm_pricing_peak_period"})
 public class PricingResolver {
     public static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
     private final LlmServicePricingMapper pricingMapper;
     private final LlmPricingPeakPeriodMapper peakMapper;
-    private final com.yonagi.verse.common.cache.QueryCache queryCache;
+    private final QueryCache queryCache;
 
     public record Rules(
             /** 所有历史价格版本。 */ List<LlmServicePricingDO> prices,

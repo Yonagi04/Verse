@@ -1,9 +1,11 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TeamQueryAccess;
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantInviteAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantInvitesCacheBehavior;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
-import com.yonagi.verse.service.cache.QueryCacheBehaviors;
-import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -23,7 +25,6 @@ import com.yonagi.verse.dto.req.TenantInviteReqDTO;
 import com.yonagi.verse.dto.resp.TenantInviteListRespDTO;
 import com.yonagi.verse.dto.resp.TenantInviteRespDTO;
 import com.yonagi.verse.dto.resp.TenantJoinInfoRespDTO;
-import com.yonagi.verse.dto.resp.TenantInfoRespDTO;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.service.TenantInviteService;
@@ -41,7 +42,6 @@ import java.security.SecureRandom;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.util.Date;
-import java.util.concurrent.TimeUnit;
 
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
 import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
@@ -55,6 +55,8 @@ public class TenantInviteServiceImpl implements TenantInviteService {
     private static final String CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     private static final SecureRandom RANDOM = new SecureRandom();
 
+    private final TenantAccessPolicy tenantAccess;
+    private final TenantInviteAccessPolicy inviteAccess;
     private final TenantInviteMapper tenantInviteMapper;
     private final TenantMapper tenantMapper;
     private final TenantValidationHelper validationHelper;
@@ -124,36 +126,24 @@ public class TenantInviteServiceImpl implements TenantInviteService {
     }
 
     @Override
-    @QueryCached(keyPrefix = TENANT_INVITE_CODE_KEY, seconds = HOURS_1, access = Access.INVITE,
+    @QueryCached(keyPrefix = TENANT_INVITE_CODE_KEY, seconds = HOURS_1, access = TenantInviteAccessPolicy.class,
             tables = {"t_tenant", "t_tenant_invite"})
     public TenantJoinInfoRespDTO getTenantAndInviteCodeInfo(String inviteCode) {
-        TenantInviteDO inviteDO = tenantInviteMapper.selectOne(Wrappers.lambdaQuery(TenantInviteDO.class)
-                .eq(TenantInviteDO::getCode, inviteCode));
-        if (inviteDO == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
-        }
-        Long tenantId = inviteDO.getTenantId();
-        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId).eq(TenantDO::getStatus, 1).eq(TenantDO::getDelFlag, 0));
-        if (tenantDO == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        String name = tenantDO.getName();
-        return new TenantJoinInfoRespDTO(name, inviteCode);
+        TenantInviteDO invite = inviteAccess.requireValidCode(inviteCode);
+        TenantDO tenant = tenantAccess.activeTenant(invite.getTenantId());
+        return new TenantJoinInfoRespDTO(tenant.getName(), inviteCode);
     }
 
     @Override
-    @QueryCached(keyPrefix = TENANT_INVITE_LIST_KEY, seconds = MINUTES_30, access = Access.TEAM,
-            tables = {"t_tenant", "t_user_tenant", "t_tenant_invite"}, behavior = QueryCacheBehaviors.Invites.class)
+    @QueryCached(keyPrefix = TENANT_INVITE_LIST_KEY, seconds = MINUTES_30, access = TeamQueryAccess.class,
+            tables = {"t_tenant", "t_user_tenant", "t_tenant_invite"}, behavior = TenantInvitesCacheBehavior.class)
     public TenantInviteListRespDTO listTenantInviteCodes(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
         return pageAvailableInvites(inviteCandidates(userId, tenantId), pageNum, pageSize);
     }
 
     /** 全部候选作为缓存内容；分页结果不能因某条邀请码自然过期而冻结。 */
     public TenantInviteListRespDTO inviteCandidates(Long userId, Long tenantId) {
-        validationHelper.validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
-        Boolean isJoinedTenant = userTenantService.isUserJoinedTenant(userId, tenantId);
-        if (!isJoinedTenant) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
+        tenantAccess.requireTeamMember(userId, tenantId);
 
         java.util.List<TenantInviteListRespDTO.TenantInviteInfo> records = tenantInviteMapper.selectAvailableCandidates(tenantId, new Date());
         if (!records.isEmpty()) {
@@ -253,16 +243,7 @@ public class TenantInviteServiceImpl implements TenantInviteService {
 
     @Override
     public TenantInviteDO validateAndGetInviteCode(String inviteCode) {
-        // 加入操作实时校验有效性，不能复用失效前的邀请码状态。
-        TenantInviteDO inviteDO = tenantInviteMapper.selectOne(Wrappers.lambdaQuery(TenantInviteDO.class)
-                .eq(TenantInviteDO::getCode, inviteCode));
-        if (inviteDO == null || inviteDO.getIsActive() == 0) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
-        }
-        if (inviteDO.getExpiresAt() != null && inviteDO.getExpiresAt().before(new Date())) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_INVITE_CODE_EXPIRED);
-        }
-        return inviteDO;
+        return inviteAccess.requireValidCode(inviteCode);
     }
 
     @Override

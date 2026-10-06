@@ -1,10 +1,12 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.NoQueryAccess;
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantQueryAccess;
+
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
-import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -63,6 +65,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
             "无法查看该租户下的历史审计记录"
     );
 
+    private final TenantAccessPolicy tenantAccess;
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;
     private final UserMapper userMapper;
@@ -110,7 +113,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     private Integer maxNotificationSendPerDay;
 
     @Override
-    @QueryCached(keyPrefix = TENANT_LIST_KEY, seconds = HOURS_4, access = Access.NONE,
+    @QueryCached(keyPrefix = TENANT_LIST_KEY, seconds = HOURS_4, access = NoQueryAccess.class,
             tables = {"t_user", "t_tenant", "t_user_tenant"})
     public List<TenantInfoListRespDTO> listTenants(Long userId) {
         Long currentTenantId = currentTenantStateService.resolveCurrentTenant(userId).getTenantId();
@@ -220,29 +223,11 @@ public class TenantCrudServiceImpl implements TenantCrudService {
     }
 
     @Override
-    @QueryCached(keyPrefix = TENANT_INFO_KEY, seconds = HOURS_4, access = Access.TENANT,
+    @QueryCached(keyPrefix = TENANT_INFO_KEY, seconds = HOURS_4, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant"})
     public TenantInfoRespDTO getTenantInfo(Long userId, Long tenantId) {
-        if (tenantId == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
-        } else if (userId == null) {
-            throw new ClientException(TenantErrorCodeEnum.USER_ID_IS_NULL);
-        }
-        // 跨租户只读详情每次从数据库复核目标状态与有效成员关系，旧缓存不能延续已撤销的访问资格。
-        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId)
-                .eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0));
-        if (tenantDO == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        }
-        UserTenantDO membership = userTenantService.getOne(Wrappers.lambdaQuery(UserTenantDO.class)
-                .eq(UserTenantDO::getUserId, userId)
-                .eq(UserTenantDO::getTenantId, tenantId)
-                .isNull(UserTenantDO::getLeftAt));
-        if (membership == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
+        TenantDO tenantDO = tenantAccess.activeTenant(tenantId);
+        UserTenantDO membership = tenantAccess.membership(userId, tenantId);
         // 完整响应由统一查询切面缓存，实时权限由命中前校验保护。
         TenantInfoRespDTO resp = new TenantInfoRespDTO();
         BeanUtil.copyProperties(tenantDO, resp);

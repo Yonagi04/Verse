@@ -1,8 +1,12 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.playground.PlaygroundAccessPolicy;
+import com.yonagi.verse.service.playground.PlaygroundQueryAccess;
+import com.yonagi.verse.service.playground.WorkbenchDetailCacheBehavior;
+import com.yonagi.verse.service.playground.WorkbenchListCacheBehavior;
+import com.yonagi.verse.service.playground.WorkbenchModelsCacheBehavior;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
-import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
@@ -46,6 +50,7 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
     private static final ZoneId ZONE = ZoneId.of("Asia/Shanghai");
     private static final Set<String> ACTIVE = Set.of("PENDING", "STREAMING", "STOPPING");
     private final PlaygroundService playgroundService;
+    private final PlaygroundAccessPolicy playgroundAccess;
     private final PlaygroundWorkspaceMapper workspaceMapper;
     private final PlaygroundAttemptMapper attemptMapper;
     private final LlmServiceMapper modelMapper;
@@ -58,12 +63,12 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
     private final Map<Long, Sinks.One<Boolean>> stops = new ConcurrentHashMap<>();
 
     private void enabled(UserContext actor, Long tenant) {
-        if (!playgroundService.status(actor, tenant).enabled()) throw new ClientException(PlaygroundErrorCodeEnum.DISABLED);
+        playgroundAccess.requireEnabled(actor, tenant);
     }
 
     @Override
-    @QueryCached(keyPrefix = PLAYGROUND_WORKBENCH_MODELS_KEY, seconds = HOURS_4, access = Access.PLAYGROUND,
-            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_llm_service_capability"}, behavior = QueryCacheBehaviors.WorkbenchModels.class)
+    @QueryCached(keyPrefix = PLAYGROUND_WORKBENCH_MODELS_KEY, seconds = HOURS_4, access = PlaygroundQueryAccess.class,
+            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_llm_service_capability"}, behavior = WorkbenchModelsCacheBehavior.class)
     public List<JSONObject> models(UserContext actor, Long tenant) {
         return withCurrentPrices(tenant, modelMetadata(actor, tenant));
     }
@@ -93,8 +98,8 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
     }
 
     @Override
-    @QueryCached(keyPrefix = PLAYGROUND_PRESET_LIST_KEY, seconds = HOURS_4, access = Access.PLAYGROUND,
-            tables = {"t_tenant", "t_user_tenant", "t_playground_workspace"}, behavior = QueryCacheBehaviors.WorkbenchList.class)
+    @QueryCached(keyPrefix = PLAYGROUND_PRESET_LIST_KEY, seconds = HOURS_4, access = PlaygroundQueryAccess.class,
+            tables = {"t_tenant", "t_user_tenant", "t_playground_workspace"}, behavior = WorkbenchListCacheBehavior.class)
     public List<JSONObject> list(UserContext actor, Long tenant, String kind, String keyword) {
         enabled(actor, tenant);
         if (!Set.of("GROUP", "PRESET").contains(kind)) throw PlaygroundConfiguration.invalid();
@@ -127,8 +132,8 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
     }
 
     @Override
-    @QueryCached(keyPrefix = PLAYGROUND_PRESET_INFO_KEY, seconds = HOURS_4, access = Access.PLAYGROUND,
-            tables = {"t_tenant", "t_user_tenant", "t_playground_workspace"}, behavior = QueryCacheBehaviors.WorkbenchDetail.class)
+    @QueryCached(keyPrefix = PLAYGROUND_PRESET_INFO_KEY, seconds = HOURS_4, access = PlaygroundQueryAccess.class,
+            tables = {"t_tenant", "t_user_tenant", "t_playground_workspace"}, behavior = WorkbenchDetailCacheBehavior.class)
     public JSONObject detail(UserContext actor, Long tenant, Long id) {
         enabled(actor, tenant);
         PlaygroundWorkspaceDO w = owned(actor, tenant, id, false);
@@ -442,10 +447,10 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
                 "createdAt", iso(w.getCreateTime()), "updatedAt", iso(w.getUpdateTime()));
     }
     private PlaygroundWorkspaceDO owned(UserContext actor, Long tenant, Long id, boolean lock) {
-        PlaygroundWorkspaceDO w = lock ? workspaceMapper.lock(tenant, actor.getUserId(), id) : workspaceMapper.selectOne(Wrappers.lambdaQuery(PlaygroundWorkspaceDO.class)
-                .eq(PlaygroundWorkspaceDO::getTenantId, tenant).eq(PlaygroundWorkspaceDO::getOwnerUserId, actor.getUserId())
-                .eq(PlaygroundWorkspaceDO::getWorkspaceId, id).eq(PlaygroundWorkspaceDO::getDelFlag, 0));
-        if (w == null) throw new ClientException(PlaygroundErrorCodeEnum.SESSION_NOT_FOUND); return w;
+        if (!lock) return playgroundAccess.requireWorkspace(actor, tenant, id);
+        PlaygroundWorkspaceDO workspace = workspaceMapper.lock(tenant, actor.getUserId(), id);
+        if (workspace == null) throw new ClientException(PlaygroundErrorCodeEnum.SESSION_NOT_FOUND);
+        return workspace;
     }
     private PlaygroundAttemptDO ownedAttempt(UserContext actor, Long tenant, Long id) {
         PlaygroundAttemptDO a = attemptMapper.selectOne(Wrappers.lambdaQuery(PlaygroundAttemptDO.class).eq(PlaygroundAttemptDO::getTenantId, tenant)

@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.playground.PlaygroundAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
@@ -15,7 +18,6 @@ import com.yonagi.verse.dto.resp.PlaygroundDtos;
 import com.yonagi.verse.resilience.impl.PlaygroundRateLimiter;
 import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.PlaygroundService;
-import com.yonagi.verse.service.forward.ChatMessage;
 import com.yonagi.verse.service.forward.ModelResolver;
 import com.yonagi.verse.service.pricing.PricingResolver;
 import com.yonagi.verse.service.pricing.PricingSnapshot;
@@ -31,6 +33,8 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class PlaygroundWorkbenchServiceImplTest {
+    private final com.yonagi.verse.dao.mapper.TenantMapper tenants = mock(com.yonagi.verse.dao.mapper.TenantMapper.class);
+    private final com.yonagi.verse.dao.mapper.UserTenantMapper memberships = mock(com.yonagi.verse.dao.mapper.UserTenantMapper.class);
     private final PlaygroundService gate = mock(PlaygroundService.class);
     private final PlaygroundWorkspaceMapper workspaces = mock(PlaygroundWorkspaceMapper.class);
     private final PlaygroundAttemptMapper attemptMapper = mock(PlaygroundAttemptMapper.class);
@@ -41,8 +45,19 @@ class PlaygroundWorkbenchServiceImplTest {
     private final LlmForwardService forward = mock(LlmForwardService.class);
     private final PlaygroundAttemptFinalizer finalizer = mock(PlaygroundAttemptFinalizer.class);
     private final PricingResolver pricing = mock(PricingResolver.class);
-    private final PlaygroundWorkbenchServiceImpl service = new PlaygroundWorkbenchServiceImpl(gate, workspaces, attemptMapper,
-            models, usage, resolver, pricing, limits, forward, finalizer);
+    private final PlaygroundAccessPolicy playgroundAccess = new PlaygroundAccessPolicy(
+            new TenantAccessPolicy(tenants, memberships), workspaces);
+    private final PlaygroundWorkbenchServiceImpl service = new PlaygroundWorkbenchServiceImpl(gate,
+                playgroundAccess,
+                workspaces,
+                attemptMapper,
+                models,
+                usage,
+                resolver,
+                pricing,
+                limits,
+                forward,
+                finalizer);
     private final UserContext actor = new UserContext().setUserId(7L).setCurrentTenantId(2L);
     private final Map<Long, PlaygroundWorkspaceDO> store = new HashMap<>();
     private final List<PlaygroundAttemptDO> history = new ArrayList<>();
@@ -51,8 +66,10 @@ class PlaygroundWorkbenchServiceImplTest {
     @BeforeEach
     void setup() {
         var assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "test");
-        for (Class<?> type : List.of(PlaygroundWorkspaceDO.class, PlaygroundAttemptDO.class, LlmServiceDO.class, TokenUsageDO.class)) TableInfoHelper.initTableInfo(assistant, type);
-        when(gate.status(any(), anyLong())).thenReturn(new PlaygroundDtos.Status(true, 6, 120));
+        for (Class<?> type : List.of(PlaygroundWorkspaceDO.class, PlaygroundAttemptDO.class, LlmServiceDO.class, TokenUsageDO.class, com.yonagi.verse.dao.entity.TenantDO.class, com.yonagi.verse.dao.entity.UserTenantDO.class)) TableInfoHelper.initTableInfo(assistant, type);
+        com.yonagi.verse.dao.entity.TenantDO tenant = new com.yonagi.verse.dao.entity.TenantDO(); tenant.setPlaygroundEnabled(1);
+        when(tenants.selectOne(any())).thenReturn(tenant);
+        when(memberships.selectOne(any())).thenReturn(new com.yonagi.verse.dao.entity.UserTenantDO());
         when(workspaces.insert(any())).thenAnswer(i -> { PlaygroundWorkspaceDO w = i.getArgument(0); store.put(w.getWorkspaceId(), w); return 1; });
         when(workspaces.lock(anyLong(), anyLong(), anyLong())).thenAnswer(i -> {
             PlaygroundWorkspaceDO w = store.get(i.getArgument(2));

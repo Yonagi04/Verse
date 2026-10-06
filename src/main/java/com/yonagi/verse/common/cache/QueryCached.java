@@ -12,7 +12,7 @@ public @interface QueryCached {
     /** 基础有效期，单位为秒。 */
     long seconds();
     /** 命中和回源前都要实时校验的访问权限。 */
-    QueryCatalogue.Access access();
+    Class<? extends QueryAccessPolicy> access();
     /** 查询依赖的数据库表，写入时自动触发失效。 */
     String[] tables();
     /** 特殊业务策略；默认直接缓存方法返回值。 */

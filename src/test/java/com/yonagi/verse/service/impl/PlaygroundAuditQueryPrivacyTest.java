@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.dao.entity.LlmAuditLogDO;
 import com.yonagi.verse.dao.mapper.LlmAuditLogMapper;
@@ -28,7 +30,11 @@ class PlaygroundAuditQueryPrivacyTest {
         row.setPromptObjectKey("old-prompt-object");
         row.setResponseObjectKey("old-response-object");
         when(mapper.selectOne(any())).thenReturn(row);
-        LlmAuditServiceImpl service = new LlmAuditServiceImpl(mapper, mock(UserMapper.class), membership, s3);
+        LlmAuditServiceImpl service = new LlmAuditServiceImpl(mock(TenantAccessPolicy.class),
+                mapper,
+                mock(UserMapper.class),
+                membership,
+                s3);
 
         var detail = service.getAuditDetail(new UserContext().setUserId(1L)
                 .setCurrentTenantId(2L).setRole("ADMIN"), 2L, 99L);

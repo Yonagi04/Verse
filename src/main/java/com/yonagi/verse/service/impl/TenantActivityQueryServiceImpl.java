@@ -1,17 +1,16 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantActivityAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantQueryAccess;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.TenantActivityType;
-import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.dao.entity.TenantActivityLogDO;
 import com.yonagi.verse.dao.entity.TenantDO;
-import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.TenantActivityLogMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
@@ -24,7 +23,6 @@ import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -44,12 +42,13 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
     static final int MIN_LIMIT = 1;
     static final int MAX_LIMIT = 50;
 
+    private final TenantActivityAccessPolicy activityAccess;
     private final TenantMapper tenantMapper;
     private final UserTenantMapper userTenantMapper;
     private final TenantActivityLogMapper activityLogMapper;
 
     @Override
-    @QueryCached(keyPrefix = TENANT_ACTIVITY_STATUS_KEY, seconds = HOURS_4, access = Access.TENANT,
+    @QueryCached(keyPrefix = TENANT_ACTIVITY_STATUS_KEY, seconds = HOURS_4, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant"})
     public TenantActivityStatusRespDTO getStatus(Long userId, Long tenantId) {
         TenantDO tenant = requireReadableTenant(userId, tenantId);
@@ -57,15 +56,11 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
     }
 
     @Override
-    @QueryCached(keyPrefix = TENANT_ACTIVITY_LIST_KEY, seconds = MINUTES_30, access = Access.ACTIVITY,
+    @QueryCached(keyPrefix = TENANT_ACTIVITY_LIST_KEY, seconds = MINUTES_30, access = TenantActivityAccessPolicy.class,
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_tenant_activity_log"})
     public TenantActivityListRespDTO listActivities(Long userId, Long tenantId,
                                                      Integer requestedLimit, String encodedCursor) {
-        TenantDO tenant = requireReadableTenant(userId, tenantId);
-        // 每一批都读取实时开关；关闭时必须在访问事实表前失败。
-        if (!isRecordingEnabled(tenant)) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_ACTIVITY_RECORDING_DISABLED);
-        }
+        activityAccess.requireRecording(userId, tenantId);
 
         int limit = validateLimit(requestedLimit);
         ActivityCursor cursor = parseCursor(encodedCursor);
@@ -84,28 +79,7 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
     }
 
     private TenantDO requireReadableTenant(Long userId, Long tenantId) {
-        if (userId == null) {
-            throw new ClientException(TenantErrorCodeEnum.USER_ID_IS_NULL);
-        }
-        if (tenantId == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
-        }
-        TenantDO tenant = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId)
-                .eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0));
-        if (tenant == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        }
-        UserTenantDO membership = userTenantMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
-                .eq(UserTenantDO::getUserId, userId)
-                .eq(UserTenantDO::getTenantId, tenantId)
-                .isNull(UserTenantDO::getLeftAt)
-                .in(UserTenantDO::getRole, "MEMBER", "ADMIN", "SUPER_ADMIN"));
-        if (membership == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
-        return tenant;
+        return activityAccess.requireReadable(userId, tenantId);
     }
 
     private boolean isRecordingEnabled(TenantDO tenant) {

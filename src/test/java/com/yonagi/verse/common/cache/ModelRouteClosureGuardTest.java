@@ -26,12 +26,12 @@ class ModelRouteClosureGuardTest {
         snapshot.setDelFlag(0);
         when(models.countCallableService(20L, 30L)).thenReturn(1);
         // 始终返回旧缓存，模拟缓存失效失败；授权必须由实时 SQL 决定。
-        when(cache.get(anyString(), anyString(), any(), any(), any(), anyLong(), any(), any(), any()))
+        when(cache.get(anyString(), anyString(), any(), any(), any(), anyLong(), any(), any(), any(), any()))
                 .thenAnswer(call -> call.<String>getArgument(0).endsWith("resolve") ? snapshot : UpstreamProtocol.OPENAI_COMPAT);
         var target = new ModelResolverImpl(mock(StringRedisTemplate.class), models,
                 mock(LlmServiceCapabilityMapper.class), new AdapterRegistry(List.of()));
         var factory = new AspectJProxyFactory(target);
-        factory.addAspect(QueryCacheTestSupport.aspect(cache, mock(QueryAccessGuard.class)));
+        factory.addAspect(QueryCacheTestSupport.aspect(cache));
         ModelResolver proxy = factory.getProxy();
         assertEquals(snapshot, proxy.resolve(20L, "alias"));
         assertEquals(UpstreamProtocol.OPENAI_COMPAT, proxy.protocolFor(snapshot, ModelOperation.CHAT_COMPLETIONS));

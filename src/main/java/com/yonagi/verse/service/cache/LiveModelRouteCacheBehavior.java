@@ -9,6 +9,10 @@ import org.springframework.stereotype.Component;
 @Component
 public class LiveModelRouteCacheBehavior implements QueryCacheBehavior {
     @Override
+    public boolean cacheFailure(com.yonagi.verse.common.convention.exception.ClientException error) {
+        return com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum.MODEL_NOT_FOUND.code().equals(error.getErrorCode());
+    }
+    @Override
     public Object currentView(Object target, Object[] args, Object cached) {
         ((ModelResolverImpl) target).requireAvailable((LlmServiceDO) cached);
         return cached;

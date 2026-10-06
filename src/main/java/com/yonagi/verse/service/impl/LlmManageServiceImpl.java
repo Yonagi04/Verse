@@ -1,9 +1,12 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.NoQueryAccess;
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantQueryAccess;
+
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -18,7 +21,6 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.LLMProviderEnum;
 import com.yonagi.verse.common.enums.LlmManageErrorCodeEnum;
-import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.JwtUtil;
 import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.common.util.SensitiveUtil;
@@ -28,7 +30,6 @@ import com.yonagi.verse.dao.entity.LlmServiceCapabilityDO;
 import com.yonagi.verse.dao.mapper.LlmServiceCapabilityMapper;
 import com.yonagi.verse.dto.req.CapabilityBindingReqDTO;
 import com.yonagi.verse.service.forward.CapabilityConfiguration;
-import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.entity.UserDO;
 import com.yonagi.verse.dao.mapper.LlmServiceMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
@@ -83,6 +84,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             "删除模型后将无法恢复。由于模型实例与模型服务ID唯一绑定，因此在删除模型后即使重新添加完全相同的模型也有可能会对存量业务带来影响。" +
             "建议在删除模型前观测模型的使用情况，并利用租户内公告进行周知租户成员，提前完成资源迁移。如有疑问，请联系技术支持。";
 
+    private final TenantAccessPolicy tenantAccess;
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;
     private final AesUtil aesUtil;
@@ -182,7 +184,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    @QueryCached(keyPrefix = LLM_SERVICE_MANAGE_LIST_KEY, seconds = HOURS_4, access = Access.TENANT,
+    @QueryCached(keyPrefix = LLM_SERVICE_MANAGE_LIST_KEY, seconds = HOURS_4, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_service", "t_llm_service_capability", "t_llm_service_tag", "t_llm_tag", "t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum,
                                                 Integer pageSize, String keyword, String tagCodes) {
@@ -463,7 +465,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    @QueryCached(keyPrefix = LLM_SERVICE_MANAGE_INFO_KEY, seconds = HOURS_4, access = Access.TENANT,
+    @QueryCached(keyPrefix = LLM_SERVICE_MANAGE_INFO_KEY, seconds = HOURS_4, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_service", "t_llm_service_capability", "t_llm_service_tag", "t_llm_tag", "t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public LlmServiceInfoRespDTO getLlmInfo(Long userId, Long tenantId, Long serviceId) {
         validateTenantAndMembership(userId, tenantId);
@@ -667,7 +669,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    @QueryCached(keyPrefix = LLM_SERVICE_COUNT_KEY, seconds = HOURS_4, access = Access.TENANT,
+    @QueryCached(keyPrefix = LLM_SERVICE_COUNT_KEY, seconds = HOURS_4, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_service", "t_llm_service_capability", "t_llm_service_tag", "t_llm_tag", "t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public Integer getLlmServiceCount(Long userId, Long tenantId) {
         validateTenantAndMembership(userId, tenantId);
@@ -676,7 +678,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    @QueryCached(keyPrefix = LLM_SERVICE_TAG_LIST_KEY, seconds = HOURS_12, access = Access.NONE,
+    @QueryCached(keyPrefix = LLM_SERVICE_TAG_LIST_KEY, seconds = HOURS_12, access = NoQueryAccess.class,
             tables = {"t_llm_tag"})
     public List<com.yonagi.verse.dto.resp.TagInfoRespDTO> listTags() {
         return metadataService.catalogue();
@@ -712,16 +714,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     private void validateTenantAndMembership(Long userId, Long tenantId) {
-        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId)
-                .eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0));
-        if (tenantDO == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        }
-        if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
+        tenantAccess.requireMember(userId, tenantId);
     }
 
     /** 原子替换能力绑定；服务更新事务同时清除路由缓存。 */

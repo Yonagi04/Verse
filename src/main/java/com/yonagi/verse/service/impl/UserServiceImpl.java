@@ -1,10 +1,11 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.NoQueryAccess;
+
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -22,13 +23,10 @@ import com.yonagi.verse.common.util.DeviceUtil;
 import com.yonagi.verse.common.util.GeoIpUtil;
 import com.yonagi.verse.common.util.SensitiveUtil;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
-import com.yonagi.verse.dao.entity.LoginDeviceDO;
 import com.yonagi.verse.dao.entity.UserDO;
 import com.yonagi.verse.dao.entity.UserPrivacyDO;
-import com.yonagi.verse.dao.mapper.LoginDeviceMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dao.mapper.UserPrivacyMapper;
-import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.*;
@@ -300,7 +298,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
-    @QueryCached(keyPrefix = USER_PROFILE_KEY, seconds = HOURS_6, access = Access.NONE,
+    @QueryCached(keyPrefix = USER_PROFILE_KEY, seconds = HOURS_6, access = NoQueryAccess.class,
             tables = {"t_user", "t_user_privacy"})
     public UserRespDTO getCurrentUser(Long userId, boolean mask) {
         // 查询隐私设置
@@ -335,7 +333,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     }
 
     @Override
-    @QueryCached(keyPrefix = USER_PUBLIC_PROFILE_KEY, seconds = HOURS_6, access = Access.NONE,
+    @QueryCached(keyPrefix = USER_PUBLIC_PROFILE_KEY, seconds = HOURS_6, access = NoQueryAccess.class,
             tables = {"t_user", "t_user_privacy"})
     public UserInfoRespDTO getUserInfo(Long userId) {
         UserDO userDO = queryActiveUserFromUserId(userId);

@@ -1,10 +1,7 @@
 package com.yonagi.verse.service.helper;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.dao.entity.TenantDO;
-import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -17,7 +14,7 @@ import org.springframework.stereotype.Component;
 @RequiredArgsConstructor
 public class TenantValidationHelper {
 
-    private final TenantMapper tenantMapper;
+    private final com.yonagi.verse.service.tenant.TenantAccessPolicy tenantAccess;
     private final UserTenantService userTenantService;
 
     /**
@@ -28,17 +25,7 @@ public class TenantValidationHelper {
      * @return 租户 DO（供调用方使用，避免重复查询）
      */
     public TenantDO validateTenantTeamActive(Long tenantId, TenantErrorCodeEnum notTeamError) {
-        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId)
-                .eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0));
-        if (tenantDO == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        }
-        if (!"TEAM".equals(tenantDO.getType())) {
-            throw new ClientException(notTeamError);
-        }
-        return tenantDO;
+        return tenantAccess.requireTeam(tenantId, notTeamError);
     }
 
     /**
@@ -49,9 +36,6 @@ public class TenantValidationHelper {
      * @param tenantId 租户业务 ID
      */
     public void validateMembership(Long userId, Long tenantId) {
-        validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
-        if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
+        tenantAccess.requireTeamMember(userId, tenantId);
     }
 }

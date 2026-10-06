@@ -48,22 +48,22 @@
 在 Spring Bean 的公开实现方法上声明缓存，无需修改 `QueryCatalogue` 或通用切面：
 
 ```java
-@QueryCached(keyPrefix = TENANT_SETTINGS_KEY, seconds = HOURS_4, access = Access.TENANT,
+@QueryCached(keyPrefix = TENANT_SETTINGS_KEY, seconds = HOURS_4, access = TenantQueryAccess.class,
         tables = {"t_tenant", "t_user_tenant"})
 public TenantSettingsRespDTO getSettings(Long userId, Long tenantId) { ... }
 ```
 
 - `keyPrefix`：Redis 业务键前缀，沿用 `RedisKeyConstant`。
 - `seconds`：基础 TTL，单位为秒，沿用 `QueryCacheTtl`；底层继续增加随机抖动。
-- `access`：命中和回源前执行实时权限校验。租户校验沿用前两个参数为用户（或 `UserContext`）和租户 ID 的约定。
+- `access`：显式指定实现 `QueryAccessPolicy` 的业务策略类型；命中、回源和 Redis 降级均执行实时校验。策略解析参数并调用所属领域的权威规则，原业务入口调用同一规则。通用缓存不得识别业务权限枚举、参数位置或调用业务 Mapper。无需额外校验的查询显式指定 `NoQueryAccess.class`。
 - `tables`：完整的数据库依赖表集合；写入这些表时由统一机制失效。
 - `behavior`：可选业务策略，默认直接缓存原方法返回值。
 
 `QueryCatalogue` 在服务创建前读取 Bean 类型，从方法注解收集策略与依赖表，不会提前创建服务。`QueryWriteInterceptor` 使用自动发现的依赖执行写入失效和事务栅栏。缓存键包含方法完整签名，重载方法互相隔离；用户上下文只转换为用户、租户和角色，不包含凭证。
 
-需要条件缓存、参数规范化、额外权限校验、定制回源、实时视图或结果完整性检查时，实现 `QueryCacheBehavior`，注册为 Spring Bean，并通过 `behavior = MyBehavior.class` 选择。新增业务策略放在独立文件中，不修改核心缓存类。
+需要条件缓存、参数规范化、额外权限校验、定制回源、实时视图或结果完整性检查时，实现 `QueryCacheBehavior`，注册为 Spring Bean，并通过 `behavior = MyBehavior.class` 选择。新增业务策略放在所属业务的独立文件中，不修改核心缓存类。授权状态不缓存，空值与空集合保留短期负缓存，业务异常默认不缓存；只有所属业务通过 cacheFailure 显式确认的资源不存在允许负缓存，授权失败不缓存。手工 `QueryCache.read` 的入口通过所属 Bean 上的 `@QueryCacheDependencies` 显式声明表依赖，不在目录内维护业务表名单。
 
-现有特殊策略集中在 `service.cache.QueryCacheBehaviors`：工作台只缓存预设和模型元数据，价格实时计算；邀请码从候选集合实时过滤并分页；API Key 列表实时补充最近使用时间；报表和概览保留原有时间边界与完整性检查。优先复用或扩展这些策略，禁止在 Service 中复制相同规则。
+现有特殊策略位于所属业务的 `service.tenant`、`service.playground`、`service.reporting` 和 `service.apikey`：工作台只缓存预设和模型元数据，价格实时计算；邀请码从候选集合实时过滤并分页；API Key 列表实时补充最近使用时间；报表和概览保留原有时间边界与完整性检查。优先复用或扩展这些策略，禁止在 Service 中复制相同规则。
 
 缓存依赖 Spring AOP：方法必须公开、非 `static`、非 `final`，所属类必须可代理，调用必须经过 Spring 代理。同类内自调用不会触发新的缓存拦截。事务内查询继续执行原方法；直接调用 `QueryCache.read` 的既有入口保持原实现，新增代码优先使用注解。
 

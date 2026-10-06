@@ -1,6 +1,13 @@
 package com.yonagi.verse.common.cache;
 
-import com.yonagi.verse.service.cache.QueryCacheBehaviors;
+import com.yonagi.verse.service.apikey.ApiKeyListCacheBehavior;
+import com.yonagi.verse.service.cache.HourlyCacheBehavior;
+import com.yonagi.verse.service.playground.WorkbenchListCacheBehavior;
+import com.yonagi.verse.service.playground.WorkbenchModelsCacheBehavior;
+import com.yonagi.verse.service.reporting.UsageReportWindowCacheBehavior;
+import com.yonagi.verse.service.tenant.TenantInvitesCacheBehavior;
+import com.yonagi.verse.service.tenant.TenantOverviewCacheBehavior;
+
 import com.yonagi.verse.service.cache.LiveModelBindingCacheBehavior;
 import com.yonagi.verse.service.cache.LiveModelRouteCacheBehavior;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
@@ -28,18 +35,23 @@ final class QueryCacheTestSupport {
                 .filter(policy -> policy.name().equals(owner + "." + method)).findFirst().orElseThrow();
     }
 
-    static CoreQueryCacheAspect aspect(QueryCache cache, QueryAccessGuard guard) {
+    static CoreQueryCacheAspect aspect(QueryCache cache, QueryAccessPolicy... policies) {
         var beans = new DefaultListableBeanFactory();
-        beans.registerSingleton("hourly", new QueryCacheBehaviors.Hourly());
-        beans.registerSingleton("overview", new QueryCacheBehaviors.Overview());
-        beans.registerSingleton("reportWindow", new QueryCacheBehaviors.ReportWindow());
-        beans.registerSingleton("workbenchModels", new QueryCacheBehaviors.WorkbenchModels());
-        beans.registerSingleton("workbenchList", new QueryCacheBehaviors.WorkbenchList());
-        beans.registerSingleton("workbenchDetail", new QueryCacheBehaviors.WorkbenchDetail(guard));
-        beans.registerSingleton("invites", new QueryCacheBehaviors.Invites());
-        beans.registerSingleton("apiKeys", new QueryCacheBehaviors.ApiKeys(cache));
+        beans.registerSingleton("hourly", new HourlyCacheBehavior());
+        beans.registerSingleton("overview", new TenantOverviewCacheBehavior());
+        beans.registerSingleton("reportWindow", new UsageReportWindowCacheBehavior());
+        beans.registerSingleton("workbenchModels", new WorkbenchModelsCacheBehavior());
+        beans.registerSingleton("workbenchList", new WorkbenchListCacheBehavior());
+
+        beans.registerSingleton("invites", new TenantInvitesCacheBehavior());
+        beans.registerSingleton("apiKeys", new ApiKeyListCacheBehavior(cache));
         beans.registerSingleton("liveModelRoute", new LiveModelRouteCacheBehavior());
         beans.registerSingleton("liveModelBinding", new LiveModelBindingCacheBehavior());
-        return new CoreQueryCacheAspect(cache, guard, beans);
+        for (Class<? extends QueryAccessPolicy> type : catalogue().policies().values().stream().map(QueryCatalogue.Policy::access).distinct().toList()) {
+            if (type == NoQueryAccess.class) continue;
+            QueryAccessPolicy policy = java.util.Arrays.stream(policies).filter(type::isInstance).findFirst().orElseGet(() -> org.mockito.Mockito.mock(type));
+            beans.registerSingleton("access-" + type.getName(), policy);
+        }
+        return new CoreQueryCacheAspect(cache, beans);
     }
 }

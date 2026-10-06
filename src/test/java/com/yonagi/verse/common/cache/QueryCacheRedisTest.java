@@ -1,5 +1,8 @@
 package com.yonagi.verse.common.cache;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantQueryAccess;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.alibaba.fastjson2.TypeReference;
 import com.alibaba.fastjson2.JSON;
@@ -91,10 +94,10 @@ class QueryCacheRedisTest {
                     ()->{},()->{loads.incrementAndGet();throw new ClientException(UserErrorCodeEnum.USER_NOT_EXIST);},value->true));
             assertEquals(UserErrorCodeEnum.USER_NOT_EXIST.code(),error.getErrorCode());
         }
-        assertEquals(2,loads.get());
+        assertEquals(4,loads.get(), "业务异常不作为授权结论缓存");
         for(int i=0;i<3;i++)assertEquals(List.of(),cache.get("empty",RedisKeyConstant.CORE_QUERY_CACHE_TEST_KEY+"empty:","id",new TypeReference<List<String>>(){}.getType(),List.of("t_test"),10000,
                 ()->{},()->{loads.incrementAndGet();return List.of();},value->true));
-        assertEquals(3,loads.get());
+        assertEquals(5,loads.get());
     }
     @Test void deploymentRedisPolicyMustProtectLocksAndFences() {
         Properties configuration = redis.execute((org.springframework.data.redis.core.RedisCallback<Properties>)
@@ -152,6 +155,34 @@ class QueryCacheRedisTest {
         assertThrows(ClientException.class,()->cache.get("generic",RedisKeyConstant.CORE_QUERY_CACHE_TEST_KEY+"generic:",List.of(10L,20L,"MEMBER"),type,List.of("t_test"),10000,
                 ()->{throw new ClientException("revoked");},()->List.of(),value->true));
     }
+
+    @Test void playgroundIdentityRulesProtectWarmAndColdResults() throws Throwable {
+        var tenants = mock(TenantMapper.class);
+        var members = mock(UserTenantMapper.class);
+        TenantDO tenant = new TenantDO(); tenant.setPlaygroundEnabled(1);
+        UserTenantDO member = new UserTenantDO(); member.setRole("ADMIN");
+        when(tenants.selectOne(any())).thenReturn(tenant);
+        when(members.selectOne(any())).thenReturn(member);
+        var domain = new com.yonagi.verse.service.playground.PlaygroundAccessPolicy(
+                new TenantAccessPolicy(tenants, members), mock(PlaygroundWorkspaceMapper.class));
+        var access = new com.yonagi.verse.service.playground.PlaygroundQueryAccess(domain);
+        var actor = new com.yonagi.verse.common.security.UserContext()
+                .setUserId(10L).setCurrentTenantId(20L).setRole("ADMIN");
+        AtomicInteger loads = new AtomicInteger();
+        Runnable check = () -> access.check(new Object[]{actor, 20L});
+        String prefix = RedisKeyConstant.CORE_QUERY_CACHE_TEST_KEY + "identity:";
+        assertEquals("private", cache.get("identity", prefix, "warm", String.class, List.of("t_test"), 10000,
+                check, () -> { loads.incrementAndGet(); return "private"; }, value -> true));
+        actor.setApiKeyId(99L);
+        for (String key : List.of("warm", "cold")) {
+            ClientException error = assertThrows(ClientException.class, () -> cache.get("identity", prefix, key,
+                    String.class, List.of("t_test"), 10000, check,
+                    () -> { loads.incrementAndGet(); return "private"; }, value -> true));
+            assertEquals(com.yonagi.verse.common.enums.TenantErrorCodeEnum.TENANT_CONTEXT_MISMATCH.code(), error.getErrorCode());
+        }
+        assertThrows(ClientException.class, () -> domain.requireEnabled(actor, 20L));
+        assertEquals(1, loads.get());
+    }
     @Test void ttlIsSpreadAndNeverFallsBelowConfiguredBaseline() {
         Set<Long> ttls=new HashSet<>();for(int i=0;i<100;i++){long ttl=cache.jitter(10000);assertTrue(ttl>=10000&&ttl<=12000);ttls.add(ttl);}assertTrue(ttls.size()>20);
     }
@@ -172,7 +203,7 @@ class QueryCacheRedisTest {
                 org.mockito.Mockito.mock(com.yonagi.verse.dao.mapper.LlmServiceCapabilityMapper.class),
                 new com.yonagi.verse.service.forward.AdapterRegistry(List.of()));
         var factory = new org.springframework.aop.aspectj.annotation.AspectJProxyFactory(resolver);
-        factory.addAspect(QueryCacheTestSupport.aspect(cache, org.mockito.Mockito.mock(QueryAccessGuard.class)));
+        factory.addAspect(QueryCacheTestSupport.aspect(cache));
         com.yonagi.verse.service.forward.ModelResolver proxy = factory.getProxy();
         assertEquals("custom", proxy.resolve(20L, "alias").getProvider());
         assertEquals("custom", proxy.resolve(20L, "alias").getProvider());
@@ -308,9 +339,9 @@ class QueryCacheRedisTest {
     @Test void warmKeyListStillRejectsRemovedMembershipAndDisabledTenant() {
         var fixture = new KeyListFixture();
         fixture.service.listApiKeys(10L, 20L, 1, 10);
-        when(fixture.memberships.selectActiveMembership(10L, 20L)).thenReturn(null);
+        when(fixture.memberships.selectOne(any())).thenReturn(null);
         assertThrows(ClientException.class, () -> fixture.service.listApiKeys(10L, 20L, 1, 10));
-        when(fixture.memberships.selectActiveMembership(10L, 20L)).thenReturn(new UserTenantDO());
+        when(fixture.memberships.selectOne(any())).thenReturn(new UserTenantDO());
         when(fixture.tenants.selectOne(any())).thenReturn(null);
         assertThrows(ClientException.class, () -> fixture.service.listApiKeys(10L, 20L, 1, 10));
         verify(fixture.mapper, times(1)).selectPage(any(Page.class), any());
@@ -407,13 +438,13 @@ class QueryCacheRedisTest {
                 return new Page<com.yonagi.verse.dto.resp.NotificationListRespDTO.NotificationInfo>(query.getPageNum(), query.getPageSize())
                         .setTotal(1).setRecords(List.of(record));
             });
-            var target = new com.yonagi.verse.service.impl.NotificationServiceImpl(mapper,
+            var target = new com.yonagi.verse.service.impl.NotificationServiceImpl(mock(TenantAccessPolicy.class), mapper,
                     mock(org.springframework.messaging.simp.SimpMessagingTemplate.class),
                     mock(com.yonagi.verse.async.api.DomainEventPublisher.class), mock(TenantMapper.class),
                     mock(UserTenantService.class), mock(NotificationMapper.class), cache);
             var proxy = new AspectJProxyFactory(target);
             proxy.setProxyTargetClass(true);
-            proxy.addAspect(QueryCacheTestSupport.aspect(cache, mock(QueryAccessGuard.class)));
+            proxy.addAspect(QueryCacheTestSupport.aspect(cache));
             service = proxy.getProxy();
         }
     }
@@ -430,7 +461,7 @@ class QueryCacheRedisTest {
             key.setApiKeyId(30L); key.setStatus(1); key.setName("original"); key.setKeyPrefix("sk_prefix");
             key.setApiKey("hash-must-not-be-cached"); key.setCostLimitEnabled(false); key.setCostConfigVersion(0L);
             when(tenants.selectOne(any())).thenReturn(new TenantDO());
-            when(memberships.selectActiveMembership(anyLong(), anyLong())).thenReturn(new UserTenantDO());
+            when(memberships.selectOne(any())).thenReturn(new UserTenantDO());
             var users = mock(UserTenantService.class);
             when(users.isUserJoinedTenant(anyLong(), anyLong())).thenReturn(true);
             when(mapper.selectPage(any(Page.class), any())).thenAnswer(call -> {
@@ -448,10 +479,13 @@ class QueryCacheRedisTest {
                 ApiKeyDO current = new ApiKeyDO(); current.setApiKeyId(key.getApiKeyId()); current.setLastUsedAt(usedAt);
                 return List.of(current);
             });
-            var target = new ApiKeyServiceImpl(mock(CostBudgetService.class), tenants, users, redis);
+            var target = new ApiKeyServiceImpl(new TenantAccessPolicy(tenants, memberships),
+                mock(CostBudgetService.class),
+                tenants,
+                users,
+                redis);
             ReflectionTestUtils.setField(target, "baseMapper", mapper);
-            var guard = new QueryAccessGuard(cache, tenants, memberships, mock(TenantInviteMapper.class),
-                    mock(PlaygroundWorkspaceMapper.class), mock(org.springframework.beans.factory.ObjectProvider.class));
+            var guard = new TenantQueryAccess(new TenantAccessPolicy(tenants, memberships));
             var proxy = new AspectJProxyFactory(target); proxy.setProxyTargetClass(true);
             proxy.addAspect(QueryCacheTestSupport.aspect(cache, guard)); service = proxy.getProxy();
         }

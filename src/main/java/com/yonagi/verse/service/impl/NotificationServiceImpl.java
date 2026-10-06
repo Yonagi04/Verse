@@ -1,11 +1,15 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.NoQueryAccess;
+import com.yonagi.verse.common.cache.QueryCache;
+import com.yonagi.verse.common.cache.QueryCacheDependencies;
+import com.yonagi.verse.service.cache.HourlyCacheBehavior;
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantQueryAccess;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
-import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.yonagi.verse.common.cache.QueryCacheTtl;
 import cn.hutool.core.bean.BeanUtil;
-import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -16,11 +20,9 @@ import com.yonagi.verse.async.event.NotificationEvent;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.NotificationErrorCodeEnum;
-import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.NotificationDO;
 import com.yonagi.verse.dao.entity.NotificationRecipientDO;
-import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.mapper.NotificationMapper;
 import com.yonagi.verse.dao.mapper.NotificationRecipientMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
@@ -33,7 +35,6 @@ import com.yonagi.verse.service.NotificationService;
 import com.yonagi.verse.service.UserTenantService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -56,19 +57,21 @@ import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 @Service
 @RequiredArgsConstructor
 @Slf4j
+@QueryCacheDependencies({"t_notification"})
 public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, NotificationDO> implements NotificationService {
 
+    private final TenantAccessPolicy tenantAccess;
     private final NotificationRecipientMapper notificationRecipientMapper;
     private final SimpMessagingTemplate messagingTemplate;
     private final DomainEventPublisher domainEventPublisher;
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;
     private final NotificationMapper notificationMapper;
-    private final com.yonagi.verse.common.cache.QueryCache queryCache;
+    private final QueryCache queryCache;
 
     @Override
-    @QueryCached(keyPrefix = NOTIFICATION_LIST_KEY, seconds = MINUTES_10, access = Access.NONE,
-            tables = {"t_notification", "t_notification_recipient"}, behavior = QueryCacheBehaviors.Hourly.class)
+    @QueryCached(keyPrefix = NOTIFICATION_LIST_KEY, seconds = MINUTES_10, access = NoQueryAccess.class,
+            tables = {"t_notification", "t_notification_recipient"}, behavior = HourlyCacheBehavior.class)
     public NotificationListRespDTO getNotificationList(Long userId, NotificationListReqDTO requestParam) {
         long startTime = System.currentTimeMillis() - Duration.ofDays(90).toMillis();
         // 筛选在数据库分页前执行，确保总条数与当前页使用相同条件。
@@ -117,8 +120,8 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     }
 
     @Override
-    @QueryCached(keyPrefix = NOTIFICATION_UNREAD_COUNT_KEY, seconds = MINUTES_10, access = Access.NONE,
-            tables = {"t_notification", "t_notification_recipient"}, behavior = QueryCacheBehaviors.Hourly.class)
+    @QueryCached(keyPrefix = NOTIFICATION_UNREAD_COUNT_KEY, seconds = MINUTES_10, access = NoQueryAccess.class,
+            tables = {"t_notification", "t_notification_recipient"}, behavior = HourlyCacheBehavior.class)
     public NotificationUnreadCountRespDTO getUnreadNotificationCount(Long userId) {
         long startTime = System.currentTimeMillis() - Duration.ofDays(90).toMillis();
         Long count = notificationRecipientMapper.selectCount(Wrappers.lambdaQuery(NotificationRecipientDO.class)
@@ -153,8 +156,8 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
      * @return
      */
     @Override
-    @QueryCached(keyPrefix = NOTIFICATION_RECENT_LIST_KEY, seconds = MINUTES_10, access = Access.TENANT,
-            tables = {"t_tenant", "t_user_tenant", "t_notification", "t_notification_recipient"}, behavior = QueryCacheBehaviors.Hourly.class)
+    @QueryCached(keyPrefix = NOTIFICATION_RECENT_LIST_KEY, seconds = MINUTES_10, access = TenantQueryAccess.class,
+            tables = {"t_tenant", "t_user_tenant", "t_notification", "t_notification_recipient"}, behavior = HourlyCacheBehavior.class)
     public NotificationRecentListRespDTO getRecentNotifications(Long userId, Long tenantId) {
         validateTenantAndMembership(tenantId, userId);
         long startTime = System.currentTimeMillis() - Duration.ofDays(1).toMillis();
@@ -165,16 +168,7 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     }
 
     private void validateTenantAndMembership(Long tenantId, Long userId) {
-        TenantDO tenantDO = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId)
-                .eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0));
-        if (tenantDO == null) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        }
-        if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
+        tenantAccess.requireMember(userId, tenantId);
     }
 
     @Override

@@ -52,7 +52,7 @@ class TenantCrudServiceHomeTest {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
         TenantMediaService mediaService = mock(TenantMediaService.class);
         CurrentTenantStateService currentState = mock(CurrentTenantStateService.class);
-        TenantCrudServiceImpl service = new TenantCrudServiceImpl(
+        TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
                 tenantMapper,
                 userTenantService,
                 mock(UserMapper.class),
@@ -95,7 +95,7 @@ class TenantCrudServiceHomeTest {
         TenantMapper tenantMapper = mock(TenantMapper.class);
         UserTenantService userTenantService = mock(UserTenantService.class);
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
-        TenantCrudServiceImpl service = new TenantCrudServiceImpl(
+        TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
                 tenantMapper,
                 userTenantService,
                 mock(UserMapper.class),
@@ -130,10 +130,17 @@ class TenantCrudServiceHomeTest {
         TenantMapper tenantMapper = mock(TenantMapper.class);
         UserTenantService userTenantService = mock(UserTenantService.class);
         CurrentTenantStateService currentState = mock(CurrentTenantStateService.class);
-        TenantCrudServiceImpl service = new TenantCrudServiceImpl(
-                tenantMapper, userTenantService, mock(UserMapper.class), mock(StringRedisTemplate.class),
-                mock(JwtUtil.class), mock(NotificationService.class), mock(TenantValidationHelper.class),
-                mock(NotificationMapper.class), mock(TenantMediaService.class), currentState,
+        TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
+                tenantMapper,
+                userTenantService,
+                mock(UserMapper.class),
+                mock(StringRedisTemplate.class),
+                mock(JwtUtil.class),
+                mock(NotificationService.class),
+                mock(TenantValidationHelper.class),
+                mock(NotificationMapper.class),
+                mock(TenantMediaService.class),
+                currentState,
                 mock(TenantActivityRecorder.class));
         when(currentState.resolveCurrentTenant(10L)).thenReturn(new CurrentTenantState().setTenantId(20L));
         UserTenantDO membership = new UserTenantDO();
@@ -159,10 +166,17 @@ class TenantCrudServiceHomeTest {
         UserTenantService userTenantService = mock(UserTenantService.class);
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
         CurrentTenantStateService currentState = mock(CurrentTenantStateService.class);
-        TenantCrudServiceImpl service = new TenantCrudServiceImpl(
-                tenantMapper, userTenantService, mock(UserMapper.class), redisTemplate,
-                mock(JwtUtil.class), mock(NotificationService.class), mock(TenantValidationHelper.class),
-                mock(NotificationMapper.class), mock(TenantMediaService.class), currentState,
+        TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
+                tenantMapper,
+                userTenantService,
+                mock(UserMapper.class),
+                redisTemplate,
+                mock(JwtUtil.class),
+                mock(NotificationService.class),
+                mock(TenantValidationHelper.class),
+                mock(NotificationMapper.class),
+                mock(TenantMediaService.class),
+                currentState,
                 mock(TenantActivityRecorder.class));
         TenantDO tenant = new TenantDO();
         tenant.setTenantId(20L);
@@ -179,11 +193,18 @@ class TenantCrudServiceHomeTest {
         TenantMapper tenantMapper = mock(TenantMapper.class);
         UserTenantService userTenantService = mock(UserTenantService.class);
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
-        TenantCrudServiceImpl service = new TenantCrudServiceImpl(
-                tenantMapper, userTenantService, mock(UserMapper.class), redisTemplate,
-                mock(JwtUtil.class), mock(NotificationService.class), mock(TenantValidationHelper.class),
-                mock(NotificationMapper.class), mock(TenantMediaService.class),
-                mock(CurrentTenantStateService.class), mock(TenantActivityRecorder.class));
+        TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
+                tenantMapper,
+                userTenantService,
+                mock(UserMapper.class),
+                redisTemplate,
+                mock(JwtUtil.class),
+                mock(NotificationService.class),
+                mock(TenantValidationHelper.class),
+                mock(NotificationMapper.class),
+                mock(TenantMediaService.class),
+                mock(CurrentTenantStateService.class),
+                mock(TenantActivityRecorder.class));
         when(redisTemplate.opsForValue().get(anyString())).thenReturn("{\"tenantId\":\"20\"}");
 
         assertThrows(ClientException.class, () -> service.getTenantInfo(10L, 20L));

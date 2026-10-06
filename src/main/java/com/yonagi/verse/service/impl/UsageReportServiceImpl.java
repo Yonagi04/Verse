@@ -1,13 +1,12 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.cache.HourlyCacheBehavior;
+import com.yonagi.verse.service.reporting.UsageReportAccessPolicy;
+import com.yonagi.verse.service.reporting.UsageReportWindowCacheBehavior;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
-import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.yonagi.verse.common.config.UsageReportingProperties;
-import com.yonagi.verse.common.convention.exception.ClientException;
-import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.common.enums.UsageGranularity;
-import com.yonagi.verse.common.enums.UsageReportingErrorCodeEnum;
 import com.yonagi.verse.common.enums.UsageBreakdownDimension;
 import com.yonagi.verse.common.enums.UsageBreakdownOrder;
 import com.yonagi.verse.common.security.UserContext;
@@ -52,18 +51,19 @@ public class UsageReportServiceImpl implements UsageReportService {
     private final ApiKeyMapper apiKeyMapper;
     private final LlmServiceMapper llmServiceMapper;
     private final UserMapper userMapper;
+    private final UsageReportAccessPolicy reportAccess;
 
     @Override
-    @QueryCached(keyPrefix = USAGE_REPORT_QUERY_KEY, seconds = MINUTES_10, access = Access.REPORT,
-            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = QueryCacheBehaviors.ReportWindow.class)
+    @QueryCached(keyPrefix = USAGE_REPORT_QUERY_KEY, seconds = MINUTES_10, access = UsageReportAccessPolicy.class,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = UsageReportWindowCacheBehavior.class)
     public UsageReportRespDTO query(UserContext context, Long tenantId, UsageGranularity granularity,
                                     LocalDateTime from, LocalDateTime to, Long requestedUserId) {
         return query(context, tenantId, granularity, from, to, requestedUserId, null, null);
     }
 
     @Override
-    @QueryCached(keyPrefix = USAGE_REPORT_QUERY_KEY, seconds = MINUTES_10, access = Access.REPORT,
-            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = QueryCacheBehaviors.ReportWindow.class)
+    @QueryCached(keyPrefix = USAGE_REPORT_QUERY_KEY, seconds = MINUTES_10, access = UsageReportAccessPolicy.class,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = UsageReportWindowCacheBehavior.class)
     public UsageReportRespDTO query(UserContext context, Long tenantId, UsageGranularity granularity,
                                     LocalDateTime from, LocalDateTime to, Long requestedUserId,
                                     Long apiKeyId, Long serviceId) {
@@ -91,15 +91,13 @@ public class UsageReportServiceImpl implements UsageReportService {
     }
 
     @Override
-    @QueryCached(keyPrefix = USAGE_REPORT_BREAKDOWN_KEY, seconds = MINUTES_10, access = Access.REPORT,
-            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = QueryCacheBehaviors.ReportWindow.class)
+    @QueryCached(keyPrefix = USAGE_REPORT_BREAKDOWN_KEY, seconds = MINUTES_10, access = UsageReportAccessPolicy.class,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = UsageReportWindowCacheBehavior.class)
     public UsageBreakdownRespDTO breakdown(UserContext context, Long tenantId, UsageGranularity granularity,
         LocalDateTime from, LocalDateTime to, Long userId, Long apiKeyId, Long serviceId,
         UsageBreakdownDimension dimension, UsageBreakdownOrder order, int limit) {
-        if (limit < 1 || limit > 100) throw new ClientException(UsageReportingErrorCodeEnum.FILTER_INVALID);
         UsageReportFilter filter=resolveFilter(context,tenantId,granularity,from,to,userId,apiKeyId,serviceId);
-        if (dimension==UsageBreakdownDimension.MEMBER && !filter.canReadAll())
-            throw new ClientException(UsageReportingErrorCodeEnum.PERMISSION_DENIED);
+        reportAccess.checkBreakdown(filter, dimension, limit);
         List<UsageBreakdownRow> rows=aggregateMapper.summarizeBreakdown(dimension.name(),tenantId,filter.userId(),
                 filter.apiKeyId(),filter.serviceId(),filter.from(),filter.to());
         Map<Long,String> labels=loadLabels(dimension,tenantId,rows);
@@ -124,7 +122,7 @@ public class UsageReportServiceImpl implements UsageReportService {
     }
 
     @Override
-    @QueryCached(keyPrefix = USAGE_REPORT_FILTER_OPTIONS_KEY, seconds = HOURS_1, access = Access.REPORT,
+    @QueryCached(keyPrefix = USAGE_REPORT_FILTER_OPTIONS_KEY, seconds = HOURS_1, access = UsageReportAccessPolicy.class,
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"})
     public UsageFilterOptionsRespDTO filterOptions(UserContext context, Long tenantId) {
         UsageReportFilter filter=resolveFilter(context,tenantId,UsageGranularity.DAY,null,null,null,null,null);
@@ -148,24 +146,10 @@ public class UsageReportServiceImpl implements UsageReportService {
     @Override
     public UsageReportFilter resolveFilter(UserContext context, Long tenantId, UsageGranularity granularity,
         LocalDateTime from, LocalDateTime to, Long requestedUserId, Long apiKeyId, Long serviceId) {
-        boolean canReadAll=isAdmin(context,tenantId);
-        if (requestedUserId!=null && !canReadAll && !Objects.equals(requestedUserId,context.getUserId()))
-            throw new ClientException(UsageReportingErrorCodeEnum.PERMISSION_DENIED);
-        Long effectiveUserId=authorize(context,tenantId,requestedUserId);
-        if (requestedUserId!=null && canReadAll && !userTenantService.isUserJoinedTenant(requestedUserId,tenantId))
-            throw new ClientException(UsageReportingErrorCodeEnum.FILTER_INVALID);
-        if (apiKeyId!=null) {
-            ApiKeyDO key=apiKeyMapper.selectOne(Wrappers.lambdaQuery(ApiKeyDO.class).eq(ApiKeyDO::getTenantId,tenantId).eq(ApiKeyDO::getApiKeyId,apiKeyId));
-            if (key==null || (!canReadAll && !Objects.equals(key.getUserId(),context.getUserId())) || (effectiveUserId!=null&&!Objects.equals(key.getUserId(),effectiveUserId)))
-                throw new ClientException(UsageReportingErrorCodeEnum.FILTER_INVALID);
-        }
-        if (serviceId!=null && !llmServiceMapper.exists(Wrappers.lambdaQuery(LlmServiceDO.class).eq(LlmServiceDO::getTenantId,tenantId).eq(LlmServiceDO::getServiceId,serviceId).eq(LlmServiceDO::getDelFlag,0)))
-            throw new ClientException(UsageReportingErrorCodeEnum.FILTER_INVALID);
-        Range range=resolveRange(granularity,from,to);
-        return new UsageReportFilter(tenantId,effectiveUserId,apiKeyId,serviceId,range.from,range.to,granularity,canReadAll);
+        return reportAccess.resolveFilter(context, tenantId, granularity, from, to, requestedUserId, apiKeyId, serviceId);
     }
 
-    private boolean isAdmin(UserContext context,Long tenantId) { try { return RoleEnum.valueOf(userTenantService.getRoleByUserIdAndTenantId(context.getUserId(),tenantId)).isAdmin(); } catch(Exception e){ return false; } }
+
     private Map<Long,String> loadLabels(UsageBreakdownDimension dimension,Long tenantId,List<UsageBreakdownRow> rows) {
         Set<Long> ids=rows.stream().map(UsageBreakdownRow::getDimensionId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
         if(ids.isEmpty()||dimension==UsageBreakdownDimension.MODEL)return Map.of();
@@ -178,8 +162,8 @@ public class UsageReportServiceImpl implements UsageReportService {
     private static BigDecimal metric(Metrics r,UsageBreakdownOrder o){return switch(o){case TOTAL_TOKENS->BigDecimal.valueOf(r.total);case REQUEST_COUNT->BigDecimal.valueOf(r.requests);case ESTIMATED_COST_FEN->r.cost;};}
 
     @Override
-    @QueryCached(keyPrefix = USAGE_REPORT_DASHBOARD_KEY, seconds = MINUTES_10, access = Access.REPORT,
-            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = QueryCacheBehaviors.Hourly.class)
+    @QueryCached(keyPrefix = USAGE_REPORT_DASHBOARD_KEY, seconds = MINUTES_10, access = UsageReportAccessPolicy.class,
+            tables = {"t_tenant", "t_user_tenant", "t_user", "t_api_key", "t_llm_service", "t_token_usage_hourly_agg"}, behavior = HourlyCacheBehavior.class)
     public UsageDashboardRespDTO dashboard(UserContext context, Long tenantId) {
         LocalDateTime now = LocalDateTime.now(SHANGHAI);
         LocalDateTime hourTo = now.truncatedTo(ChronoUnit.HOURS).plusHours(1);
@@ -200,31 +184,9 @@ public class UsageReportServiceImpl implements UsageReportService {
         return Math.max(1, (int) Math.ceil(properties.getRefreshDelayMs() / 60000D));
     }
 
-    private Long authorize(UserContext context, Long tenantId, Long requestedUserId) {
-        if (context == null || tenantId == null || !userTenantService.isUserJoinedTenant(context.getUserId(), tenantId))
-            throw new ClientException(UsageReportingErrorCodeEnum.PERMISSION_DENIED);
-        RoleEnum role;
-        try { role = RoleEnum.valueOf(userTenantService.getRoleByUserIdAndTenantId(context.getUserId(), tenantId)); }
-        catch (RuntimeException e) { throw new ClientException(UsageReportingErrorCodeEnum.PERMISSION_DENIED); }
-        return role.isAdmin() ? requestedUserId : context.getUserId();
-    }
 
-    private Range resolveRange(UsageGranularity granularity, LocalDateTime from, LocalDateTime to) {
-        LocalDateTime now = LocalDateTime.now(SHANGHAI);
-        if (to == null) to = switch (granularity) {
-            case HOUR -> now.truncatedTo(ChronoUnit.HOURS).plusHours(1);
-            case DAY -> now.toLocalDate().plusDays(1).atStartOfDay();
-            case WEEK -> now.toLocalDate().with(TemporalAdjusters.next(DayOfWeek.MONDAY)).atStartOfDay();
-            case MONTH -> now.toLocalDate().withDayOfMonth(1).plusMonths(1).atStartOfDay();
-        };
-        if (from == null) from = switch (granularity) {
-            case HOUR -> to.minusHours(24); case DAY -> to.minusDays(7);
-            case WEEK -> to.minusWeeks(8); case MONTH -> to.minusMonths(6);
-        };
-        if (!from.isBefore(to) || Duration.between(from, to).toDays() > properties.getMaxRangeDays())
-            throw new ClientException(UsageReportingErrorCodeEnum.RANGE_INVALID);
-        return new Range(from, to);
-    }
+
+
 
     private LocalDateTime bucket(LocalDateTime value, UsageGranularity granularity) {
         return switch (granularity) {
@@ -237,7 +199,6 @@ public class UsageReportServiceImpl implements UsageReportService {
     private LocalDateTime next(LocalDateTime value, UsageGranularity granularity) {
         return switch (granularity) { case HOUR -> value.plusHours(1); case DAY -> value.plusDays(1); case WEEK -> value.plusWeeks(1); case MONTH -> value.plusMonths(1); };
     }
-    private record Range(LocalDateTime from, LocalDateTime to) {}
 
     private static final class Metrics {
         long input, output, total, requests, exact, estimated, unknown, calculated, unpriced, uncalculable, notChargeable;

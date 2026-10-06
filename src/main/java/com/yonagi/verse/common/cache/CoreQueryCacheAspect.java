@@ -24,7 +24,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @RequiredArgsConstructor
 public class CoreQueryCacheAspect {
     private final QueryCache cache;
-    private final QueryAccessGuard guard;
     private final BeanFactory beanFactory;
     private final ThreadLocal<Boolean> building = ThreadLocal.withInitial(() -> false);
 
@@ -37,6 +36,8 @@ public class CoreQueryCacheAspect {
         if (policy == null || building.get() || TransactionSynchronizationManager.isActualTransactionActive()) return point.proceed();
         QueryCacheBehavior behavior = policy.behavior() == QueryCacheBehavior.class
                 ? QueryCacheBehavior.DEFAULT : beanFactory.getBean(policy.behavior());
+        QueryAccessPolicy access = policy.access() == NoQueryAccess.class
+                ? NoQueryAccess.INSTANCE : beanFactory.getBean(policy.access());
         Object[] args = point.getArgs();
         if (!behavior.supports(args)) return point.proceed();
         List<Object> parameters = new ArrayList<>();
@@ -48,13 +49,13 @@ public class CoreQueryCacheAspect {
                 identity.put("role", context.getRole()); parameters.add(identity);
             } else parameters.add(argument);
         }
-        if (policy.access() == QueryCatalogue.Access.BATCH) parameters.add(guard.batchIdentity(args));
+        cache.check(() -> { access.contributeParameters(parameters, args); return null; });
         behavior.contributeParameters(parameters, args);
         parameters.add(method.toGenericString());
         long ttl = policy.seconds()*1000;
         AtomicBoolean healthy = new AtomicBoolean(true);
         Object cached = cache.get(policy.name(), policy.keyPrefix(), parameters, method.getGenericReturnType(), policy.tables(), ttl,
-                () -> guarded(policy, behavior, args), () -> {
+                () -> guarded(access, behavior, args), () -> {
                     building.set(true);
                     QueryCacheHealth.clear();
                     try {
@@ -62,12 +63,12 @@ public class CoreQueryCacheAspect {
                         healthy.set(!QueryCacheHealth.isDegraded());
                         return result;
                     } finally { building.remove(); QueryCacheHealth.clear(); }
-                }, result -> healthy.get() && behavior.cacheable(result));
+                }, result -> healthy.get() && behavior.cacheable(result), behavior::cacheFailure);
         return behavior.currentView(point.getTarget(), args, cached);
     }
 
-    private void guarded(QueryCatalogue.Policy policy, QueryCacheBehavior behavior, Object[] args) {
+    private void guarded(QueryAccessPolicy access, QueryCacheBehavior behavior, Object[] args) {
         building.set(true);
-        try { guard.check(policy, args); behavior.check(args); } finally { building.remove(); }
+        try { access.check(args); behavior.check(args); } finally { building.remove(); }
     }
 }

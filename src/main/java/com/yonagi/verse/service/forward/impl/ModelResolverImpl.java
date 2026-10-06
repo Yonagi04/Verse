@@ -1,10 +1,9 @@
 package com.yonagi.verse.service.forward.impl;
 
+import com.yonagi.verse.common.cache.NoQueryAccess;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
-import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import com.yonagi.verse.common.enums.ModelOperation;
@@ -23,7 +22,6 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.util.concurrent.TimeUnit;
 
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
 import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
@@ -49,7 +47,7 @@ public class ModelResolverImpl implements ModelResolver {
     }
 
     @Override
-    @QueryCached(keyPrefix = LLM_SERVICE_PROTOCOL_KEY, seconds = HOURS_4, access = Access.NONE,
+    @QueryCached(keyPrefix = LLM_SERVICE_PROTOCOL_KEY, seconds = HOURS_4, access = NoQueryAccess.class,
             tables = {"t_llm_service", "t_llm_service_capability", "t_user", "t_tenant"},
             behavior = LiveModelBindingCacheBehavior.class)
     public UpstreamProtocol protocolFor(LlmServiceDO service, ModelOperation operation) {
@@ -81,7 +79,7 @@ public class ModelResolverImpl implements ModelResolver {
     }
 
     @Override
-    @QueryCached(keyPrefix = LLM_SERVICE_INFO_KEY, seconds = HOURS_4, access = Access.NONE,
+    @QueryCached(keyPrefix = LLM_SERVICE_INFO_KEY, seconds = HOURS_4, access = NoQueryAccess.class,
             tables = {"t_llm_service", "t_user", "t_tenant"},
             behavior = LiveModelRouteCacheBehavior.class)
     public LlmServiceDO resolve(Long tenantId, String model) {

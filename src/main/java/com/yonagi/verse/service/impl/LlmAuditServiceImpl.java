@@ -1,7 +1,9 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantQueryAccess;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -9,7 +11,6 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.LlmAuditErrorCodeEnum;
 import com.yonagi.verse.common.enums.RoleEnum;
-import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.dao.entity.LlmAuditLogDO;
 import com.yonagi.verse.dao.entity.UserDO;
@@ -46,6 +47,7 @@ import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 @RequiredArgsConstructor
 public class LlmAuditServiceImpl implements LlmAuditService {
 
+    private final TenantAccessPolicy tenantAccess;
     private final LlmAuditLogMapper llmAuditLogMapper;
     private final UserMapper userMapper;
     private final UserTenantService userTenantService;
@@ -55,7 +57,7 @@ public class LlmAuditServiceImpl implements LlmAuditService {
     private String bucket;
 
     @Override
-    @QueryCached(keyPrefix = LLM_AUDIT_LIST_KEY, seconds = MINUTES_30, access = Access.TENANT,
+    @QueryCached(keyPrefix = LLM_AUDIT_LIST_KEY, seconds = MINUTES_30, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_audit_log"})
     public LlmAuditListRespDTO listAudit(UserContext ctx, Long tenantId, Integer pageNum, Integer pageSize, Long userId) {
         validateMembership(ctx, tenantId);
@@ -102,7 +104,7 @@ public class LlmAuditServiceImpl implements LlmAuditService {
     }
 
     @Override
-    @QueryCached(keyPrefix = LLM_AUDIT_INFO_KEY, seconds = HOURS_24, access = Access.TENANT,
+    @QueryCached(keyPrefix = LLM_AUDIT_INFO_KEY, seconds = HOURS_24, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_audit_log"})
     public LlmAuditDetailRespDTO getAuditDetail(UserContext ctx, Long tenantId, Long auditId) {
         validateMembership(ctx, tenantId);
@@ -182,9 +184,7 @@ public class LlmAuditServiceImpl implements LlmAuditService {
     }
 
     private void validateMembership(UserContext ctx, Long tenantId) {
-        if (!userTenantService.isUserJoinedTenant(ctx.getUserId(), tenantId)) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
+        tenantAccess.requireContext(ctx, tenantId);
     }
 
     private boolean isAdmin(UserContext ctx) {

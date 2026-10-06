@@ -53,6 +53,8 @@ class RocketMQEventPublisherTest {
             .withBean(RocketMQTemplate.class, () -> mock(RocketMQTemplate.class))
             .withBean(UserMapper.class, () -> mock(UserMapper.class))
             .withBean(TenantMapper.class, () -> mock(TenantMapper.class))
+            .withBean(com.yonagi.verse.service.tenant.TenantAccessPolicy.class,
+                    () -> mock(com.yonagi.verse.service.tenant.TenantAccessPolicy.class))
             .withBean(NotificationMapper.class, () -> mock(NotificationMapper.class))
             .withBean(NotificationRecipientMapper.class, () -> mock(NotificationRecipientMapper.class))
             .withBean(ApiKeyService.class, () -> mock(ApiKeyService.class))

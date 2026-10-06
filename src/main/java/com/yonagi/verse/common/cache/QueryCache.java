@@ -28,8 +28,6 @@ import java.util.function.Predicate;
 @Slf4j
 @Component
 public class QueryCache {
-    private static final Set<String> NEGATIVE_CODES = Set.of("B000200", "B000300", "B000304",
-            "B000324", "B000328", "A000701", "A001001", "A000800", "A000804", "A000807", "A000900");
     private static final DefaultRedisScript<List> SNAPSHOT = new DefaultRedisScript<>("""
             local result = {}
             for i=1,#KEYS,2 do
@@ -109,6 +107,12 @@ public class QueryCache {
 
     public Object get(String name, String keyPrefix, Object parameters, Type type, List<String> tables, long ttlMillis,
                       Runnable accessCheck, Loader loader, Predicate<Object> cacheable) throws Throwable {
+        return get(name, keyPrefix, parameters, type, tables, ttlMillis, accessCheck, loader, cacheable, error -> false);
+    }
+
+    public Object get(String name, String keyPrefix, Object parameters, Type type, List<String> tables, long ttlMillis,
+                      Runnable accessCheck, Loader loader, Predicate<Object> cacheable,
+                      Predicate<ClientException> cacheFailure) throws Throwable {
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(properties.getWaitMillis());
         String digest = DigestUtil.sha256Hex(QueryCacheKey.parametersJson(parameters));
         // 业务前缀与参数、代际摘要分离；服务方法名只作为指标标签，不进入 Redis 键。
@@ -121,10 +125,10 @@ public class QueryCache {
                 String cached = redis.opsForValue().get(key);
                 if (cached != null) {
                     if (!versions.equals(snapshot(tables))) continue;
+                    guarded(accessCheck);
+                    if (!versions.equals(snapshot(tables))) continue;
                     Object value = decode(key, cached, type);
                     if (value != CORRUPT) {
-                        if (!versions.equals(snapshot(tables))) continue;
-                        guarded(accessCheck);
                         if (!versions.equals(snapshot(tables))) continue;
                         count(name, "hit");
                         return value;
@@ -142,10 +146,10 @@ public class QueryCache {
                     cached = redis.opsForValue().get(key);
                     if (cached != null) {
                         if (!versions.equals(snapshot(tables))) continue;
+                        guarded(accessCheck);
+                        if (!versions.equals(snapshot(tables))) continue;
                         Object value = decode(key, cached, type);
                         if (value != CORRUPT && versions.equals(snapshot(tables))) {
-                            guarded(accessCheck);
-                            if (!versions.equals(snapshot(tables))) continue;
                             count(name, "hit"); return value;
                         }
                     }
@@ -156,18 +160,17 @@ public class QueryCache {
                         count(name, "miss");
                         Object value;
                         JSONObject envelope = new JSONObject();
-                        try {
-                            checkAccess(accessCheck);
-                            value = loadData(loader);
-                            envelope.put("value", value);
-                        } catch (ClientException error) {
-                            if (NEGATIVE_CODES.contains(error.getErrorCode())) {
+                        checkAccess(accessCheck);
+                        try { value = loadData(loader); }
+                        catch (ClientException error) {
+                            if (cacheFailure.test(error)) {
                                 envelope.put("errorCode", error.getErrorCode());
                                 envelope.put("errorMessage", error.getErrorMessage());
                                 publish(key, tables, versions, envelope, negativeTtl());
                             }
                             throw error;
                         }
+                        envelope.put("value", value);
                         boolean absent = value == null || value instanceof Collection<?> c && c.isEmpty();
                         if (cacheable.test(value)) publish(key, tables, versions, envelope,
                                 absent ? negativeTtl() : jitter(ttlMillis));

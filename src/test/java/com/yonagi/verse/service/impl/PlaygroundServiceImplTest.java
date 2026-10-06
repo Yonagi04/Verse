@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.playground.PlaygroundAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.dao.entity.LlmServiceCapabilityDO;
@@ -38,9 +41,17 @@ class PlaygroundServiceImplTest {
     private final ModelResolver modelResolver = mock(ModelResolver.class);
     private final PlaygroundRateLimiter rateLimiter = mock(PlaygroundRateLimiter.class);
     private final LlmForwardService forward = mock(LlmForwardService.class);
-    private final PlaygroundServiceImpl service = new PlaygroundServiceImpl(tenantMapper,
-            membershipMapper, serviceMapper, capabilityMapper, sessionMapper, turnMapper, finalizer,
-            modelResolver, rateLimiter, forward);
+    private final PlaygroundServiceImpl service = new PlaygroundServiceImpl(new PlaygroundAccessPolicy(new TenantAccessPolicy(tenantMapper, membershipMapper), mock(PlaygroundWorkspaceMapper.class)),
+                tenantMapper,
+                membershipMapper,
+                serviceMapper,
+                capabilityMapper,
+                sessionMapper,
+                turnMapper,
+                finalizer,
+                modelResolver,
+                rateLimiter,
+                forward);
     private final UserContext actor = new UserContext().setUserId(7L).setCurrentTenantId(2L);
     private final TenantDO tenant = new TenantDO();
 

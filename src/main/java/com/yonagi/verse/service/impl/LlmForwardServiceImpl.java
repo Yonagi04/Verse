@@ -1,7 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.NoQueryAccess;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
@@ -731,7 +732,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     }
 
     @Override
-    @QueryCached(keyPrefix = LLM_SERVICE_OPENAI_MODELS_KEY, seconds = HOURS_4, access = Access.NONE,
+    @QueryCached(keyPrefix = LLM_SERVICE_OPENAI_MODELS_KEY, seconds = HOURS_4, access = NoQueryAccess.class,
             tables = {"t_llm_service"})
     public List<String> listModels(Long tenantId) {
         if (tenantId == null) {

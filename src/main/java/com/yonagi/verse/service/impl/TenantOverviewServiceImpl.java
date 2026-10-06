@@ -1,12 +1,14 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.cache.QueryCacheHealth;
+import com.yonagi.verse.service.tenant.OverviewQueryAccess;
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantOverviewCacheBehavior;
+import com.yonagi.verse.service.tenant.TenantQueryAccess;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
-import com.yonagi.verse.service.cache.QueryCacheBehaviors;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.config.UsageReportingProperties;
-import com.yonagi.verse.common.convention.exception.ClientException;
-import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.TenantMapper;
@@ -27,7 +29,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -57,6 +58,7 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
             Map.entry("LLM_SERVICE_DISABLED", "模型服务已停用"),
             Map.entry("LLM_SERVICE_REMOVED", "模型服务已移除"));
 
+    private final TenantAccessPolicy tenantAccess;
     private final UserTenantService userTenantService;
     private final UserTenantMapper userTenantMapper;
     private final TenantMapper tenantMapper;
@@ -64,8 +66,8 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
     private final UsageReportingProperties usageProperties;
 
     @Override
-    @QueryCached(keyPrefix = TENANT_OVERVIEW_LIST_KEY, seconds = MINUTES_30, access = Access.BATCH,
-            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_token_usage_hourly_agg", "t_tenant_join_request"}, behavior = QueryCacheBehaviors.Overview.class)
+    @QueryCached(keyPrefix = TENANT_OVERVIEW_LIST_KEY, seconds = MINUTES_30, access = OverviewQueryAccess.class,
+            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_token_usage_hourly_agg", "t_tenant_join_request"}, behavior = TenantOverviewCacheBehavior.class)
     public TenantOverviewRespDTO.Batch batch(Long userId) {
         List<UserTenantDO> memberships = userTenantService.getUserTenantList(userId, Boolean.FALSE, 10L);
         Window window = window(LocalDate.now(SHANGHAI));
@@ -93,16 +95,11 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
     }
 
     @Override
-    @QueryCached(keyPrefix = TENANT_OVERVIEW_INFO_KEY, seconds = MINUTES_30, access = Access.TENANT,
-            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_token_usage_hourly_agg", "t_tenant_join_request", "t_tenant_activity_log"}, behavior = QueryCacheBehaviors.Overview.class)
+    @QueryCached(keyPrefix = TENANT_OVERVIEW_INFO_KEY, seconds = MINUTES_30, access = TenantQueryAccess.class,
+            tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_token_usage_hourly_agg", "t_tenant_join_request", "t_tenant_activity_log"}, behavior = TenantOverviewCacheBehavior.class)
     public TenantOverviewRespDTO.Detail detail(Long userId, Long tenantId) {
-        if (tenantId == null) throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
-        TenantDO tenant = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId).eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0));
-        if (tenant == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        UserTenantDO membership = userTenantMapper.selectActiveMembership(userId, tenantId);
-        if (membership == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
+        TenantDO tenant = tenantAccess.activeTenant(tenantId);
+        UserTenantDO membership = tenantAccess.membership(userId, tenantId);
 
         Window window = window(LocalDate.now(SHANGHAI));
         Snapshot snapshot = aggregate(userId, List.of(new Target(membership, tenant)), window);
@@ -151,7 +148,7 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
             return query.get().stream().collect(Collectors.toMap(TenantOverviewCountRow::getTenantId,
                     TenantOverviewCountRow::getTotal));
         } catch (RuntimeException error) {
-            com.yonagi.verse.common.cache.QueryCacheHealth.degraded();
+            QueryCacheHealth.degraded();
             log.error("租户概览聚合失败: dimension={}", dimension, error);
             return null;
         }
@@ -163,7 +160,7 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
             return overviewMapper.usage(ids, userId, window.from(), window.to()).stream()
                     .collect(Collectors.toMap(TenantOverviewUsageRow::getTenantId, row -> row));
         } catch (RuntimeException error) {
-            com.yonagi.verse.common.cache.QueryCacheHealth.degraded();
+            QueryCacheHealth.degraded();
             log.error("租户概览用量聚合失败: dimension={}", dimension, error);
             return null;
         }
@@ -202,7 +199,7 @@ public class TenantOverviewServiceImpl implements TenantOverviewService {
                     .stream().filter(row -> ACTIVITY_TITLES.containsKey(row.getType()))
                     .map(this::activity).toList();
         } catch (RuntimeException error) {
-            com.yonagi.verse.common.cache.QueryCacheHealth.degraded();
+            QueryCacheHealth.degraded();
             log.error("租户概览动态摘要查询失败: tenantId={}", tenant.getTenantId(), error);
             return null;
         }

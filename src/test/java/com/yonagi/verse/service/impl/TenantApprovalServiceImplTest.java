@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
@@ -94,8 +96,16 @@ class TenantApprovalServiceImplTest {
         activities = mock(TenantActivityRecorder.class);
         redis = mock(StringRedisTemplate.class);
         users = mock(UserMapper.class);
-        TenantApprovalServiceImpl target = new TenantApprovalServiceImpl(requests, validation,
-                memberships, redis, notifications, invites, users, mock(TenantInviteMapper.class), activities);
+        TenantApprovalServiceImpl target = new TenantApprovalServiceImpl(mock(TenantAccessPolicy.class),
+                requests,
+                validation,
+                memberships,
+                redis,
+                notifications,
+                invites,
+                users,
+                mock(TenantInviteMapper.class),
+                activities);
         ProxyFactory proxy = new ProxyFactory(target);
         proxy.addAdvice(new TransactionInterceptor(new DataSourceTransactionManager(database),
                 new AnnotationTransactionAttributeSource()));

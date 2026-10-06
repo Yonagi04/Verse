@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantInviteAccessPolicy;
+
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
@@ -89,10 +92,17 @@ class TenantActivityBusinessInstrumentationTest {
         when(memberships.createUserTenant(30L, 20L, "MEMBER")).thenReturn(true);
         when(users.selectOne(any())).thenReturn(member);
 
-        TenantMembershipServiceImpl service = new TenantMembershipServiceImpl(
-                memberships, users, tenants, mock(TenantValidationHelper.class),
-                mock(NotificationService.class), invites, mock(TenantApprovalService.class),
-                mock(CurrentTenantStateService.class), mock(StringRedisTemplate.class), recorder);
+        TenantMembershipServiceImpl service = new TenantMembershipServiceImpl(mock(TenantAccessPolicy.class),
+                memberships,
+                users,
+                tenants,
+                mock(TenantValidationHelper.class),
+                mock(NotificationService.class),
+                invites,
+                mock(TenantApprovalService.class),
+                mock(CurrentTenantStateService.class),
+                mock(StringRedisTemplate.class),
+                recorder);
         TenantJoinReqDTO request = new TenantJoinReqDTO();
         request.setInviteCode("invite-code");
 
@@ -127,9 +137,16 @@ class TenantActivityBusinessInstrumentationTest {
         when(requests.update(any())).thenReturn(1);
         when(memberships.createUserTenant(30L, 20L, "MEMBER")).thenReturn(true);
         when(users.selectOne(any())).thenReturn(user(30L, "applicant", "申请人"));
-        TenantApprovalServiceImpl service = new TenantApprovalServiceImpl(
-                requests, validation, memberships, redis, mock(NotificationService.class),
-                mock(TenantInviteService.class), users, mock(TenantInviteMapper.class), recorder);
+        TenantApprovalServiceImpl service = new TenantApprovalServiceImpl(mock(TenantAccessPolicy.class),
+                requests,
+                validation,
+                memberships,
+                redis,
+                mock(NotificationService.class),
+                mock(TenantInviteService.class),
+                users,
+                mock(TenantInviteMapper.class),
+                recorder);
 
         assertTrue(service.approveJoinRequest(10L, 20L, 40L));
 
@@ -165,9 +182,16 @@ class TenantActivityBusinessInstrumentationTest {
             return 1;
         });
         when(mapper.update(any())).thenReturn(1);
-        TenantInviteServiceImpl service = new TenantInviteServiceImpl(
-                mapper, mock(TenantMapper.class), mock(TenantValidationHelper.class), memberships,
-                redis, bloom, mock(DomainEventPublisher.class), recorder);
+        TenantInviteServiceImpl service = new TenantInviteServiceImpl(mock(TenantAccessPolicy.class),
+                mock(TenantInviteAccessPolicy.class),
+                mapper,
+                mock(TenantMapper.class),
+                mock(TenantValidationHelper.class),
+                memberships,
+                redis,
+                bloom,
+                mock(DomainEventPublisher.class),
+                recorder);
         ReflectionTestUtils.setField(service, "maxInviteCodePerDay", 10);
         ReflectionTestUtils.setField(service, "frontendBaseUrl", "https://example.invalid");
         TenantInviteReqDTO create = new TenantInviteReqDTO();
@@ -209,10 +233,18 @@ class TenantActivityBusinessInstrumentationTest {
         when(validation.validateTenantTeamActive(eq(20L), any())).thenReturn(tenant);
         when(currentState.closeTenantAndFallback(10L, 20L)).thenReturn(tenant);
         when(memberships.list(any(Wrapper.class))).thenReturn(List.of());
-        TenantCrudServiceImpl service = new TenantCrudServiceImpl(
-                tenants, memberships, mock(UserMapper.class), redis, jwt,
-                mock(NotificationService.class), validation, mock(NotificationMapper.class),
-                mock(TenantMediaService.class), currentState, recorder);
+        TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenants, memberships),
+                tenants,
+                memberships,
+                mock(UserMapper.class),
+                redis,
+                jwt,
+                mock(NotificationService.class),
+                validation,
+                mock(NotificationMapper.class),
+                mock(TenantMediaService.class),
+                currentState,
+                recorder);
         TenantCloseReqDTO close = new TenantCloseReqDTO();
         close.setDisableToken("token");
         close.setConfirmText("停用前名称");

@@ -1,5 +1,7 @@
 package com.yonagi.verse.common.security;
 
+import com.yonagi.verse.common.cache.QueryCacheDependencies;
+
 import com.yonagi.verse.common.cache.QueryCacheTtl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import cn.hutool.crypto.digest.DigestUtil;
@@ -39,6 +41,7 @@ import java.util.List;
 @Slf4j
 @Component
 @RequiredArgsConstructor
+@QueryCacheDependencies({"t_api_key"})
 public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String OPENAI_PATH_PREFIX = "/api/v1/openai";

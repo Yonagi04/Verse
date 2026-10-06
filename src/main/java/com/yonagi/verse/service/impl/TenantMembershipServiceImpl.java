@@ -1,8 +1,9 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TeamQueryAccess;
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
-import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.common.convention.exception.ClientException;
@@ -60,6 +61,7 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
             "您可以重新加入该租户，但需要管理员重新邀请您"
     );
 
+    private final TenantAccessPolicy tenantAccess;
     private final UserTenantService userTenantService;
     private final UserMapper userMapper;
     private final TenantMapper tenantMapper;
@@ -101,13 +103,10 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
     }
 
     @Override
-    @QueryCached(keyPrefix = TENANT_MEMBER_LIST_KEY, seconds = HOURS_4, access = Access.TEAM,
+    @QueryCached(keyPrefix = TENANT_MEMBER_LIST_KEY, seconds = HOURS_4, access = TeamQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_user"})
     public TenantMembersListRespDTO listTenantMembers(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
-        validationHelper.validateTenantTeamActive(tenantId, TenantErrorCodeEnum.TENANT_CAN_NOT_LIST_MEMBERS);
-        if (!userTenantService.isUserJoinedTenant(userId, tenantId)) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        }
+        tenantAccess.requireTeamMember(userId, tenantId);
 
         Page<UserTenantDO> pageResult = userTenantService.page(
                 new Page<>(pageNum, pageSize),

@@ -29,17 +29,17 @@ class QueryCachedTest {
     static class CacheConfiguration { }
 
     private final QueryCache cache = mock(QueryCache.class);
-    private final QueryAccessGuard guard = mock(QueryAccessGuard.class);
+    private final TestAccess guard = mock(TestAccess.class);
     private final ApplicationContextRunner context = new ApplicationContextRunner()
             .withUserConfiguration(CacheConfiguration.class)
             .withBean(QueryCache.class, () -> cache)
-            .withBean(QueryAccessGuard.class, () -> guard)
+            .withBean(TestAccess.class, () -> guard)
             .withBean(NewQueries.class)
             .withBean(Decorated.class);
 
     @Test void newAnnotatedBeanOutsideServicePackageCachesAndAutomaticallyInvalidatesItsTable() throws Throwable {
         Map<Object, Object> values = new HashMap<>();
-        when(cache.get(anyString(), anyString(), any(), any(), anyList(), anyLong(), any(), any(), any()))
+        when(cache.get(anyString(), anyString(), any(), any(), anyList(), anyLong(), any(), any(), any(), any()))
                 .thenAnswer(call -> {
                     ((Runnable) call.getArgument(6)).run();
                     Object key = call.getArgument(2);
@@ -57,7 +57,7 @@ class QueryCachedTest {
             assertEquals("item:7", query.items((Number) 7L));
             assertEquals(2, query.loads());
             assertEquals(2, values.size(), "重载方法签名必须隔离缓存键");
-            verify(guard, times(3)).check(any(), any());
+            verify(guard, times(3)).check(any());
             assertTrue(application.getBean(QueryCatalogue.class).dependsOn("t_extension_items"));
 
             Executor database = mock(Executor.class);
@@ -77,7 +77,7 @@ class QueryCachedTest {
     }
 
     @Test void customStrategyCanTransformLoadAndViewWithoutCoreChanges() throws Throwable {
-        when(cache.get(anyString(), anyString(), any(), any(), anyList(), anyLong(), any(), any(), any()))
+        when(cache.get(anyString(), anyString(), any(), any(), anyList(), anyLong(), any(), any(), any(), any()))
                 .thenAnswer(call -> ((QueryCache.Loader) call.getArgument(7)).load());
         context.run(application -> {
             assertThat(application).hasNotFailed();
@@ -116,15 +116,19 @@ class QueryCachedTest {
 
     public static class NewQueries {
         private final AtomicInteger loads = new AtomicInteger();
-        @QueryCached(keyPrefix = "test:items:", seconds = 60, access = QueryCatalogue.Access.NONE, tables = "t_extension_items")
+        @QueryCached(keyPrefix = "test:items:", seconds = 60, access = TestAccess.class, tables = "t_extension_items")
         public List<String> items(Long id) { loads.incrementAndGet(); return List.of("item:" + id); }
-        @QueryCached(keyPrefix = "test:items:", seconds = 60, access = QueryCatalogue.Access.NONE, tables = "t_extension_items")
+        @QueryCached(keyPrefix = "test:items:", seconds = 60, access = TestAccess.class, tables = "t_extension_items")
         public String items(Number id) { loads.incrementAndGet(); return "item:" + id; }
-        @QueryCached(keyPrefix = "test:decorated:", seconds = 60, access = QueryCatalogue.Access.NONE,
+        @QueryCached(keyPrefix = "test:decorated:", seconds = 60, access = NoQueryAccess.class,
                 tables = "t_extension_items", behavior = Decorated.class)
         public String decorated(String value) { return value; }
         public String live() { return "live"; }
         public int loads() { return loads.get(); }
+    }
+
+    public static class TestAccess implements QueryAccessPolicy {
+        @Override public void check(Object[] args) { }
     }
 
     public static class Decorated implements QueryCacheBehavior {
@@ -138,11 +142,11 @@ class QueryCachedTest {
     }
 
     static final class FinalQuery {
-        @QueryCached(keyPrefix = "test:", seconds = 60, access = QueryCatalogue.Access.NONE, tables = "t_extension_items")
+        @QueryCached(keyPrefix = "test:", seconds = 60, access = NoQueryAccess.class, tables = "t_extension_items")
         public String value() { return "value"; }
     }
     static class PrivateQuery {
-        @QueryCached(keyPrefix = "test:", seconds = 60, access = QueryCatalogue.Access.NONE, tables = "t_extension_items")
+        @QueryCached(keyPrefix = "test:", seconds = 60, access = NoQueryAccess.class, tables = "t_extension_items")
         private String value() { return "value"; }
     }
 }

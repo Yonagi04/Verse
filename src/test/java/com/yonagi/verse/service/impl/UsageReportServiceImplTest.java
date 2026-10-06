@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.reporting.UsageReportAccessPolicy;
+
 import com.yonagi.verse.common.config.UsageReportingProperties;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.UsageBreakdownDimension;
@@ -37,8 +39,13 @@ class UsageReportServiceImplTest {
     void setUp() {
         aggregateMapper=mock(TokenUsageHourlyAggMapper.class);
         userTenantService=mock(UserTenantService.class);
-        service=new UsageReportServiceImpl(aggregateMapper,userTenantService,new UsageReportingProperties(),
-                mock(ApiKeyMapper.class),mock(LlmServiceMapper.class),mock(UserMapper.class));
+        service=new UsageReportServiceImpl(aggregateMapper,
+                userTenantService,
+                new UsageReportingProperties(),
+                mock(ApiKeyMapper.class),
+                mock(LlmServiceMapper.class),
+                mock(UserMapper.class),
+                new UsageReportAccessPolicy(userTenantService, new UsageReportingProperties(), mock(ApiKeyMapper.class), mock(LlmServiceMapper.class)));
         when(userTenantService.isUserJoinedTenant(anyLong(),anyLong())).thenReturn(true);
     }
 
@@ -70,8 +77,13 @@ class UsageReportServiceImplTest {
     @Test
     void memberCannotUseAnotherUsersApiKey() {
         ApiKeyMapper apiKeyMapper=mock(ApiKeyMapper.class);
-        service=new UsageReportServiceImpl(aggregateMapper,userTenantService,new UsageReportingProperties(),apiKeyMapper,
-                mock(LlmServiceMapper.class),mock(UserMapper.class));
+        service=new UsageReportServiceImpl(aggregateMapper,
+                userTenantService,
+                new UsageReportingProperties(),
+                apiKeyMapper,
+                mock(LlmServiceMapper.class),
+                mock(UserMapper.class),
+                new UsageReportAccessPolicy(userTenantService, new UsageReportingProperties(), apiKeyMapper, mock(LlmServiceMapper.class)));
         when(userTenantService.getRoleByUserIdAndTenantId(10L,20L)).thenReturn("MEMBER");
         ApiKeyDO key=new ApiKeyDO();key.setApiKeyId(30L);key.setTenantId(20L);key.setUserId(11L);
         when(apiKeyMapper.selectOne(any())).thenReturn(key);
@@ -83,7 +95,13 @@ class UsageReportServiceImplTest {
     @Test
     void adminCombinedFiltersAreAppliedTogether() {
         ApiKeyMapper apiKeyMapper=mock(ApiKeyMapper.class);LlmServiceMapper llmServiceMapper=mock(LlmServiceMapper.class);
-        service=new UsageReportServiceImpl(aggregateMapper,userTenantService,new UsageReportingProperties(),apiKeyMapper,llmServiceMapper,mock(UserMapper.class));
+        service=new UsageReportServiceImpl(aggregateMapper,
+                userTenantService,
+                new UsageReportingProperties(),
+                apiKeyMapper,
+                llmServiceMapper,
+                mock(UserMapper.class),
+                new UsageReportAccessPolicy(userTenantService, new UsageReportingProperties(), apiKeyMapper, llmServiceMapper));
         when(userTenantService.getRoleByUserIdAndTenantId(10L,20L)).thenReturn("ADMIN");
         ApiKeyDO key=new ApiKeyDO();key.setApiKeyId(30L);key.setTenantId(20L);key.setUserId(11L);when(apiKeyMapper.selectOne(any())).thenReturn(key);
         when(llmServiceMapper.exists(any())).thenReturn(true);when(aggregateMapper.summarizeHours(20L,11L,30L,40L,from,to)).thenReturn(List.of());
@@ -107,7 +125,13 @@ class UsageReportServiceImplTest {
     @Test
     void adminCanRankMembersWithSafeLabels() {
         UserMapper userMapper=mock(UserMapper.class);
-        service=new UsageReportServiceImpl(aggregateMapper,userTenantService,new UsageReportingProperties(),mock(ApiKeyMapper.class),mock(LlmServiceMapper.class),userMapper);
+        service=new UsageReportServiceImpl(aggregateMapper,
+                userTenantService,
+                new UsageReportingProperties(),
+                mock(ApiKeyMapper.class),
+                mock(LlmServiceMapper.class),
+                userMapper,
+                new UsageReportAccessPolicy(userTenantService, new UsageReportingProperties(), mock(ApiKeyMapper.class), mock(LlmServiceMapper.class)));
         when(userTenantService.getRoleByUserIdAndTenantId(10L,20L)).thenReturn("ADMIN");
         when(aggregateMapper.summarizeBreakdown("MEMBER",20L,null,null,null,from,to)).thenReturn(new java.util.ArrayList<>(List.of(row(11L,null,5,1,"1"))));
         UserDO user=new UserDO();user.setUserId(11L);user.setUsername("alice");user.setNickname("Alice");when(userMapper.selectList(any())).thenReturn(List.of(user));

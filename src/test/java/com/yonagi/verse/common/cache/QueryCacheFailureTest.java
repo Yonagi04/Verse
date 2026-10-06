@@ -15,6 +15,18 @@ import static org.mockito.Mockito.*;
 import static org.mockito.ArgumentMatchers.*;
 
 class QueryCacheFailureTest {
+    @Test void negativeCacheStillRunsCurrentAuthorization() {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        when(redis.execute(any(RedisScript.class), anyList())).thenReturn(List.of("v1"));
+        var values = mock(org.springframework.data.redis.core.ValueOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(values.get(anyString())).thenReturn("{\"errorCode\":\"B000200\",\"errorMessage\":\"old denial\"}");
+        QueryCache cache = new QueryCache(redis, mock(RedissonClient.class), new QueryCacheProperties(), new SimpleMeterRegistry());
+        var current = new com.yonagi.verse.common.convention.exception.ClientException("current denial");
+        assertSame(current, assertThrows(com.yonagi.verse.common.convention.exception.ClientException.class,
+                () -> cache.get("private", "test:", "id", String.class, List.of("t_test"), 10000,
+                        () -> { throw current; }, () -> { fail("must not load"); return null; }, value -> true)));
+    }
     @Test void redisUnavailableUsesBoundedDatabaseFallback() {
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         when(redis.execute(any(RedisScript.class), anyList())).thenThrow(new RedisConnectionFailureException("offline"));

@@ -1,7 +1,9 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.playground.PlaygroundAccessPolicy;
+import com.yonagi.verse.service.playground.PlaygroundQueryAccess;
+
 import com.yonagi.verse.common.cache.QueryCached;
-import com.yonagi.verse.common.cache.QueryCatalogue.Access;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
@@ -10,7 +12,6 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.common.enums.PlaygroundErrorCodeEnum;
-import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
@@ -18,7 +19,6 @@ import com.yonagi.verse.dao.entity.LlmServiceCapabilityDO;
 import com.yonagi.verse.dao.entity.PlaygroundSessionDO;
 import com.yonagi.verse.dao.entity.PlaygroundTurnDO;
 import com.yonagi.verse.dao.entity.TenantDO;
-import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.LlmServiceMapper;
 import com.yonagi.verse.dao.mapper.LlmServiceCapabilityMapper;
 import com.yonagi.verse.dao.mapper.PlaygroundSessionMapper;
@@ -66,6 +66,7 @@ public class PlaygroundServiceImpl implements PlaygroundService {
             new PlaygroundDtos.Prompt("rewrite-copy", "改写一段文字", "让表达更简洁、清晰、友好",
                     "请将下面的文字改写得更简洁、清晰、友好，保留原意：\n\n"));
 
+    private final PlaygroundAccessPolicy playgroundAccess;
     private final TenantMapper tenantMapper;
     private final UserTenantMapper membershipMapper;
     private final LlmServiceMapper serviceMapper;
@@ -85,7 +86,7 @@ public class PlaygroundServiceImpl implements PlaygroundService {
     }
 
     @Override
-    @QueryCached(keyPrefix = PLAYGROUND_MODELS_KEY, seconds = HOURS_4, access = Access.PLAYGROUND,
+    @QueryCached(keyPrefix = PLAYGROUND_MODELS_KEY, seconds = HOURS_4, access = PlaygroundQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_llm_service", "t_llm_service_capability"})
     public PlaygroundDtos.Models models(UserContext actor, Long tenantId) {
         requireEnabled(actor, tenantId);
@@ -360,27 +361,11 @@ public class PlaygroundServiceImpl implements PlaygroundService {
     }
 
     private TenantDO requireTenant(UserContext actor, Long tenantId) {
-        if (actor == null || actor.getApiKeyId() != null || actor.getUserId() == null
-                || tenantId == null || !tenantId.equals(actor.getCurrentTenantId())) {
-            throw new ClientException(TenantErrorCodeEnum.TENANT_CONTEXT_MISMATCH);
-        }
-        UserTenantDO membership = membershipMapper.selectOne(Wrappers.lambdaQuery(UserTenantDO.class)
-                .eq(UserTenantDO::getTenantId, tenantId)
-                .eq(UserTenantDO::getUserId, actor.getUserId())
-                .isNull(UserTenantDO::getLeftAt));
-        if (membership == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
-        TenantDO tenant = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId)
-                .eq(TenantDO::getStatus, 1)
-                .eq(TenantDO::getDelFlag, 0));
-        if (tenant == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
-        return tenant;
+        return playgroundAccess.requireTenant(actor, tenantId);
     }
 
     private void requireEnabled(UserContext actor, Long tenantId) {
-        if (!Integer.valueOf(1).equals(requireTenant(actor, tenantId).getPlaygroundEnabled())) {
-            throw new ClientException(PlaygroundErrorCodeEnum.DISABLED);
-        }
+        playgroundAccess.requireEnabled(actor, tenantId);
     }
 
     private LlmServiceDO loadService(Long tenantId, Long serviceId) {

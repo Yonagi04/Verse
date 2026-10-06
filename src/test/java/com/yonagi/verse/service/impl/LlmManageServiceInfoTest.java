@@ -53,12 +53,18 @@ class LlmManageServiceInfoTest {
                 new MapperBuilderAssistant(new MybatisConfiguration(), "llm-info-test"),
                 LlmServiceDO.class
         );
-        service = new LlmManageServiceImpl(
-                tenantMapper, userTenantService, aesUtil, redisTemplate, mock(UserMapper.class),
-                mock(JwtUtil.class), mock(RedissonClient.class), mock(LlmMetadataService.class),
-                mock(PricingConfigurationService.class), mock(TenantActivityRecorder.class),
-                mock(LlmServiceCapabilityMapper.class)
-        );
+        service = new LlmManageServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
+                tenantMapper,
+                userTenantService,
+                aesUtil,
+                redisTemplate,
+                mock(UserMapper.class),
+                mock(JwtUtil.class),
+                mock(RedissonClient.class),
+                mock(LlmMetadataService.class),
+                mock(PricingConfigurationService.class),
+                mock(TenantActivityRecorder.class),
+                mock(LlmServiceCapabilityMapper.class));
         ReflectionTestUtils.setField(service, "baseMapper", llmServiceMapper);
         when(tenantMapper.selectOne(any())).thenReturn(new TenantDO());
         when(userTenantService.isUserJoinedTenant(1L, 2L)).thenReturn(true);

@@ -1,5 +1,7 @@
 package com.yonagi.verse.common.cache;
 
+import com.yonagi.verse.service.cache.HourlyCacheBehavior;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.service.forward.*;
@@ -37,7 +39,6 @@ class CoreQueryCacheStartupTest {
 
     private final ApplicationContextRunner context = dependencies
             .withBean(QueryCache.class, () -> mock(QueryCache.class))
-            .withBean(QueryAccessGuard.class, () -> mock(QueryAccessGuard.class))
             .withBean(LlmServiceMapper.class, () -> mock(LlmServiceMapper.class))
             .withBean(LlmServiceCapabilityMapper.class, () -> mock(LlmServiceCapabilityMapper.class))
             .withBean(TenantMapper.class, () -> mock(TenantMapper.class))
@@ -67,7 +68,7 @@ class CoreQueryCacheStartupTest {
                     assertThat(application).hasNotFailed();
                     assertThat(application).hasSingleBean(LlmForwardService.class);
                     assertThat(application).hasSingleBean(QueryCache.class);
-                    assertThat(application).hasSingleBean(QueryAccessGuard.class);
+                    assertThat(application).hasSingleBean(CoreQueryCacheAspect.class);
                     assertThat(application.getBean(org.apache.ibatis.session.SqlSessionFactory.class)
                             .getConfiguration().getInterceptors()).anyMatch(QueryWriteInterceptor.class::isInstance);
                 });
@@ -75,7 +76,7 @@ class CoreQueryCacheStartupTest {
 
     @Configuration(proxyBeanMethods = false)
     @org.mybatis.spring.annotation.MapperScan("com.yonagi.verse.dao.mapper")
-    @Import({QueryCache.class, QueryCacheProperties.class, QueryAccessGuard.class, QueryWriteInterceptor.class})
+    @Import({QueryCache.class, QueryCacheProperties.class, QueryWriteInterceptor.class})
     static class PersistenceConfiguration {
         @Bean(destroyMethod = "close")
         MySqlTestDatabase database() {
@@ -85,7 +86,7 @@ class CoreQueryCacheStartupTest {
 
     @Configuration(proxyBeanMethods = false)
     @EnableAspectJAutoProxy(proxyTargetClass = true)
-    @ComponentScan(basePackageClasses = com.yonagi.verse.service.cache.QueryCacheBehaviors.class)
+    @ComponentScan(basePackageClasses = HourlyCacheBehavior.class)
     @Import({QueryCatalogue.class, CoreQueryCacheAspect.class, ModelResolverImpl.class, AdapterRegistry.class,
             NativeChatAdapters.Registrations.class, NativeEmbeddingAdapters.Registrations.class,
             RoutingProviderAdapter.class, LlmForwardServiceImpl.class, PricingResolver.class,

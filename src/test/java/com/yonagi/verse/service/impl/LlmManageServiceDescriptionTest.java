@@ -73,7 +73,7 @@ class LlmManageServiceDescriptionTest {
                 new MapperBuilderAssistant(new MybatisConfiguration(), "llm-description-test"),
                 LlmServiceDO.class
         );
-        service = new LlmManageServiceImpl(
+        service = new LlmManageServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
                 tenantMapper,
                 userTenantService,
                 aesUtil,
@@ -84,8 +84,7 @@ class LlmManageServiceDescriptionTest {
                 metadataService,
                 mock(PricingConfigurationService.class),
                 activityRecorder,
-                capabilityMapper
-        );
+                capabilityMapper);
         ReflectionTestUtils.setField(service, "baseMapper", llmServiceMapper);
         when(tenantMapper.selectOne(any())).thenReturn(new TenantDO());
         when(userTenantService.isUserJoinedTenant(1L, 2L)).thenReturn(true);

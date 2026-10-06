@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.yonagi.verse.common.convention.exception.ClientException;
@@ -161,7 +163,12 @@ class TenantSettingsServiceImplTest {
         when(userTenantMapper.selectOne(any())).thenReturn(membership);
         when(tenantMapper.selectOne(any())).thenReturn(tenant);
         return new Fixture(tenantMapper, redisTemplate, rateLimiter, activityRecorder,
-                new TenantSettingsServiceImpl(tenantMapper, userTenantMapper, redisTemplate, rateLimiter, activityRecorder));
+                new TenantSettingsServiceImpl(new TenantAccessPolicy(tenantMapper, userTenantMapper),
+                tenantMapper,
+                userTenantMapper,
+                redisTemplate,
+                rateLimiter,
+                activityRecorder));
     }
 
     private static TenantDO teamTenant() {
