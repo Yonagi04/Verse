@@ -5,6 +5,8 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.async.event.TokenUsageEvent;
+import com.yonagi.verse.async.event.LlmAuditEvent;
+import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
 import com.yonagi.verse.async.outbox.UsageOutboxStager;
 import com.yonagi.verse.common.config.UsageOutboxProperties;
 import com.yonagi.verse.common.convention.exception.ClientException;
@@ -295,11 +297,17 @@ public class CostBudgetService {
                 CostBudgetPeriodDO cumulative = loadPeriod(key, period);
                 add(cumulative, row); cumulative.setUpdateTime(time.local(time.now())); periods.updateById(cumulative);
             }
-            if ("LIVE".equals(row.getOrigin())) outbox.stage(JSON.parseObject(row.getEventPayloadJson(), TokenUsageEvent.class),
-                    row.getEventPayloadJson(), time.local(time.now()));
+            TokenUsageEvent event = JSON.parseObject(row.getEventPayloadJson(), TokenUsageEvent.class);
+            if ("LIVE".equals(row.getOrigin())) outbox.stage(event, row.getEventPayloadJson(), time.local(time.now()));
             row.setBudgetApplied(true); row.setAppliedAt(time.local(time.now())); settlements.updateById(row);
             if (invocation != null) {
-                invocation.setState("SETTLED"); invocation.setUpdateTime(row.getAppliedAt()); invocations.updateById(invocation);
+                // 已持久化未知费用不代表上游未收费；保留预算栅栏，禁止用零金额放行。
+                boolean unknownExecution = event.getExecutionOutcome() == UpstreamExecutionOutcome.UNKNOWN
+                        || (CostStatus.UNCALCULABLE.name().equals(row.getCostStatus())
+                        && !LlmAuditEvent.STATUS_SUCCESS.equals(event.getStatus()));
+                invocation.setState(unknownExecution ? "UNKNOWN" : "SETTLED");
+                if (unknownExecution) invocation.setLastErrorCode("UPSTREAM_RESULT_UNKNOWN");
+                invocation.setUpdateTime(row.getAppliedAt()); invocations.updateById(invocation);
             }
         });
     }

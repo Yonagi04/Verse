@@ -23,16 +23,26 @@ public final class StreamResponseAccumulator {
     private JSONObject usage;
     private String usageKey;
     private boolean validResponseChunk;
+    /** 协议结束标记独立于本地下游订阅是否正常结束。 */
+    private boolean completed;
+    /** 任何已收到的事件都禁止把后续失败重新解释为请求未发送。 */
+    private boolean receivedEvent;
 
     public StreamResponseAccumulator(boolean captureResponse) {
         this.captureResponse = captureResponse;
     }
 
     /**
-     * Observes one SSE data payload. Invalid JSON and the terminal {@code [DONE]} marker are ignored.
+     * Observes one SSE data payload and preserves the protocol completion marker.
      */
-    public void accept(String data) {
-        if (!hasText(data) || DONE.equals(data.trim())) {
+    public synchronized void accept(String data) {
+        receivedEvent = true;
+        if (completed) return;
+        if (!hasText(data)) {
+            return;
+        }
+        if (DONE.equals(data.trim())) {
+            completed = true;
             return;
         }
 
@@ -99,6 +109,18 @@ public final class StreamResponseAccumulator {
     public JSONObject usage() {
         return usage;
     }
+
+    /** 只认可已收到的协议结束标记，不以连接关闭推断执行完成。 */
+    public synchronized boolean completed() {
+        return completed;
+    }
+
+    /** 取消可跨线程发生，终态一次性取得用量与结束证据，避免不一致的快照。 */
+    public synchronized Snapshot snapshot() {
+        return new Snapshot(usageEnvelope(), usage, buildResponseJson(), completed, receivedEvent);
+    }
+
+    public record Snapshot(JSONObject envelope, JSONObject usage, String response, boolean completed, boolean receivedEvent) {}
 
     /** 返回仅包含终态 usage 子对象的完整 envelope，供 shape-aware registry 选择解析器。 */
     public JSONObject usageEnvelope() {

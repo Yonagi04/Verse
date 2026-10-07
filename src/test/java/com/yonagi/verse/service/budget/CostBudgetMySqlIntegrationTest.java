@@ -113,6 +113,43 @@ class CostBudgetMySqlIntegrationTest {
         instanceA.begin(ctx, id, now); instanceA.sent(id); instanceA.settle(event(id, amount, status, now));
     }
 
+    @Test void uncertainFailureStagesOnceAndKeepsBudgetUnavailableAcrossInstances() throws Exception {
+        configure("{\"enabled\":true,\"dailyLimitFen\":\"100\"}");
+        instanceA.begin(ctx, "uncertain-upstream", now); instanceA.sent("uncertain-upstream");
+        var failure = event("uncertain-upstream", null, CostStatus.UNCALCULABLE, now);
+        failure.setStatus("FAIL"); failure.setUsageSource(TokenUsageEvent.SOURCE_UNKNOWN);
+        instanceA.settle(failure);
+        String eventId = jdbc.queryForObject("SELECT event_id FROM t_cost_budget_settlement", String.class);
+        instanceB.apply(eventId); instanceA.settle(failure);
+        assertEquals("UNKNOWN", jdbc.queryForObject("SELECT state FROM t_cost_budget_invocation", String.class));
+        assertEquals("UPSTREAM_RESULT_UNKNOWN", jdbc.queryForObject("SELECT last_error_code FROM t_cost_budget_invocation", String.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM t_token_usage_outbox", Integer.class));
+        assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_period WHERE uncalculable_count=1", Integer.class));
+        assertEquals("UNKNOWN", instanceB.status(2L, 3L, 1L).budgetState());
+        assertThrows(CostBudgetUnavailableException.class, () -> instanceA.check(ctx));
+        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx));
+        assertThrows(IllegalStateException.class, () -> instanceB.rebuild(2L, 3L));
+        configure("{\"enabled\":false}"); instanceB.check(ctx);
+    }
+
+    @Test void partialStreamCostIsPersistedOnceAndStillBlocksOtherInstances() throws Exception {
+        configure("{\"enabled\":true,\"dailyLimitFen\":\"100\"}");
+        instanceA.begin(ctx, "partial-stream", now); instanceA.sent("partial-stream");
+        var partial = event("partial-stream", "0.125", CostStatus.CALCULATED, now);
+        partial.setStatus("ABORTED"); partial.setUsageSource(TokenUsageEvent.SOURCE_ESTIMATED);
+        partial.setExecutionOutcome(com.yonagi.verse.service.forward.UpstreamExecutionOutcome.UNKNOWN);
+        instanceA.settle(partial);
+        String eventId = jdbc.queryForObject("SELECT event_id FROM t_cost_budget_settlement", String.class);
+        instanceB.apply(eventId); instanceA.settle(partial);
+        assertEquals("UNKNOWN", jdbc.queryForObject("SELECT state FROM t_cost_budget_invocation", String.class));
+        assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM t_token_usage_outbox", Integer.class));
+        assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_period WHERE used_cost_fen=0.125", Integer.class));
+        String payload = jdbc.queryForObject("SELECT event_payload_json FROM t_cost_budget_settlement", String.class);
+        assertEquals("UNKNOWN", JSON.parseObject(payload).getString("executionOutcome"));
+        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx));
+        assertThrows(IllegalStateException.class, () -> instanceB.rebuild(2L, 3L));
+    }
+
     @Test void originalFractionalCostsAcrossModelsAndInstancesBlockAtEquality() throws Exception {
         configure("{\"enabled\":true,\"dailyLimitFen\":\"1\"}");
         for (int index = 0; index < 8; index++) call("small-" + index, "0.125", CostStatus.CALCULATED);

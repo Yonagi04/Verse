@@ -106,11 +106,15 @@ verse:
     upstream:
       connect-timeout: 5000
       read-timeout: 120000
-      # 同模型短重试次数（不含首次调用）
+      # 同模型安全重试次数（不含首次调用）；结果未知时不会重试。
       max-retries: 1
-      # 上游调用硬性总耗时上限（毫秒），区别于 read-timeout 的“两次数据到达间隔”语义
+      # 网关单次等待上游的上限（毫秒）；取消 Future 不保证上游执行已结束。
       time-limit-ms: 120000
-      # 流式 chunk 间空闲超时（毫秒），区别于 time-limit-ms 的总耗时硬超时
+      # 每个实例的同步执行上限；不排队，超时后未退出的任务继续占用容量。
+      max-concurrency: 32
+      # 关闭时先停止接收，再有界等待，随后请求中断剩余任务。
+      shutdown-grace-ms: 5000
+      # 流式 chunk 间空闲超时（毫秒），区别于 time-limit-ms 的单次等待上限。
       stream-idle-timeout-ms: 120000
     media:
       # 请求与响应上限均在调用上游前后强制执行。

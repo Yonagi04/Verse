@@ -61,14 +61,12 @@ public class AzureJsonOperationAdapter implements ProviderAdapter, AdapterRegist
                     throw UpstreamErrors.from(response.getStatusCode().value(),
                             new String(limited, StandardCharsets.UTF_8));
                 }
-                byte[] bytes = response.getBody().readNBytes(maxImageJsonBytes + 1);
-                if (bytes.length > maxImageJsonBytes) throw new ClientException(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE);
-                return new String(bytes, StandardCharsets.UTF_8);
+                return UpstreamResponseBody.readJson(response.getBody(), maxImageJsonBytes);
             });
         } catch (RestClientResponseException e) {
             throw UpstreamErrors.from(e.getStatusCode().value(), e.getResponseBodyAsString());
         } catch (ResourceAccessException e) {
-            throw UpstreamErrors.timeout();
+            throw UpstreamErrors.transport(e);
         }
     }
 
@@ -80,7 +78,7 @@ public class AzureJsonOperationAdapter implements ProviderAdapter, AdapterRegist
                 .bodyToFlux(new ParameterizedTypeReference<ServerSentEvent<String>>() {})
                 .onErrorMap(WebClientResponseException.class,
                         e -> UpstreamErrors.from(e.getStatusCode().value(), e.getResponseBodyAsString()))
-                .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.timeout());
+                .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.transport(e));
     }
 
     private String body(ForwardContext context) {

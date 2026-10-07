@@ -65,7 +65,7 @@ public final class NativeChatAdapters {
             } catch (RestClientResponseException e) {
                 throw UpstreamErrors.from(e.getStatusCode().value(), e.getResponseBodyAsString());
             } catch (ResourceAccessException e) {
-                throw UpstreamErrors.timeout();
+                throw UpstreamErrors.transport(e);
             }
         }
 
@@ -272,6 +272,7 @@ public final class NativeChatAdapters {
             JSONObject outbound = request(context, input);
             outbound.put("stream", true);
             return Flux.defer(() -> {
+                AtomicBoolean finished = new AtomicBoolean();
                 JSONObject state = new JSONObject();
                 state.put("input", null);
                 state.put("output", null);
@@ -336,8 +337,10 @@ public final class NativeChatAdapters {
                                     String reason = delta == null ? null : delta.getString("stop_reason");
                                     sink.next(chunk(context, new JSONObject(),
                                             "tool_use".equals(reason) ? "tool_calls"
-                                                    : "max_tokens".equals(reason) ? "length" : "stop", null));
+                                                    : "max_tokens".equals(reason) ? "length" : "stop",
+                                            usage(state.getLong("input"), state.getLong("output"))));
                                 } else if ("message_stop".equals(type)) {
+                                    finished.set(true);
                                     sink.next(chunk(context, null, null,
                                             usage(state.getLong("input"), state.getLong("output"))));
                                 }
@@ -347,8 +350,9 @@ public final class NativeChatAdapters {
                         .map(value -> (ServerSentEvent<String>) value)
                         .onErrorMap(WebClientResponseException.class,
                                 e -> UpstreamErrors.from(e.getStatusCode().value(), e.getResponseBodyAsString()))
-                        .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.timeout())
-                        .concatWithValues(done());
+                        .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.transport(e))
+                        .concatWith(Flux.defer(() -> finished.get() ? Flux.just(done())
+                                : Flux.error(UpstreamErrors.incompleteStream())));
             });
         }
     }
@@ -422,7 +426,7 @@ public final class NativeChatAdapters {
                         })
                         .onErrorMap(WebClientResponseException.class,
                                 e -> UpstreamErrors.from(e.getStatusCode().value(), e.getResponseBodyAsString()))
-                        .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.timeout())
+                        .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.transport(e))
                         .concatWith(Flux.defer(() -> finished.get() ? Flux.just(done())
                                 : Flux.error(UpstreamErrors.from(502, null))));
             });
@@ -637,7 +641,7 @@ public final class NativeChatAdapters {
                         })
                         .onErrorMap(WebClientResponseException.class,
                                 e -> UpstreamErrors.from(e.getStatusCode().value(), e.getResponseBodyAsString()))
-                        .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.timeout())
+                        .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.transport(e))
                         .concatWith(Flux.defer(() -> finished.get() ? Flux.just(done())
                                 : Flux.error(UpstreamErrors.from(502, null))));
             });
@@ -686,7 +690,7 @@ public final class NativeChatAdapters {
                     .bodyToFlux(new org.springframework.core.ParameterizedTypeReference<ServerSentEvent<String>>() {})
                     .onErrorMap(WebClientResponseException.class,
                             e -> UpstreamErrors.from(e.getStatusCode().value(), e.getResponseBodyAsString()))
-                    .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.timeout());
+                    .onErrorMap(WebClientRequestException.class, e -> UpstreamErrors.transport(e));
         }
     }
 

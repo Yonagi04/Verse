@@ -27,6 +27,14 @@ import com.yonagi.verse.service.forward.ChatMessage;
 import com.yonagi.verse.service.forward.ForwardContext;
 import com.yonagi.verse.service.forward.ProviderAdapter;
 import com.yonagi.verse.service.forward.UpstreamFailureException;
+import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
+import com.yonagi.verse.service.forward.UpstreamErrors;
+import com.yonagi.verse.service.forward.OpenAiCompatibleAdapter;
+import com.yonagi.verse.service.forward.OpenAiJsonOperationAdapter;
+import com.yonagi.verse.service.forward.OpenAiMediaAdapter;
+import com.yonagi.verse.service.forward.AdapterExchange;
+import com.yonagi.verse.service.forward.MediaOperationAdapter;
+import com.yonagi.verse.common.enums.UpstreamProtocol;
 import com.yonagi.verse.service.pricing.CostCalculator;
 import com.yonagi.verse.service.pricing.PricingResolver;
 import com.yonagi.verse.service.pricing.PricingSnapshot;
@@ -45,12 +53,295 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import com.sun.net.httpserver.HttpServer;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class LlmForwardUsagePublicationTest {
+    @ParameterizedTest @ValueSource(strings = {"partial-usage", "no-usage", "empty", "finish-reason-only"})
+    void chatEofWithoutDoneFailsWithUnknownExecutionAndRetainsUsage(String payload) {
+        tokenPricing();
+        String choice = payload.equals("finish-reason-only") ? "{\"finish_reason\":\"stop\"}" : "{\"delta\":{\"content\":\"partial\"}}";
+        String usage = "{\"choices\":[" + choice + "],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}";
+        boolean hasUsage = payload.equals("partial-usage") || payload.equals("finish-reason-only");
+        when(providerAdapter.stream(any())).thenReturn(payload.equals("empty") ? Flux.empty()
+                : Flux.just(ServerSentEvent.builder(hasUsage ? usage : "{\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}").build()));
+        var failure = assertThrows(UpstreamFailureException.class,
+                () -> stream(ModelOperation.CHAT_COMPLETIONS, "eof-" + payload).blockLast());
+        assertEquals(UpstreamExecutionOutcome.UNKNOWN, failure.getExecutionOutcome());
+        assertFalse(failure.isRetryable());
+        var event = terminalEvent();
+        assertEquals("FAIL", event.getStatus());
+        assertEquals(UpstreamExecutionOutcome.UNKNOWN, event.getExecutionOutcome());
+        assertEquals(hasUsage ? "ESTIMATED" : "UNKNOWN", event.getUsageSource());
+        assertEquals(hasUsage ? CostStatus.CALCULATED : CostStatus.UNCALCULABLE, event.getCostResult().status());
+        if (hasUsage) assertEquals(7, event.getTotalTokens());
+        else assertNull(event.getTotalTokens());
+        verifyNoInteractions(fallbackExecutor);
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"compatible", "anthropic"})
+    void realHttpChatEofWithoutNativeTerminalCannotBecomeExact(String provider) throws Exception {
+        tokenPricing();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        var calls = new AtomicInteger();
+        String body = "{\"model\":\"alias\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"stream\":true}";
+        String reply = provider.equals("anthropic")
+                ? "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"
+                + "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n"
+                : "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}\n\n";
+        server.createContext("/", exchange -> {
+            calls.incrementAndGet(); exchange.getRequestBody().readAllBytes();
+            byte[] bytes = reply.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes); exchange.close();
+        });
+        server.start();
+        try {
+            primary.setApiUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            ProviderAdapter adapter;
+            if (provider.equals("anthropic")) {
+                adapter = new com.yonagi.verse.service.forward.NativeChatAdapters.Anthropic();
+                primary.setProvider("anthropic");
+                when(modelResolver.protocolFor(primary, ModelOperation.CHAT_COMPLETIONS)).thenReturn(UpstreamProtocol.ANTHROPIC_MESSAGES);
+            } else adapter = new OpenAiCompatibleAdapter(5000, 5000);
+            ReflectionTestUtils.setField(service, "providerAdapter", adapter);
+            var received = new java.util.ArrayList<ServerSentEvent<String>>();
+            assertThrows(UpstreamFailureException.class, () -> service.chatCompletionStream(context, body,
+                    "http-eof", Instant.now()).doOnNext(received::add).blockLast(java.time.Duration.ofSeconds(5)));
+            assertEquals(1, calls.get());
+            assertFalse(received.stream().anyMatch(e -> "[DONE]".equals(e.data())));
+            var event = terminalEvent();
+            assertEquals("FAIL", event.getStatus());
+            assertEquals(UpstreamExecutionOutcome.UNKNOWN, event.getExecutionOutcome());
+            assertEquals("ESTIMATED", event.getUsageSource());
+            assertEquals(7, event.getTotalTokens());
+            assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
+        } finally { server.stop(0); }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"SPEECH", "TRANSCRIPTION"})
+    void mediaValidationBeforeSendingStillSettlesAsNotChargeable(String operation) {
+        ModelOperation op = ModelOperation.valueOf(operation);
+        var adapter = new OpenAiMediaAdapter(op, UpstreamProtocol.OPENAI_COMPAT);
+        ReflectionTestUtils.setField(service, "providerAdapter", adapter);
+        AdapterExchange.Request request = op == ModelOperation.SPEECH
+                ? new AdapterExchange.JsonRequest(op, JSON.parseObject("{\"input\":\"\",\"voice\":\"alloy\"}"))
+                : new AdapterExchange.MultipartRequest(op, Map.of(), "clip.wav",
+                org.springframework.http.MediaType.parseMediaType("audio/wav"), new byte[0]);
+        assertThrows(ClientException.class, () -> service.media(context, op, "alias", request, "invalid-media", Instant.now()));
+        var event = terminalEvent();
+        assertEquals(CostStatus.NOT_CHARGEABLE, event.getCostResult().status());
+        assertEquals("NOT_SENT", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
+        verify(circuitBreaker, never()).recordFailure(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"CHAT_COMPLETIONS", "RESPONSES"})
+    void cancellationRetainsTerminalUsageAlreadyReceivedBeforeAsyncDelivery(String operation) throws Exception {
+        tokenPricing();
+        ModelOperation op = ModelOperation.valueOf(operation);
+        var upstream = reactor.core.publisher.Sinks.many().unicast().<ServerSentEvent<String>>onBackpressureBuffer();
+        when(providerAdapter.stream(any())).thenReturn(upstream.asFlux());
+        var delivering = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var subscription = stream(op, "buffered-cancel").subscribe(event -> {
+            delivering.countDown();
+            try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+            // publishOn 在取消时允许中断正在等待的交付任务。
+            catch (InterruptedException expected) { Thread.currentThread().interrupt(); }
+        });
+        try {
+            assertEquals(reactor.core.publisher.Sinks.EmitResult.OK,
+                    upstream.tryEmitNext(ServerSentEvent.builder("{\"choices\":[]}").event("response.created").build()));
+            assertTrue(delivering.await(5, TimeUnit.SECONDS));
+            if (op == ModelOperation.RESPONSES) {
+                assertEquals(reactor.core.publisher.Sinks.EmitResult.OK, upstream.tryEmitNext(ServerSentEvent.builder(
+                        "{\"response\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":2,\"total_tokens\":7}}}")
+                        .event("response.completed").build()));
+            } else {
+                assertEquals(reactor.core.publisher.Sinks.EmitResult.OK, upstream.tryEmitNext(ServerSentEvent.builder(
+                        "{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}").build()));
+                assertEquals(reactor.core.publisher.Sinks.EmitResult.OK,
+                        upstream.tryEmitNext(ServerSentEvent.builder("[DONE]").build()));
+            }
+            subscription.dispose();
+            var event = terminalEvent();
+            assertEquals("ABORTED", event.getStatus());
+            assertEquals(7, event.getTotalTokens());
+            assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
+            assertEquals("COMPLETED", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
+        } finally { release.countDown(); subscription.dispose(); }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"IMAGE_GENERATION", "SPEECH", "TRANSCRIPTION"})
+    void realSuccessfulHttpResponseOverLimitCannotReleaseBudgetAsFree(String operation) throws Exception {
+        ModelOperation op = ModelOperation.valueOf(operation);
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        var calls = new AtomicInteger();
+        server.createContext("/", exchange -> {
+            exchange.getRequestBody().readAllBytes();
+            calls.incrementAndGet();
+            byte[] bytes = "{\"data\":[{\"b64_json\":\"large-generated-result\"}]}".getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        var limiter = new Resilience4jTimeLimiter(5000, 1, 0);
+        try {
+            primary.setApiUrl("http://127.0.0.1:" + server.getAddress().getPort());
+            ReflectionTestUtils.setField(service, "timeLimiter", limiter);
+            ReflectionTestUtils.setField(service, "maxRetries", 3);
+            if (op == ModelOperation.IMAGE_GENERATION) {
+                var adapter = new OpenAiJsonOperationAdapter(op, "/images/generations");
+                ReflectionTestUtils.setField(adapter, "maxImageJsonBytes", 4);
+                ReflectionTestUtils.setField(service, "providerAdapter", adapter);
+                assertThrows(UpstreamFailureException.class, () -> service.jsonCompletion(context, op,
+                        "{\"model\":\"alias\",\"prompt\":\"cat\"}", "real-image-limit", Instant.now()));
+            } else {
+                var adapter = new OpenAiMediaAdapter(op, UpstreamProtocol.OPENAI_COMPAT);
+                ReflectionTestUtils.setField(adapter, "maxOutputBytes", 4);
+                ReflectionTestUtils.setField(service, "providerAdapter", adapter);
+                AdapterExchange.Request request = op == ModelOperation.SPEECH
+                        ? new AdapterExchange.JsonRequest(op, JSON.parseObject("{\"input\":\"hi\",\"voice\":\"alloy\"}"))
+                        : new AdapterExchange.MultipartRequest(op, Map.of(), "clip.wav",
+                        org.springframework.http.MediaType.parseMediaType("audio/wav"), "audio".getBytes(StandardCharsets.UTF_8));
+                assertThrows(UpstreamFailureException.class, () -> service.media(context, op, "alias", request,
+                        "real-audio-limit", Instant.now()));
+            }
+            assertEquals(1, calls.get());
+            assertUnknownTerminal("FAIL");
+            verifyNoInteractions(fallbackExecutor);
+        } finally { limiter.close(); server.stop(0); }
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"IMAGE_GENERATION", "SPEECH", "TRANSCRIPTION"})
+    void postSendResponseFailurePublishesUnknownCostAndDoesNotRetry(String operation) {
+        var failure = new UpstreamFailureException(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE.message(),
+                LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE, false, UpstreamExecutionOutcome.UNKNOWN, false);
+        ModelOperation op = ModelOperation.valueOf(operation);
+        if (op == ModelOperation.IMAGE_GENERATION) {
+            when(timeLimiter.execute(any())).thenThrow(failure);
+            assertSame(failure, assertThrows(UpstreamFailureException.class, () -> service.jsonCompletion(
+                    context, op, "{\"model\":\"alias\",\"prompt\":\"cat\"}", "image-limit", Instant.now())));
+            verify(timeLimiter, times(1)).execute(any());
+        } else {
+            var media = mock(ProviderAdapter.class, withSettings().extraInterfaces(MediaOperationAdapter.class));
+            ReflectionTestUtils.setField(service, "providerAdapter", media);
+            when(((MediaOperationAdapter) media).invoke(any(), any())).thenThrow(failure);
+            assertSame(failure, assertThrows(UpstreamFailureException.class, () -> service.media(
+                    context, op, "alias", new AdapterExchange.JsonRequest(op, new JSONObject()),
+                    "audio-limit", Instant.now())));
+            verify((MediaOperationAdapter) media, times(1)).invoke(any(), any());
+        }
+        assertUnknownTerminal("FAIL");
+        verifyNoInteractions(fallbackExecutor);
+        verify(circuitBreaker, never()).recordFailure(anyString());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"CHAT_COMPLETIONS", "RESPONSES"})
+    void interruptedStreamKeepsUnknownExecutionForCancellationAndIdleTimeout(String operation) {
+        ModelOperation op = ModelOperation.valueOf(operation);
+        when(providerAdapter.stream(any())).thenReturn(Flux.concat(
+                Flux.just(ServerSentEvent.builder("{\"choices\":[]}").event("response.created").build()), Flux.never()));
+        stream(op, "cancel-unknown").take(1).blockLast();
+        assertUnknownTerminal("ABORTED");
+        reset(usagePublisher);
+        ReflectionTestUtils.setField(service, "streamIdleTimeoutMs", 20L);
+        assertThrows(RuntimeException.class, () -> stream(op, "idle-unknown").blockLast());
+        assertUnknownTerminal("FAIL");
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"CHAT_COMPLETIONS", "RESPONSES"})
+    void streamFailurePreservesExplicitRejectionAndUnknownTransportEvidence(String operation) {
+        ModelOperation op = ModelOperation.valueOf(operation);
+        when(providerAdapter.stream(any())).thenReturn(Flux.error(UpstreamErrors.from(400, null)));
+        assertThrows(RuntimeException.class, () -> stream(op, "rejected-stream").blockLast());
+        var rejected = terminalEvent();
+        assertEquals(CostStatus.NOT_CHARGEABLE, rejected.getCostResult().status());
+        reset(usagePublisher);
+        when(providerAdapter.stream(any())).thenReturn(Flux.error(UpstreamErrors.timeout()));
+        assertThrows(RuntimeException.class, () -> stream(op, "unknown-stream").blockLast());
+        assertUnknownTerminal("FAIL");
+    }
+
+    @Test void partialChatUsageIsCalculatedButKeepsUncertainRemainder() {
+        tokenPricing();
+        when(providerAdapter.stream(any())).thenReturn(Flux.concat(Flux.just(ServerSentEvent.builder(
+                "{\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}").build()), Flux.never()));
+        stream(ModelOperation.CHAT_COMPLETIONS, "partial-cancel").take(1).blockLast();
+        var event = terminalEvent();
+        assertEquals("ABORTED", event.getStatus());
+        assertEquals(7, event.getTotalTokens());
+        assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
+        assertEquals(new BigDecimal("0.000007"), event.getCostResult().estimatedCostFen());
+        assertEquals("ESTIMATED", event.getUsageSource());
+        assertEquals("UNKNOWN", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"response.failed", "response.incomplete", "response.completed"})
+    void responsesTerminalUsageSurvivesFollowingDeliveryError(String terminal) {
+        tokenPricing();
+        when(providerAdapter.stream(any())).thenReturn(Flux.concat(Flux.just(ServerSentEvent.builder(
+                "{\"response\":{\"usage\":{\"input_tokens\":5,\"output_tokens\":2,\"total_tokens\":7}}}")
+                .event(terminal).build()), Flux.error(new IllegalStateException("connection closed"))));
+        assertThrows(RuntimeException.class, () -> stream(ModelOperation.RESPONSES, "terminal-usage").blockLast());
+        var event = terminalEvent();
+        assertEquals("FAIL", event.getStatus());
+        assertEquals(7, event.getTotalTokens());
+        assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
+        assertEquals("EXACT", event.getUsageSource());
+        assertEquals("COMPLETED", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
+    }
+
+    @Test void chatDoneUsageSurvivesCancellationAfterUpstreamCompletion() {
+        tokenPricing();
+        when(providerAdapter.stream(any())).thenReturn(Flux.concat(Flux.just(
+                ServerSentEvent.builder("{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}").build(),
+                ServerSentEvent.builder("[DONE]").build()), Flux.never()));
+        stream(ModelOperation.CHAT_COMPLETIONS, "done-cancel").take(2).blockLast();
+        var event = terminalEvent();
+        assertEquals("ABORTED", event.getStatus());
+        assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
+        assertEquals("EXACT", event.getUsageSource());
+        assertEquals("COMPLETED", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
+    }
+
+    private Flux<ServerSentEvent<String>> stream(ModelOperation operation, String id) {
+        return operation == ModelOperation.RESPONSES
+                ? service.responsesStream(context, "{\"model\":\"alias\",\"stream\":true}", id, Instant.now())
+                : service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}", id, Instant.now());
+    }
+
+    private TokenUsageEvent terminalEvent() {
+        var captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(usagePublisher, times(1)).publish(captor.capture());
+        return captor.getValue();
+    }
+
+    private void assertUnknownTerminal(String status) {
+        var event = terminalEvent();
+        assertEquals(status, event.getStatus());
+        assertEquals(CostStatus.UNCALCULABLE, event.getCostResult().status());
+        assertNull(event.getTotalTokens());
+        assertEquals("UNKNOWN", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
+    }
+
+    private void tokenPricing() {
+        when(pricingResolver.resolve(anyLong(), anyLong(), any())).thenReturn(new PricingSnapshot(
+                99L, BillingMode.TOKEN, "CNY", PricePeriodType.BASE, null,
+                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, null, Instant.EPOCH, null));
+    }
+
     private ModelResolver modelResolver;
     private ProviderAdapter providerAdapter;
     private TokenUsageEventPublisher usagePublisher;
@@ -220,6 +511,7 @@ class LlmForwardUsagePublicationTest {
 
     @Test
     void streamCompletionAndCompetingCallbacksStageOnce() {
+        tokenPricing();
         when(providerAdapter.stream(any())).thenReturn(Flux.just(
                 ServerSentEvent.builder("{\"choices\":[]}").build(),
                 ServerSentEvent.builder("{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}").build(),
@@ -228,7 +520,12 @@ class LlmForwardUsagePublicationTest {
         service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}",
                 "request-4", Instant.now()).blockLast();
 
-        verify(usagePublisher, times(1)).publish(any(TokenUsageEvent.class));
+        var event = terminalEvent();
+        assertEquals("SUCCESS", event.getStatus());
+        assertEquals(UpstreamExecutionOutcome.COMPLETED, event.getExecutionOutcome());
+        assertEquals("EXACT", event.getUsageSource());
+        assertEquals(7, event.getTotalTokens());
+        assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
     }
 
     @Test
@@ -525,12 +822,110 @@ class LlmForwardUsagePublicationTest {
         assertEquals(body, forwarded.getValue().getBody());
     }
 
+    @Test void unknownTimeoutNeverRetriesOrFallsBackAndDoesNotAssertFreeExecution() {
+        ReflectionTestUtils.setField(service, "maxRetries", 1);
+        var timeout = new UpstreamFailureException("timeout", LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, true);
+        when(timeLimiter.execute(any())).thenThrow(timeout);
+
+        assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(context,
+                "{\"model\":\"alias\"}", "uncertain", Instant.now()));
+
+        verify(timeLimiter, times(1)).execute(any());
+        verifyNoInteractions(fallbackExecutor);
+        var event = ArgumentCaptor.forClass(TokenUsageEvent.class);
+        verify(budgets).settle(event.capture());
+        assertEquals(CostStatus.UNCALCULABLE, event.getValue().getCostResult().status());
+        assertNull(event.getValue().getTotalTokens());
+    }
+
+    @Test void capacityRejectionAbandonsWithoutSendingChargingOrChangingHealth() {
+        when(timeLimiter.execute(any())).thenThrow(new UpstreamFailureException("capacity",
+                LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED, false, UpstreamExecutionOutcome.NOT_SENT));
+        assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(context,
+                "{\"model\":\"alias\"}", "capacity", Instant.now()));
+        verify(budgets).abandon(context, "capacity");
+        verify(budgets, never()).sent(anyString()); verify(budgets, never()).settle(any());
+        verify(circuitBreaker, never()).recordFailure(anyString());
+        verifyNoInteractions(providerAdapter, fallbackExecutor, usagePublisher);
+    }
+
+    @Test void explicitRejectionCanRetryAndEachAttemptConsumesRateLimit() {
+        ReflectionTestUtils.setField(service, "maxRetries", 1);
+        when(timeLimiter.execute(any())).thenAnswer(invocation -> ((Callable<?>) invocation.getArgument(0)).call());
+        when(providerAdapter.forward(any())).thenThrow(UpstreamErrors.from(429, null))
+                .thenReturn("{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}");
+        service.chatCompletion(context, "{\"model\":\"alias\"}", "safe-retry", Instant.now());
+        verify(providerAdapter, times(2)).forward(any()); verify(budgets, times(2)).sent("safe-retry");
+        verify(rateLimiter, times(2)).check(any()); verify(budgets, times(1)).settle(any());
+        verifyNoInteractions(fallbackExecutor);
+    }
+
+    @Test void realLimiterPreservesUpstreamValidationErrorAndAvoidsRetry() {
+        var realLimiter = new Resilience4jTimeLimiter(1000, 1, 0);
+        ReflectionTestUtils.setField(service, "timeLimiter", realLimiter);
+        var rejected = UpstreamErrors.from(400, "{\"error\":{\"message\":\"invalid input\"}}");
+        when(providerAdapter.forward(any())).thenThrow(rejected);
+        try {
+            assertSame(rejected, assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(context,
+                    "{\"model\":\"alias\"}", "invalid-input", Instant.now())));
+            verify(providerAdapter, times(1)).forward(any()); verifyNoInteractions(fallbackExecutor);
+            verify(circuitBreaker, never()).recordFailure(anyString());
+            var event = ArgumentCaptor.forClass(TokenUsageEvent.class); verify(budgets).settle(event.capture());
+            assertEquals(CostStatus.NOT_CHARGEABLE, event.getValue().getCostResult().status());
+        } finally { realLimiter.close(); }
+    }
+
+    @Test void realHttpTimeoutLeavesOneExecutionAndOneUnknownFeeTerminal() throws Exception {
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        var serverWorkers = Executors.newFixedThreadPool(2);
+        var caller = Executors.newSingleThreadExecutor();
+        var calls = new AtomicInteger();
+        var arrived = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var completed = new CountDownLatch(1);
+        server.setExecutor(serverWorkers);
+        server.createContext("/chat/completions", exchange -> {
+            exchange.getRequestBody().readAllBytes(); calls.incrementAndGet(); arrived.countDown();
+            try {
+                if (!release.await(5, TimeUnit.SECONDS)) throw new IllegalStateException("probe release deadline");
+                byte[] response = "{\"usage\":{\"total_tokens\":7}}".getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.length); exchange.getResponseBody().write(response);
+            } catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            finally { exchange.close(); completed.countDown(); }
+        });
+        server.start();
+        var realLimiter = new Resilience4jTimeLimiter(500, 1, 0);
+        primary.setApiUrl("http://127.0.0.1:" + server.getAddress().getPort());
+        ReflectionTestUtils.setField(service, "timeLimiter", realLimiter);
+        ReflectionTestUtils.setField(service, "providerAdapter", new OpenAiCompatibleAdapter(1000, 3000));
+        ReflectionTestUtils.setField(service, "maxRetries", 1);
+        try {
+            var result = caller.submit(() -> assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(
+                    context, "{\"model\":\"alias\"}", "http-unknown", Instant.now())));
+            assertTrue(arrived.await(2, TimeUnit.SECONDS));
+            assertEquals(UpstreamExecutionOutcome.UNKNOWN, result.get(2, TimeUnit.SECONDS).getExecutionOutcome());
+            assertEquals(1, calls.get()); assertEquals(1L, completed.getCount());
+            var rejected = assertThrows(UpstreamFailureException.class, () -> realLimiter.execute(() -> "duplicate"));
+            assertEquals(LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED.code(), rejected.getErrorCode());
+            verifyNoInteractions(fallbackExecutor); verify(budgets).sent("http-unknown");
+            var event = ArgumentCaptor.forClass(TokenUsageEvent.class); verify(budgets).settle(event.capture());
+            assertEquals(CostStatus.UNCALCULABLE, event.getValue().getCostResult().status());
+            release.countDown(); assertTrue(completed.await(2, TimeUnit.SECONDS));
+            verify(budgets, times(1)).settle(any()); assertEquals(1, calls.get());
+        } finally {
+            release.countDown(); caller.shutdownNow(); realLimiter.close(); server.stop(0); serverWorkers.shutdownNow();
+        }
+    }
+
     private LlmServiceDO llm(Long id, String name, String provider) {
         return LlmServiceDO.builder().serviceId(id).tenantId(2L).name(name).provider(provider)
                 .apiUrl("https://example.invalid").apiKey("encrypted").modelName("upstream").status(1).build();
     }
 
     private UpstreamFailureException retryableFailure() {
-        return new UpstreamFailureException("upstream failed", LlmForwardErrorCodeEnum.FORWARD_FAILED, true);
+        // 重试夹具必须明确表示请求被拒绝，不能用未知执行结果模拟安全重试。
+        return new UpstreamFailureException("upstream rejected", LlmForwardErrorCodeEnum.UPSTREAM_ERROR,
+                true, UpstreamExecutionOutcome.REJECTED);
     }
 }

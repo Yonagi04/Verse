@@ -9,6 +9,9 @@ import com.yonagi.verse.common.enums.UpstreamProtocol;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import org.springframework.http.MediaType;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -22,6 +25,116 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ProtocolAdapterFixtureTest {
+    @ParameterizedTest @ValueSource(strings = {"ollama", "gemini"})
+    void nativeEofWithoutTerminalEvidenceNeverSynthesizesDone(String provider) {
+        boolean ollama = provider.equals("ollama");
+        responseType = ollama ? "application/x-ndjson" : "text/event-stream";
+        reply = ollama ? "{\"message\":{\"content\":\"partial\"},\"done\":false}\n"
+                : "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"partial\"}]}}]}\n\n";
+        ProviderAdapter adapter = ollama ? new NativeChatAdapters.Ollama() : new NativeChatAdapters.Gemini();
+        var received = new ArrayList<org.springframework.http.codec.ServerSentEvent<String>>();
+        var failure = assertThrows(UpstreamFailureException.class, () -> adapter.stream(context(
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"))
+                .doOnNext(received::add).blockLast(java.time.Duration.ofSeconds(5)));
+        assertEquals(UpstreamExecutionOutcome.UNKNOWN, failure.getExecutionOutcome());
+        assertFalse(received.stream().anyMatch(event -> "[DONE]".equals(event.data())));
+        assertEquals(1, calls.get());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"empty", "content", "usage-with-stop-reason"})
+    void anthropicEofWithoutMessageStopFailsAndNeverSynthesizesDone(String payload) {
+        responseType = "text/event-stream";
+        reply = payload.equals("empty") ? "\n" : "event: message_start\ndata: {\"message\":{\"usage\":{\"input_tokens\":5}}}\n\n"
+                + "event: content_block_delta\ndata: {\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n";
+        if (payload.equals("usage-with-stop-reason")) reply +=
+                "event: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n";
+        var received = new ArrayList<org.springframework.http.codec.ServerSentEvent<String>>();
+        var failure = assertThrows(UpstreamFailureException.class, () -> new NativeChatAdapters.Anthropic().stream(context(
+                "{\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}"))
+                .doOnNext(received::add).blockLast(java.time.Duration.ofSeconds(5)));
+        assertEquals(UpstreamExecutionOutcome.UNKNOWN, failure.getExecutionOutcome());
+        assertFalse(failure.isRetryable());
+        assertFalse(received.stream().anyMatch(e -> "[DONE]".equals(e.data())));
+        if (payload.equals("usage-with-stop-reason")) assertTrue(received.stream().anyMatch(e -> e.data().contains("total_tokens")));
+        assertEquals(1, calls.get());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"openai", "azure", "gemini"})
+    void successfulImageResponseTooLargeIsUnknownAndNeverRetryable(String provider) {
+        ProviderAdapter adapter = imageAdapter(provider);
+        ReflectionTestUtils.setField(adapter, "maxImageJsonBytes", 4);
+        reply = "0123456789";
+        var failure = assertThrows(UpstreamFailureException.class, () -> adapter.forward(context(
+                "{\"model\":\"alias\",\"prompt\":\"cat\",\"response_format\":\"b64_json\"}")));
+        assertEquals(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE.code(), failure.getErrorCode());
+        assertEquals(UpstreamExecutionOutcome.UNKNOWN, failure.getExecutionOutcome());
+        assertFalse(failure.isRetryable());
+        assertFalse(failure.isUpstreamHealthFailure());
+        assertEquals(1, calls.get());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"openai", "azure", "gemini"})
+    void imageValidationFailureStillOccursBeforeNetwork(String provider) {
+        assertThrows(ClientException.class, () -> imageAdapter(provider).forward(context(
+                "{\"model\":\"alias\",\"prompt\":\"cat\",\"response_format\":\"invalid\"}")));
+        assertEquals(0, calls.get());
+    }
+
+    private ProviderAdapter imageAdapter(String provider) {
+        return switch (provider) {
+            case "azure" -> new AzureJsonOperationAdapter(ModelOperation.IMAGE_GENERATION, UpstreamProtocol.AZURE_OPENAI_V1);
+            case "gemini" -> new GeminiImageAdapter();
+            default -> new OpenAiJsonOperationAdapter(ModelOperation.IMAGE_GENERATION, "/images/generations");
+        };
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"SPEECH", "TRANSCRIPTION"})
+    void successfulAudioResponseTooLargeIsUnknown(String operation) {
+        ModelOperation op = ModelOperation.valueOf(operation);
+        var adapter = new OpenAiMediaAdapter(op, UpstreamProtocol.OPENAI_COMPAT);
+        ReflectionTestUtils.setField(adapter, "maxOutputBytes", 4);
+        reply = "0123456789";
+        var failure = assertThrows(UpstreamFailureException.class, () -> adapter.invoke(context(null), audioRequest(op)));
+        assertEquals(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE.code(), failure.getErrorCode());
+        assertEquals(UpstreamExecutionOutcome.UNKNOWN, failure.getExecutionOutcome());
+        assertFalse(failure.isRetryable());
+        assertEquals(1, calls.get());
+    }
+
+    @Test void transcriptionUploadLimitStillRejectsBeforeNetwork() {
+        var adapter = new OpenAiMediaAdapter(ModelOperation.TRANSCRIPTION, UpstreamProtocol.OPENAI_COMPAT);
+        ReflectionTestUtils.setField(adapter, "maxUploadBytes", 1);
+        var failure = assertThrows(ClientException.class,
+                () -> adapter.invoke(context(null), audioRequest(ModelOperation.TRANSCRIPTION)));
+        assertEquals(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE.code(), failure.getErrorCode());
+        assertEquals(0, calls.get());
+    }
+
+    @Test void transcriptionInvalidDurationAfterSuccessIsUnknown() {
+        reply = "{\"text\":\"done\",\"duration\":\"invalid\"}";
+        var adapter = new OpenAiMediaAdapter(ModelOperation.TRANSCRIPTION, UpstreamProtocol.OPENAI_COMPAT);
+        var failure = assertThrows(UpstreamFailureException.class,
+                () -> adapter.invoke(context(null), audioRequest(ModelOperation.TRANSCRIPTION)));
+        assertEquals(UpstreamExecutionOutcome.UNKNOWN, failure.getExecutionOutcome());
+        assertEquals(1, calls.get());
+    }
+
+    @ParameterizedTest @ValueSource(strings = {"openai", "azure", "gemini"})
+    void malformedImageAfterSuccessIsUnknown(String provider) {
+        reply = "invalid json";
+        var failure = assertThrows(UpstreamFailureException.class, () -> imageAdapter(provider).forward(context(
+                "{\"model\":\"alias\",\"prompt\":\"cat\",\"response_format\":\"b64_json\"}")));
+        assertEquals(UpstreamExecutionOutcome.UNKNOWN, failure.getExecutionOutcome());
+        assertEquals(1, calls.get());
+    }
+
+    private AdapterExchange.Request audioRequest(ModelOperation operation) {
+        return operation == ModelOperation.SPEECH
+                ? new AdapterExchange.JsonRequest(operation, JSON.parseObject("{\"input\":\"hi\",\"voice\":\"alloy\"}"))
+                : new AdapterExchange.MultipartRequest(operation, Map.of(), "clip.wav",
+                MediaType.parseMediaType("audio/wav"), "audio".getBytes(StandardCharsets.UTF_8));
+    }
+
     private HttpServer server;
     private String base;
     private final AtomicInteger calls = new AtomicInteger();

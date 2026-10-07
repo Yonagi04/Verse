@@ -5,6 +5,7 @@ import com.yonagi.verse.async.api.DomainEvent;
 import com.yonagi.verse.service.pricing.CostResult;
 import com.yonagi.verse.service.pricing.PricingSnapshot;
 import com.yonagi.verse.service.usage.UsageBreakdown;
+import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -12,7 +13,7 @@ import lombok.Setter;
 import java.time.Instant;
 
 /**
- * Token 消耗事件 — 转发成功后由生产者投递，消费者异步落 t_token_usage。
+ * 用量终态事件 — 保存执行证据与费用，消费者异步落 t_token_usage。
  *
  * @author Yonagi
  */
@@ -73,6 +74,9 @@ public class TokenUsageEvent extends DomainEvent {
      * 状态：SUCCESS / ABORTED / FAIL
      */
     private String status;
+
+    /** 上游执行证据，与客户端交付状态独立；旧事件为空，按原费用状态兼容恢复。 */
+    private UpstreamExecutionOutcome executionOutcome;
 
     /**
      * usage来源：EXACT / ESTIMATED / UNKNOWN

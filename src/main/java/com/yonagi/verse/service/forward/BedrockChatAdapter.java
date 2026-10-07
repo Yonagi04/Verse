@@ -65,6 +65,8 @@ public class BedrockChatAdapter implements ProviderAdapter, AdapterRegistration 
         try {
             BedrockRuntimeClient client = clients.computeIfAbsent(region, name ->
                     BedrockRuntimeClient.builder().region(Region.of(name))
+                            // SDK 内部重试不能绕过应用层的未知结果保护。
+                            .overrideConfiguration(config -> config.retryStrategy(strategy -> strategy.maxAttempts(1)))
                             .credentialsProvider(DefaultCredentialsProvider.create()).build());
             return JSON.toJSONString(response(context, client.converse(request)));
         } catch (BedrockRuntimeException e) {
@@ -91,8 +93,10 @@ public class BedrockChatAdapter implements ProviderAdapter, AdapterRegistration 
         ConverseStreamRequest streamRequest = builder.build();
         return Flux.create(sink -> {
             AtomicBoolean ended = new AtomicBoolean();
+            AtomicBoolean finished = new AtomicBoolean();
             BedrockRuntimeAsyncClient client = streamClients.computeIfAbsent(region, name ->
                     BedrockRuntimeAsyncClient.builder().region(Region.of(name))
+                            .overrideConfiguration(config -> config.retryStrategy(strategy -> strategy.maxAttempts(1)))
                             .credentialsProvider(DefaultCredentialsProvider.create()).build());
             ConverseStreamResponseHandler.Visitor visitor = ConverseStreamResponseHandler.Visitor.builder()
                     .onMessageStart(event -> {
@@ -133,9 +137,12 @@ public class BedrockChatAdapter implements ProviderAdapter, AdapterRegistration 
                         } else return;
                         sink.next(chunk(context, delta, null, null));
                     })
-                    .onMessageStop(event -> sink.next(chunk(context, new JSONObject(),
-                            "tool_use".equals(event.stopReasonAsString()) ? "tool_calls"
-                                    : "max_tokens".equals(event.stopReasonAsString()) ? "length" : "stop", null)))
+                    .onMessageStop(event -> {
+                        finished.set(true);
+                        sink.next(chunk(context, new JSONObject(),
+                                "tool_use".equals(event.stopReasonAsString()) ? "tool_calls"
+                                        : "max_tokens".equals(event.stopReasonAsString()) ? "length" : "stop", null));
+                    })
                     .onMetadata(event -> {
                         if (event.usage() == null) return;
                         TokenUsage usage = event.usage();
@@ -150,6 +157,7 @@ public class BedrockChatAdapter implements ProviderAdapter, AdapterRegistration 
             future.whenComplete((ignored, error) -> {
                 if (!ended.compareAndSet(false, true)) return;
                 if (error != null) sink.error(error);
+                else if (!finished.get()) sink.error(UpstreamErrors.incompleteStream());
                 else {
                     sink.next(ServerSentEvent.builder("[DONE]").build());
                     sink.complete();

@@ -1,80 +1,123 @@
 package com.yonagi.verse.resilience.impl;
 
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
+import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
 import com.yonagi.verse.service.forward.UpstreamFailureException;
+import com.yonagi.verse.service.forward.UpstreamErrors;
 import io.github.resilience4j.timelimiter.TimeLimiter;
 import io.github.resilience4j.timelimiter.TimeLimiterConfig;
+import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/**
- * 上游调用超时封装 — 包装 Resilience4j {@link TimeLimiter}，为同步阻塞的上游 HTTP 调用
- * 提供硬性的「总耗时」上限，区别于 {@code SimpleClientHttpRequestFactory} read-timeout 的
- * 「两次数据到达间隔」语义（后者在慢速流式响应下可能永不触发）。
- *
- * <p>阻塞调用交由独立缓存线程池执行，超时由 TimeLimiter 内部调度器触发并取消运行中的 Future；
- * 线程池使用守护线程 + 空闲回收，避免随上游抖动无限膨胀。</p>
- *
- * @author Yonagi
- */
+/** 同步上游调用的等待时限与本机容量；取消后未退出的工作线程仍占用容量。 */
+@Slf4j
 @Component
 public class Resilience4jTimeLimiter {
-
     private final TimeLimiter timeLimiter;
     private final ExecutorService workerPool;
+    private final long shutdownGraceMs;
 
+    public Resilience4jTimeLimiter(long timeLimitMs) { this(timeLimitMs, 32, 5000); }
+
+    @Autowired
     public Resilience4jTimeLimiter(
-            @Value("${verse.llm.upstream.time-limit-ms:120000}") long timeLimitMs) {
-        this.timeLimiter = TimeLimiter.of(TimeLimiterConfig.custom()
-                .timeoutDuration(Duration.ofMillis(timeLimitMs))
-                .cancelRunningFuture(true)
-                .build());
+            @Value("${verse.llm.upstream.time-limit-ms:120000}") long timeLimitMs,
+            @Value("${verse.llm.upstream.max-concurrency:32}") int maxConcurrency,
+            @Value("${verse.llm.upstream.shutdown-grace-ms:5000}") long shutdownGraceMs) {
+        if (timeLimitMs <= 0 || maxConcurrency <= 0 || shutdownGraceMs < 0) {
+            throw new IllegalArgumentException("上游超时与执行容量必须为正数，关闭等待时间不能为负数");
+        }
+        this.shutdownGraceMs = shutdownGraceMs;
+        timeLimiter = TimeLimiter.of(TimeLimiterConfig.custom()
+                .timeoutDuration(Duration.ofMillis(timeLimitMs)).cancelRunningFuture(true).build());
         AtomicInteger threadIdx = new AtomicInteger();
-        this.workerPool = Executors.newCachedThreadPool(r -> {
-            Thread t = new Thread(r, "llm-upstream-" + threadIdx.incrementAndGet());
-            t.setDaemon(true);
-            return t;
-        });
+        workerPool = new ThreadPoolExecutor(0, maxConcurrency, 60, TimeUnit.SECONDS,
+                new SynchronousQueue<>(), task -> {
+                    Thread thread = new Thread(task, "llm-upstream-" + threadIdx.incrementAndGet());
+                    thread.setDaemon(true);
+                    return thread;
+                }, new ThreadPoolExecutor.AbortPolicy());
     }
 
-    /**
-     * 在硬性超时约束下执行一次上游调用。
-     *
-     * @param callable 阻塞的上游调用
-     * @return 上游响应
-     * @throws UpstreamFailureException 超时（可重试）或执行失败
-     */
     public <T> T execute(Callable<T> callable) {
+        if (Thread.currentThread().isInterrupted()) {
+            throw UpstreamErrors.cancelled(UpstreamExecutionOutcome.NOT_SENT);
+        }
+        Execution<T> execution = new Execution<>(callable);
+        Future<T> future;
+        try { future = workerPool.submit(execution); }
+        catch (RejectedExecutionException rejected) {
+            throw failure(LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED, UpstreamExecutionOutcome.NOT_SENT);
+        }
         try {
-            return timeLimiter.executeFutureSupplier(() -> workerPool.submit(callable));
-        } catch (TimeoutException e) {
-            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT.message(),
-                    LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, true);
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            if (cause instanceof UpstreamFailureException ufe) {
-                throw ufe;
-            }
-            if (cause instanceof RuntimeException re) {
-                throw re;
-            }
-            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.FORWARD_FAILED.message(),
-                    LlmForwardErrorCodeEnum.FORWARD_FAILED, true);
-        } catch (InterruptedException e) {
+            return timeLimiter.executeFutureSupplier(() -> future);
+        } catch (TimeoutException timeout) {
+            throw failure(LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, execution.cancel());
+        } catch (InterruptedException interrupted) {
+            UpstreamExecutionOutcome outcome = execution.cancel();
+            future.cancel(true);
             Thread.currentThread().interrupt();
-            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.FORWARD_FAILED.message(),
-                    LlmForwardErrorCodeEnum.FORWARD_FAILED, true);
-        } catch (Exception e) {
-            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.FORWARD_FAILED.message(),
-                    LlmForwardErrorCodeEnum.FORWARD_FAILED, true);
+            throw UpstreamErrors.cancelled(outcome);
+        } catch (ClientException original) {
+            // Resilience4j 已展开 ExecutionException；保持业务错误和失败证据。
+            throw original;
+        } catch (RuntimeException unexpected) {
+            throw failure(LlmForwardErrorCodeEnum.FORWARD_FAILED, UpstreamExecutionOutcome.UNKNOWN);
+        } catch (Exception checked) {
+            throw failure(LlmForwardErrorCodeEnum.FORWARD_FAILED, UpstreamExecutionOutcome.UNKNOWN);
+        }
+    }
+
+    private UpstreamFailureException failure(LlmForwardErrorCodeEnum code, UpstreamExecutionOutcome outcome) {
+        return new UpstreamFailureException(code.message(), code, false, outcome);
+    }
+
+    @PreDestroy
+    public void close() {
+        workerPool.shutdown();
+        try {
+            if (!workerPool.awaitTermination(shutdownGraceMs, TimeUnit.MILLISECONDS)) {
+                workerPool.shutdownNow();
+                log.warn("[llm-forward] 上游执行池关闭等待结束，已请求中断；远端执行状态仍需核验");
+            }
+        } catch (InterruptedException interrupted) {
+            workerPool.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** 开始执行与取消共享同步边界，避免超时后才启动发送标记或 HTTP 请求。 */
+    private static final class Execution<T> implements Callable<T> {
+        private final Callable<T> callable;
+        private boolean started;
+        private boolean cancelled;
+
+        private Execution(Callable<T> callable) { this.callable = java.util.Objects.requireNonNull(callable); }
+
+        @Override public T call() throws Exception {
+            synchronized (this) {
+                if (cancelled) throw new CancellationException("execution cancelled before start");
+                started = true;
+            }
+            try { return callable.call(); }
+            catch (InterruptedException interrupted) {
+                // 工作线程的中断由 Resilience4j 展开后不能冒充调用方线程被中断。
+                Thread.currentThread().interrupt();
+                throw UpstreamErrors.cancelled(UpstreamExecutionOutcome.UNKNOWN);
+            }
+        }
+
+        private synchronized UpstreamExecutionOutcome cancel() {
+            cancelled = true;
+            return started ? UpstreamExecutionOutcome.UNKNOWN : UpstreamExecutionOutcome.NOT_SENT;
         }
     }
 }

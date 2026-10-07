@@ -352,6 +352,7 @@ public class LlmForwardController {
             case "A000801" -> HttpStatus.UNAUTHORIZED;
             case "A000802" -> HttpStatus.TOO_MANY_REQUESTS;
             case "A000803" -> HttpStatus.SERVICE_UNAVAILABLE;
+            case "B000802" -> HttpStatus.SERVICE_UNAVAILABLE;
             case "A000805" -> HttpStatus.GATEWAY_TIMEOUT;
             case "A000806" -> HttpStatus.PAYLOAD_TOO_LARGE;
             case "C000800" -> HttpStatus.BAD_GATEWAY;

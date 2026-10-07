@@ -63,6 +63,17 @@ class CapabilityForwardControllerTest {
         assertTrue(events.get(1).contains("event: response.completed"));
     }
 
+    @Test void upstreamCapacityRejectionReturnsServiceUnavailableWithTrace() {
+        when(service.jsonCompletion(any(), eq(ModelOperation.EMBEDDINGS), anyString(), anyString(), any()))
+                .thenThrow(new ClientException(LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED));
+        var response = controller.embeddings("{\"model\":\"alias\",\"input\":\"hi\"}");
+        assertEquals(503, response.getStatusCode().value());
+        JSONObject error = JSON.parseObject(Flux.from(response.getBody()).blockFirst()).getJSONObject("error");
+        assertEquals("B000802", error.getString("code"));
+        assertEquals("server_error", error.getString("type"));
+        assertNotNull(response.getHeaders().getFirst("x-request-id"));
+    }
+
     @Test void embeddingsRequireExactOperationAndReturnOpenAiError() {
         when(service.jsonCompletion(any(), eq(ModelOperation.EMBEDDINGS), anyString(), anyString(), any()))
                 .thenThrow(new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED));

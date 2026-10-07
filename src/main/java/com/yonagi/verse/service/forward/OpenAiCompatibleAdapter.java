@@ -2,7 +2,6 @@ package com.yonagi.verse.service.forward;
 
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
-import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import io.netty.channel.ChannelOption;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,7 +12,6 @@ import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
@@ -80,15 +78,10 @@ public class OpenAiCompatibleAdapter implements ProviderAdapter, AdapterRegistra
                     .retrieve()
                     .body(String.class);
         } catch (RestClientResponseException e) {
-            int status = e.getStatusCode().value();
-            boolean retryable = status == 429 || status >= 500;
-            String upstreamMsg = extractUpstreamError(e.getResponseBodyAsString());
-            log.warn("[llm-forward] 上游返回错误: status={}, message={}", status, upstreamMsg);
-            throw new UpstreamFailureException(upstreamMsg, LlmForwardErrorCodeEnum.UPSTREAM_ERROR, retryable);
+            throw toUpstreamFailure(e.getStatusCode().value(), e.getResponseBodyAsString());
         } catch (ResourceAccessException e) {
             log.warn("[llm-forward] 上游连接失败或超时: url={}", url, e);
-            throw new UpstreamFailureException(LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT.message(),
-                    LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, true);
+            throw UpstreamErrors.transport(e);
         }
     }
 
@@ -108,8 +101,7 @@ public class OpenAiCompatibleAdapter implements ProviderAdapter, AdapterRegistra
                         toUpstreamFailure(e.getStatusCode().value(), e.getResponseBodyAsString()))
                 .onErrorMap(WebClientRequestException.class, e -> {
                     log.warn("[llm-forward] 上游连接失败或超时: url={}", url, e);
-                    return new UpstreamFailureException(LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT.message(),
-                            LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, true);
+                    return UpstreamErrors.transport(e);
                 });
     }
 
@@ -137,10 +129,9 @@ public class OpenAiCompatibleAdapter implements ProviderAdapter, AdapterRegistra
      * 将上游非 2xx 响应映射为 UpstreamFailureException，尽量保留上游错误 message。
      */
     private UpstreamFailureException toUpstreamFailure(int status, String rawBody) {
-        boolean retryable = status == 429 || status >= 500;
-        String upstreamMsg = extractUpstreamError(rawBody);
-        log.warn("[llm-forward] 上游返回错误: status={}, message={}", status, upstreamMsg);
-        return new UpstreamFailureException(upstreamMsg, LlmForwardErrorCodeEnum.UPSTREAM_ERROR, retryable);
+        UpstreamFailureException failure = UpstreamErrors.from(status, rawBody);
+        log.warn("[llm-forward] 上游返回错误: status={}, message={}", status, failure.getMessage());
+        return failure;
     }
 
     /**
@@ -166,22 +157,4 @@ public class OpenAiCompatibleAdapter implements ProviderAdapter, AdapterRegistra
         return JSON.toJSONString(json);
     }
 
-    /**
-     * 从上游错误体中提取 message，尽量保持 OpenAI 风格，提取失败则退回原始错误体。
-     */
-    private String extractUpstreamError(String rawBody) {
-        if (!StringUtils.hasText(rawBody)) {
-            return LlmForwardErrorCodeEnum.UPSTREAM_ERROR.message();
-        }
-        try {
-            JSONObject json = JSON.parseObject(rawBody);
-            JSONObject error = json == null ? null : json.getJSONObject("error");
-            if (error != null && StringUtils.hasText(error.getString("message"))) {
-                return error.getString("message");
-            }
-        } catch (Exception ignored) {
-            // 非 JSON 错误体，直接透传
-        }
-        return rawBody;
-    }
 }

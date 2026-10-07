@@ -70,9 +70,7 @@ public class GeminiImageAdapter implements ProviderAdapter, AdapterRegistration 
                             throw UpstreamErrors.from(response.getStatusCode().value(),
                                     new String(limited, StandardCharsets.UTF_8));
                         }
-                        byte[] bytes = response.getBody().readNBytes(maxImageJsonBytes + 1);
-                        if (bytes.length > maxImageJsonBytes) throw new ClientException(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE);
-                        return new String(bytes, StandardCharsets.UTF_8);
+                        return UpstreamResponseBody.readJson(response.getBody(), maxImageJsonBytes);
                     });
             JSONObject upstream = JSON.parseObject(raw);
             JSONArray candidates = upstream == null ? null : upstream.getJSONArray("candidates");
@@ -96,7 +94,9 @@ public class GeminiImageAdapter implements ProviderAdapter, AdapterRegistration 
             result.put("data", data);
             return JSON.toJSONString(result);
         } catch (ResourceAccessException e) {
-            throw UpstreamErrors.timeout();
+            throw UpstreamErrors.transport(e);
+        } catch (RuntimeException e) {
+            throw UpstreamErrors.responseFailure(e);
         }
     }
 

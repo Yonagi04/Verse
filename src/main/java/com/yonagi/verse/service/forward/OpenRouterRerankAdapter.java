@@ -80,7 +80,7 @@ public class OpenRouterRerankAdapter implements ProviderAdapter, AdapterRegistra
         } catch (RestClientResponseException e) {
             throw UpstreamErrors.from(e.getStatusCode().value(), e.getResponseBodyAsString());
         } catch (ResourceAccessException e) {
-            throw UpstreamErrors.timeout();
+            throw UpstreamErrors.transport(e);
         }
     }
 

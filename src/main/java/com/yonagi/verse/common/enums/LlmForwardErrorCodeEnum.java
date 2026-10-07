@@ -21,6 +21,7 @@ public enum LlmForwardErrorCodeEnum implements IErrorCode {
 
     FORWARD_FAILED("B000800", "转发失败"),
     ROUTER_FAILED("B000801", "路由判定失败"),
+    UPSTREAM_CAPACITY_EXCEEDED("B000802", "上游执行容量已满或服务正在关闭"),
 
     UPSTREAM_ERROR("C000800", "上游模型返回错误"),
     ;

@@ -21,6 +21,8 @@ public interface ProviderAdapter {
 
     /**
      * 转发一次流式请求（stream=true），返回上游 SSE 事件流。
+     * Chat 协议仅凭真实结束事件转换出 [DONE]；普通 EOF 不能补发结束标记，
+     * 已收到的用量应在转换时保留，以便失败或取消后结算已知费用。
      *
      * @param ctx 转发上下文
      * @return 上游 SSE 事件流（每个元素为解析后的事件，data 为原始字符串）

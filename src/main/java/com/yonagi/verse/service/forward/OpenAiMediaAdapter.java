@@ -89,18 +89,22 @@ public class OpenAiMediaAdapter implements ProviderAdapter, MediaOperationAdapte
             case "srt" -> MediaType.parseMediaType("application/x-subrip");
             default -> MediaType.TEXT_PLAIN;
         };
-        JSONObject json = null;
-        if (MediaType.APPLICATION_JSON.equals(resultType)) {
-            try { json = JSON.parseObject(bytes); }
-            catch (RuntimeException ignored) { throw UpstreamErrors.from(502, null); }
+        try {
+            JSONObject json = null;
+            if (MediaType.APPLICATION_JSON.equals(resultType)) {
+                try { json = JSON.parseObject(bytes); }
+                catch (RuntimeException ignored) { throw UpstreamErrors.from(502, null); }
+            }
+            Long duration = json == null || json.getDouble("duration") == null ? null
+                    : Math.round(json.getDouble("duration") * 1000);
+            AdapterExchange.UsageEvidence usage = new AdapterExchange.UsageEvidence(null, null, null,
+                    null, duration, null, json == null ? null : json.getJSONObject("usage"));
+            return new AdapterExchange.BinaryResult(bytes, resultType, usage, 200,
+                    Map.of("filename", multipart.filename() == null ? "audio" : multipart.filename(),
+                            "mime", mime, "bytes", String.valueOf(file.length)));
+        } catch (RuntimeException error) {
+            throw UpstreamErrors.responseFailure(error);
         }
-        Long duration = json == null || json.getDouble("duration") == null ? null
-                : Math.round(json.getDouble("duration") * 1000);
-        AdapterExchange.UsageEvidence usage = new AdapterExchange.UsageEvidence(null, null, null,
-                null, duration, null, json == null ? null : json.getJSONObject("usage"));
-        return new AdapterExchange.BinaryResult(bytes, resultType, usage, 200,
-                Map.of("filename", multipart.filename() == null ? "audio" : multipart.filename(),
-                        "mime", mime, "bytes", String.valueOf(file.length)));
     }
 
     private AdapterExchange.Result speech(ForwardContext context, AdapterExchange.Request request) {
@@ -161,12 +165,10 @@ public class OpenAiMediaAdapter implements ProviderAdapter, MediaOperationAdapte
                     byte[] limited = response.getBody().readNBytes(1024);
                     throw UpstreamErrors.from(status.value(), new String(limited, java.nio.charset.StandardCharsets.UTF_8));
                 }
-                byte[] bytes = response.getBody().readNBytes(maxOutputBytes + 1);
-                if (bytes.length > maxOutputBytes) throw new ClientException(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE);
-                return bytes;
+                return UpstreamResponseBody.read(response.getBody(), maxOutputBytes);
             });
         } catch (ResourceAccessException e) {
-            throw UpstreamErrors.timeout();
+            throw UpstreamErrors.transport(e);
         }
     }
 
