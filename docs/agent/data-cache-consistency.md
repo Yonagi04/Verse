@@ -63,7 +63,7 @@ public TenantSettingsRespDTO getSettings(Long userId, Long tenantId) { ... }
 
 需要条件缓存、参数规范化、额外权限校验、定制回源、实时视图或结果完整性检查时，实现 `QueryCacheBehavior`，注册为 Spring Bean，并通过 `behavior = MyBehavior.class` 选择。新增业务策略放在所属业务的独立文件中，不修改核心缓存类。授权状态不缓存，空值与空集合保留短期负缓存，业务异常默认不缓存；只有所属业务通过 cacheFailure 显式确认的资源不存在允许负缓存，授权失败不缓存。手工 `QueryCache.read` 的入口通过所属 Bean 上的 `@QueryCacheDependencies` 显式声明表依赖，不在目录内维护业务表名单。
 
-现有特殊策略位于所属业务的 `service.tenant`、`service.playground`、`service.reporting` 和 `service.apikey`：工作台只缓存预设和模型元数据，价格实时计算；邀请码从候选集合实时过滤并分页；API Key 列表实时补充最近使用时间；报表和概览保留原有时间边界与完整性检查。优先复用或扩展这些策略，禁止在 Service 中复制相同规则。
+现有特殊策略位于所属业务的 `service.tenant`、`service.playground`、`service.reporting` 和 `service.apikey`：工作台只缓存预设和模型元数据，价格实时计算；邀请码列表因自然过期采用实时 SQL 分页且不缓存候选集合；API Key 列表实时补充最近使用时间；报表和概览保留原有时间边界与完整性检查。优先复用或扩展这些策略，禁止在 Service 中复制相同规则。
 
 缓存依赖 Spring AOP：方法必须公开、非 `static`、非 `final`，所属类必须可代理，调用必须经过 Spring 代理。同类内自调用不会触发新的缓存拦截。事务内查询继续执行原方法；直接调用 `QueryCache.read` 的既有入口保持原实现，新增代码优先使用注解。
 

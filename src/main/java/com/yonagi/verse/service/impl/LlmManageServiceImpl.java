@@ -1,6 +1,8 @@
 package com.yonagi.verse.service.impl;
 
 import com.yonagi.verse.common.cache.NoQueryAccess;
+import com.yonagi.verse.common.validation.PaginationPolicy;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 import com.yonagi.verse.service.tenant.TenantQueryAccess;
 
@@ -58,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
 import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
@@ -188,74 +191,40 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_service", "t_llm_service_capability", "t_llm_service_tag", "t_llm_tag", "t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public LlmServiceListRespDTO listLlmService(Long userId, Long tenantId, Integer pageNum,
                                                 Integer pageSize, String keyword, String tagCodes) {
+        PaginationPolicy.validate(pageNum, pageSize, PaginationPolicy.MAX_PAGE_SIZE,
+                LlmManageErrorCodeEnum.PAGINATION_PARAM_INVALID);
         validateTenantAndMembership(userId, tenantId);
-        List<LlmServiceListRespDTO.LlmServiceInfo> all = loadServiceInfos(tenantId);
-        if (StrUtil.isNotBlank(keyword)) {
-            String kw = keyword.trim();
-            all = all.stream()
-                    .filter(info -> matchesKeyword(info, kw))
-                    .toList();
+        String search = StrUtil.isBlank(keyword) ? null : keyword.trim();
+        List<String> filters = StrUtil.isBlank(tagCodes) ? List.of() : Arrays.stream(tagCodes.split(","))
+                .map(String::trim).filter(StrUtil::isNotBlank).distinct().toList();
+        metadataService.validateCodes(filters);
+        // 别名映射只遍历固定枚举；模型数据筛选和分页始终由数据库执行。
+        List<String> providers = search == null ? List.of() : Arrays.stream(LLMProviderEnum.values())
+                .filter(provider -> StrUtil.containsIgnoreCase(provider.getDisplayName(), search)
+                        || (provider.getAliases() != null && Arrays.stream(provider.getAliases())
+                        .anyMatch(alias -> StrUtil.containsIgnoreCase(alias, search))))
+                .map(LLMProviderEnum::getProvider).toList();
+        Page<LlmServiceListRespDTO.LlmServiceInfo> requested = new Page<>(pageNum, pageSize);
+        // 总数必须保留与列表相同的创建者和计费关联语义。
+        requested.setOptimizeJoinOfCountSql(false);
+        Page<LlmServiceListRespDTO.LlmServiceInfo> page = baseMapper.selectPageByTenantId(
+                requested, tenantId, search, providers, StrUtil.isBlank(tagCodes) ? null : filters);
+        List<LlmServiceListRespDTO.LlmServiceInfo> records = page.getRecords();
+        if (!records.isEmpty()) {
+            List<Long> ids = records.stream().map(LlmServiceListRespDTO.LlmServiceInfo::getServiceId).toList();
+            Map<Long, List<String>> tags = metadataService.tagsByServiceIds(ids);
+            Map<Long, List<LlmServiceCapabilityDO>> capabilities = capabilityMapper.selectList(
+                            Wrappers.lambdaQuery(LlmServiceCapabilityDO.class)
+                                    .in(LlmServiceCapabilityDO::getServiceId, ids)
+                                    .orderByAsc(LlmServiceCapabilityDO::getId))
+                    .stream().collect(Collectors.groupingBy(LlmServiceCapabilityDO::getServiceId));
+            records.forEach(info -> {
+                info.setTagCodes(tags.getOrDefault(info.getServiceId(), List.of()));
+                info.setCapabilities(capabilityBindings(capabilities.getOrDefault(info.getServiceId(), List.of())));
+            });
         }
-        Map<Long, List<String>> tags = metadataService.tagsByServiceIds(all.stream()
-                .map(LlmServiceListRespDTO.LlmServiceInfo::getServiceId)
-                .toList());
-        all.forEach(info -> info.setTagCodes(tags.getOrDefault(info.getServiceId(), List.of())));
-        if (StrUtil.isNotBlank(tagCodes)) {
-            List<String> filters = Arrays.stream(tagCodes.split(","))
-                    .map(String::trim)
-                    .filter(StrUtil::isNotBlank)
-                    .distinct()
-                    .toList();
-            metadataService.validateCodes(filters);
-            all = all.stream().filter(info -> info.getTagCodes().stream().anyMatch(filters::contains)).toList();
-        }
-        return paginate(all, pageNum, pageSize);
-    }
-
-    /**
-     * 关键词模糊匹配：服务别名、供应商英文标识、供应商中文显示名及别名（均忽略大小写）。
-     */
-    private boolean matchesKeyword(LlmServiceListRespDTO.LlmServiceInfo info, String keyword) {
-        if (StrUtil.containsIgnoreCase(info.getName(), keyword)
-                || StrUtil.containsIgnoreCase(info.getProvider(), keyword)) {
-            return true;
-        }
-        LLMProviderEnum providerEnum = LLMProviderEnum.fromProvider(info.getProvider());
-        if (providerEnum == null) {
-            return false;
-        }
-        if (StrUtil.containsIgnoreCase(providerEnum.getDisplayName(), keyword)) {
-            return true;
-        }
-        String[] aliases = providerEnum.getAliases();
-        if (aliases != null) {
-            for (String alias : aliases) {
-                if (StrUtil.containsIgnoreCase(alias, keyword)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private List<LlmServiceListRespDTO.LlmServiceInfo> loadServiceInfos(Long tenantId) {
-        List<LlmServiceListRespDTO.LlmServiceInfo> list = baseMapper.selectByTenantId(tenantId);
-        list.forEach(info -> info.setCapabilities(getCapabilities(info.getServiceId())));
-        return list;
-    }
-
-    private LlmServiceListRespDTO paginate(List<LlmServiceListRespDTO.LlmServiceInfo> all,
-                                           int pageNum, int pageSize) {
-        int total = all.size();
-        long totalPages = (total + pageSize - 1L) / pageSize;
-        int from = Math.max(0, Math.min((pageNum - 1) * pageSize, total));
-        int to = Math.min(from + pageSize, total);
-        return new LlmServiceListRespDTO()
-                .setServiceInfoList(all.subList(from, to))
-                .setTotal((long) total)
-                .setTotalPages(totalPages)
-                .setPage(pageNum)
-                .setPageSize(pageSize);
+        return new LlmServiceListRespDTO().setServiceInfoList(records)
+                .setTotal(page.getTotal()).setTotalPages(page.getPages()).setPage(pageNum).setPageSize(pageSize);
     }
 
     @Override
@@ -673,8 +642,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_service", "t_llm_service_capability", "t_llm_service_tag", "t_llm_tag", "t_llm_service_pricing", "t_llm_pricing_peak_period"})
     public Integer getLlmServiceCount(Long userId, Long tenantId) {
         validateTenantAndMembership(userId, tenantId);
-        List<LlmServiceListRespDTO.LlmServiceInfo> infos = loadServiceInfos(tenantId);
-        return infos.size();
+        return Math.toIntExact(baseMapper.countByTenantId(tenantId));
     }
 
     @Override
@@ -734,6 +702,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     private List<CapabilityBindingReqDTO> getCapabilities(Long serviceId) {
         List<LlmServiceCapabilityDO> rows = capabilityMapper.selectList(Wrappers.lambdaQuery(LlmServiceCapabilityDO.class)
                 .eq(LlmServiceCapabilityDO::getServiceId, serviceId));
+        return capabilityBindings(rows);
+    }
+
+    private List<CapabilityBindingReqDTO> capabilityBindings(List<LlmServiceCapabilityDO> rows) {
         if (rows.isEmpty()) return CapabilityConfiguration.normalize(null);
         return rows.stream().map(row -> {
             CapabilityBindingReqDTO binding = new CapabilityBindingReqDTO();

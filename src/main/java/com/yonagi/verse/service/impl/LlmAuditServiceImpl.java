@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 import com.yonagi.verse.service.tenant.TenantQueryAccess;
 
@@ -60,6 +61,7 @@ public class LlmAuditServiceImpl implements LlmAuditService {
     @QueryCached(keyPrefix = LLM_AUDIT_LIST_KEY, seconds = MINUTES_30, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_user", "t_llm_audit_log"})
     public LlmAuditListRespDTO listAudit(UserContext ctx, Long tenantId, Integer pageNum, Integer pageSize, Long userId) {
+        PaginationPolicy.validate(pageNum, pageSize);
         validateMembership(ctx, tenantId);
         boolean isAdmin = isAdmin(ctx);
 

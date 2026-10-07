@@ -1,5 +1,6 @@
 package com.yonagi.verse.controller;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
@@ -56,6 +57,7 @@ public class ApiKeyController {
         if (tenantId == null) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
         }
+        PaginationPolicy.validate(pageNum, pageSize);
         return Results.success(apiKeyService.listApiKeys(userId, tenantId, pageNum, pageSize));
     }
 

@@ -1,5 +1,6 @@
 package com.yonagi.verse.controller;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
@@ -59,9 +60,7 @@ public class LlmManageController {
         if (pageSize == null) {
             pageSize = 5;
         }
-        if (pageNum < 1 || pageSize < 1) {
-            throw new ClientException(LlmManageErrorCodeEnum.PAGINATION_PARAM_INVALID);
-        }
+        PaginationPolicy.validate(pageNum, pageSize, PaginationPolicy.MAX_PAGE_SIZE, LlmManageErrorCodeEnum.PAGINATION_PARAM_INVALID);
         return Results.success(llmManageService.listLlmService(userId, tenantId, pageNum, pageSize, keyword, tagCodes));
     }
 

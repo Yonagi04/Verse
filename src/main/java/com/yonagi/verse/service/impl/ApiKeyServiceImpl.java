@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.service.apikey.ApiKeyListCacheBehavior;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 import com.yonagi.verse.service.tenant.TenantQueryAccess;
@@ -119,6 +120,7 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
     @QueryCached(keyPrefix = API_KEY_LIST_KEY, seconds = HOURS_4, access = TenantQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_api_key"}, behavior = ApiKeyListCacheBehavior.class)
     public ApiKeyPageRespDTO listApiKeys(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
+        PaginationPolicy.validate(pageNum == null ? 1 : pageNum, pageSize == null ? 10 : pageSize);
         return withCurrentListState(userId, tenantId, listApiKeyMetadata(userId, tenantId, pageNum, pageSize));
     }
 
@@ -131,6 +133,7 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         if (pageSize == null) {
             pageSize = 10;
         }
+        PaginationPolicy.validate(pageNum, pageSize);
         Page<ApiKeyDO> page = baseMapper.selectPage(new Page<>(pageNum, pageSize), Wrappers.lambdaQuery(ApiKeyDO.class)
                 .select(ApiKeyDO::getApiKeyId, ApiKeyDO::getName, ApiKeyDO::getKeyPrefix, ApiKeyDO::getStatus,
                         ApiKeyDO::getExpiresAt, ApiKeyDO::getRateLimitRpm, ApiKeyDO::getRateLimitTpm, ApiKeyDO::getCreateTime,

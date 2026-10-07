@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.service.tenant.TeamQueryAccess;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 
@@ -106,6 +107,7 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
     @QueryCached(keyPrefix = TENANT_MEMBER_LIST_KEY, seconds = HOURS_4, access = TeamQueryAccess.class,
             tables = {"t_tenant", "t_user_tenant", "t_user"})
     public TenantMembersListRespDTO listTenantMembers(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
+        PaginationPolicy.validate(pageNum, pageSize);
         tenantAccess.requireTeamMember(userId, tenantId);
 
         Page<UserTenantDO> pageResult = userTenantService.page(

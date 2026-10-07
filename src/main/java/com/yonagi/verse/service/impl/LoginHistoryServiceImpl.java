@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.common.cache.NoQueryAccess;
 
 import cn.hutool.core.bean.BeanUtil;
@@ -50,6 +51,7 @@ public class LoginHistoryServiceImpl extends ServiceImpl<LoginHistoryMapper, Log
         if (pageSize == null) {
             pageSize = 10;
         }
+        PaginationPolicy.validate(pageNum, pageSize);
         UserDO userDO = userMapper.selectOne(Wrappers.lambdaQuery(UserDO.class)
                 .eq(UserDO::getUserId, userId));
         Date createTime = userDO.getCreateTime();

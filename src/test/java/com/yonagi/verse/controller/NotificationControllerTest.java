@@ -67,7 +67,7 @@ class NotificationControllerTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"type,ALL", "severity,ERROR", "isRead,2", "isRead,-1", "pageNum,0", "pageSize,0"})
+    @CsvSource({"type,ALL", "severity,ERROR", "isRead,2", "isRead,-1", "pageNum,0", "pageSize,0", "pageSize,101"})
     void rejectsInvalidFiltersAndPagination(String name, String value) throws Exception {
         mvc.perform(get("/api/v1/notifications").param(name, value))
                 .andExpect(jsonPath("$.code").value("A000001"));

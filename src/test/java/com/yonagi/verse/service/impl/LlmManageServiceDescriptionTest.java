@@ -38,6 +38,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Method;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -228,7 +229,7 @@ class LlmManageServiceDescriptionTest {
 
     @Test
     void listResponseMapsTheProviderSideModelName() throws NoSuchMethodException {
-        Method selectByTenantId = LlmServiceMapper.class.getMethod("selectByTenantId", Long.class);
+        Method selectByTenantId = LlmServiceMapper.class.getMethod("selectPageByTenantId", com.baomidou.mybatisplus.extension.plugins.pagination.Page.class, Long.class, String.class, List.class, List.class);
         String sql = String.join(" ", selectByTenantId.getAnnotation(Select.class).value());
         Results results = selectByTenantId.getAnnotation(Results.class);
 

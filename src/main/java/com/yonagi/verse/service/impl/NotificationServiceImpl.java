@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.common.cache.NoQueryAccess;
 import com.yonagi.verse.common.cache.QueryCache;
 import com.yonagi.verse.common.cache.QueryCacheDependencies;
@@ -68,6 +69,7 @@ public class NotificationServiceImpl extends ServiceImpl<NotificationMapper, Not
     @QueryCached(keyPrefix = NOTIFICATION_LIST_KEY, seconds = MINUTES_10, access = NoQueryAccess.class,
             tables = {"t_notification", "t_notification_recipient"}, behavior = HourlyCacheBehavior.class)
     public NotificationListRespDTO getNotificationList(Long userId, NotificationListReqDTO requestParam) {
+        PaginationPolicy.validate(requestParam.getPageNum(), requestParam.getPageSize());
         long startTime = System.currentTimeMillis() - Duration.ofDays(90).toMillis();
         // 筛选在数据库分页前执行，确保总条数与当前页使用相同条件。
         Page<NotificationListRespDTO.NotificationInfo> page = notificationRecipientMapper

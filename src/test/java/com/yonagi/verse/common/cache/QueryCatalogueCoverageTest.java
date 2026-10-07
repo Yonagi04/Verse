@@ -22,7 +22,6 @@ class QueryCatalogueCoverageTest {
         add("/api/v1/api-keys/{tenantId}/list", "ApiKeyServiceImpl.listApiKeys");
         add("/api/v1/tenants/invites/{inviteCode}/info", "TenantInviteServiceImpl.getTenantAndInviteCodeInfo");
         add("/api/v1/tenants/{tenantId}/members", "TenantMembershipServiceImpl.listTenantMembers");
-        add("/api/v1/tenants/{tenantId}/invites", "TenantInviteServiceImpl.listTenantInviteCodes");
         add("/api/v1/tenants/{tenantId}/join-requests", "TenantApprovalServiceImpl.listJoinRequests");
         add("/api/v1/tenants/{tenantId}/join-requests/unreviewed-count", "TenantApprovalServiceImpl.getUnreviewedJoinReqCount");
         add("/api/v1/tenants/overview", "TenantOverviewServiceImpl.batch");
@@ -55,6 +54,8 @@ class QueryCatalogueCoverageTest {
             "/api/v1/tenants/{tenantId}/playground/status", "/api/v1/tenants/{tenantId}/playground/prompts",
             "/api/v1/tenants/{tenantId}/playground/sessions", "/api/v1/tenants/{tenantId}/playground/sessions/{sessionId}",
             "/api/v1/notifications/{notificationId}",
+            // 邀请自然过期需要实时筛选；只查当前页，不缓存整个租户候选集合。
+            "/api/v1/tenants/{tenantId}/invites",
             // 实时成本快照参与熔断判断，不允许通过查询缓存返回旧状态。
             "/api/v1/api-keys/{tenantId}/{apiKeyId}/cost-status",
             "/api/v1/usage/{tenantId}/export", "/api/v1/usage-events/{tenantId}/reconciliation");
@@ -75,7 +76,7 @@ class QueryCatalogueCoverageTest {
         }
         Set<String> classified = new TreeSet<>(CORE.keySet()); classified.addAll(EXCEPTIONS);
         assertEquals(classified, routes, "新增 GET 必须明确缓存策略或业务例外");
-        assertEquals(35, CORE.size());
+        assertEquals(34, CORE.size());
         QueryCatalogue catalogue = QueryCacheTestSupport.catalogue();
         for (String entry : CORE.values()) {
             assertTrue(catalogue.policies().values().stream().anyMatch(policy -> policy.name().equals(entry)), entry);

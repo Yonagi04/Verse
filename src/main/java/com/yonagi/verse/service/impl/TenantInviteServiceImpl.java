@@ -1,9 +1,9 @@
 package com.yonagi.verse.service.impl;
 
-import com.yonagi.verse.service.tenant.TeamQueryAccess;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 import com.yonagi.verse.service.tenant.TenantInviteAccessPolicy;
-import com.yonagi.verse.service.tenant.TenantInvitesCacheBehavior;
+import com.yonagi.verse.common.validation.PaginationPolicy;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 
 import com.yonagi.verse.common.cache.QueryCached;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -135,40 +135,17 @@ public class TenantInviteServiceImpl implements TenantInviteService {
     }
 
     @Override
-    @QueryCached(keyPrefix = TENANT_INVITE_LIST_KEY, seconds = MINUTES_30, access = TeamQueryAccess.class,
-            tables = {"t_tenant", "t_user_tenant", "t_tenant_invite"}, behavior = TenantInvitesCacheBehavior.class)
     public TenantInviteListRespDTO listTenantInviteCodes(Long userId, Long tenantId, Integer pageNum, Integer pageSize) {
-        return pageAvailableInvites(inviteCandidates(userId, tenantId), pageNum, pageSize);
-    }
-
-    /** 全部候选作为缓存内容；分页结果不能因某条邀请码自然过期而冻结。 */
-    public TenantInviteListRespDTO inviteCandidates(Long userId, Long tenantId) {
+        PaginationPolicy.validate(pageNum, pageSize);
         tenantAccess.requireTeamMember(userId, tenantId);
-
-        java.util.List<TenantInviteListRespDTO.TenantInviteInfo> records = tenantInviteMapper.selectAvailableCandidates(tenantId, new Date());
-        if (!records.isEmpty()) {
-            records.forEach(record -> {
-                String inviteUrl = frontendBaseUrl + "/join/" + record.getCode();
-                record.setInviteUrl(inviteUrl);
-            });
-        }
-        TenantInviteListRespDTO resp = new TenantInviteListRespDTO();
-        resp.setInviteCodes(records);
-        return resp;
-    }
-
-    /** 每次读取都过滤自然过期项并重新分页，保持总数及页内容一致。 */
-    public TenantInviteListRespDTO pageAvailableInvites(TenantInviteListRespDTO candidates, Integer pageNum, Integer pageSize) {
-        if (pageNum == null || pageSize == null || pageNum < 1 || pageSize < 1)
-            throw new ClientException("分页参数必须大于 0");
-        Date now = new Date();
-        java.util.List<TenantInviteListRespDTO.TenantInviteInfo> available = candidates.getInviteCodes().stream()
-                .filter(record -> record.getExpiresAt() == null || record.getExpiresAt().after(now)).toList();
-        int from = (int) Math.min(available.size(), ((long) pageNum - 1) * pageSize);
-        int to = (int) Math.min(available.size(), (long) from + pageSize);
-        return new TenantInviteListRespDTO().setInviteCodes(available.subList(from, to))
-                .setTotal((long) available.size()).setTotalPages((available.size() + (long) pageSize - 1) / pageSize)
-                .setPage(pageNum).setPageSize(pageSize);
+        // 自然过期没有写入失效事件；实时 SQL 分页避免缓存整租户候选或冻结页内容。
+        Page<TenantInviteListRespDTO.TenantInviteInfo> requested = new Page<>(pageNum, pageSize);
+        requested.setOptimizeJoinOfCountSql(false);
+        Page<TenantInviteListRespDTO.TenantInviteInfo> page = tenantInviteMapper.selectPageByTenantId(
+                requested, tenantId, new Date());
+        page.getRecords().forEach(record -> record.setInviteUrl(frontendBaseUrl + "/join/" + record.getCode()));
+        return new TenantInviteListRespDTO().setInviteCodes(page.getRecords())
+                .setTotal(page.getTotal()).setTotalPages(page.getPages()).setPage(pageNum).setPageSize(pageSize);
     }
 
     @Override

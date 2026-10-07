@@ -5,7 +5,6 @@ import com.yonagi.verse.service.cache.HourlyCacheBehavior;
 import com.yonagi.verse.service.playground.WorkbenchListCacheBehavior;
 import com.yonagi.verse.service.playground.WorkbenchModelsCacheBehavior;
 import com.yonagi.verse.service.reporting.UsageReportWindowCacheBehavior;
-import com.yonagi.verse.service.tenant.TenantInvitesCacheBehavior;
 import com.yonagi.verse.service.tenant.TenantOverviewCacheBehavior;
 
 import com.yonagi.verse.service.cache.LiveModelBindingCacheBehavior;
@@ -49,7 +48,6 @@ final class QueryCacheTestSupport {
         beans.registerSingleton("workbenchModels", new WorkbenchModelsCacheBehavior());
         beans.registerSingleton("workbenchList", new WorkbenchListCacheBehavior());
 
-        beans.registerSingleton("invites", new TenantInvitesCacheBehavior());
         beans.registerSingleton("apiKeys", new ApiKeyListCacheBehavior(cache));
         beans.registerSingleton("liveModelRoute", new LiveModelRouteCacheBehavior());
         beans.registerSingleton("liveModelBinding", new LiveModelBindingCacheBehavior());

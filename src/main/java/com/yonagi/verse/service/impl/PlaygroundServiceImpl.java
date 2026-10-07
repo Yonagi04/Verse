@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.service.playground.PlaygroundAccessPolicy;
 import com.yonagi.verse.service.playground.PlaygroundQueryAccess;
 
@@ -133,9 +134,7 @@ public class PlaygroundServiceImpl implements PlaygroundService {
     public PlaygroundDtos.Sessions sessions(UserContext actor, Long tenantId, int pageNum,
                                             int pageSize, String keyword) {
         requireEnabled(actor, tenantId);
-        if (pageNum < 1 || pageSize < 1 || pageSize > 50) {
-            throw new ClientException(PlaygroundErrorCodeEnum.INVALID_PAGE);
-        }
+        PaginationPolicy.validate(pageNum, pageSize, 50, PlaygroundErrorCodeEnum.INVALID_PAGE);
         var query = Wrappers.lambdaQuery(PlaygroundSessionDO.class)
                 .eq(PlaygroundSessionDO::getTenantId, tenantId)
                 .eq(PlaygroundSessionDO::getOwnerUserId, actor.getUserId())

@@ -1,5 +1,6 @@
 package com.yonagi.verse.controller;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
@@ -44,9 +45,7 @@ public class LlmAuditController {
         if (pageSize == null) {
             pageSize = 10;
         }
-        if (pageNum < 1 || pageSize < 1) {
-            throw new ClientException(LlmAuditErrorCodeEnum.AUDIT_PAGINATION_PARAM_INVALID);
-        }
+        PaginationPolicy.validate(pageNum, pageSize, PaginationPolicy.MAX_PAGE_SIZE, LlmAuditErrorCodeEnum.AUDIT_PAGINATION_PARAM_INVALID);
         return Results.success(llmAuditService.listAudit(ctx, tenantId, pageNum, pageSize, userId));
     }
 

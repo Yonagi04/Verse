@@ -1,5 +1,6 @@
 package com.yonagi.verse.dto.req;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
@@ -18,6 +19,7 @@ public class NotificationListReqDTO {
     /** 每页通知数量。 */
     @NotNull(message = "页面大小不能为空")
     @Min(value = 1, message = "页面大小必须大于等于 1")
+    @Max(value = PaginationPolicy.MAX_PAGE_SIZE, message = "页面大小不能超过 100")
     private Integer pageSize = 10;
 
     /** 通知类型，未传时查询全部类型。 */

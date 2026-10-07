@@ -1,5 +1,6 @@
 package com.yonagi.verse.controller;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.CurrentUser;
@@ -129,6 +130,7 @@ public class UserController {
     public Result<LoginHistoryRespDTO> getLoginHistoryList(@CurrentUser Long userId,
                                                          @RequestParam @Valid Integer pageNum,
                                                          @RequestParam Integer pageSize) {
+        PaginationPolicy.validate(pageNum, pageSize);
         return Results.success(loginHistoryService.getLoginHistoryList(userId, pageNum, pageSize));
     }
 

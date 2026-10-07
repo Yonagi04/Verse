@@ -1,5 +1,6 @@
 package com.yonagi.verse.service.impl;
 
+import com.yonagi.verse.common.validation.PaginationPolicy;
 import com.yonagi.verse.service.tenant.TeamQueryAccess;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 
@@ -62,6 +63,7 @@ public class TenantApprovalServiceImpl implements TenantApprovalService {
         if (pageSize == null) {
             pageSize = 10;
         }
+        PaginationPolicy.validate(pageNum, pageSize);
         tenantAccess.requireTeamMember(userId, tenantId);
         Page<TenantJoinReqListRespDTO.TenantJoinReqInfo> pages = tenantJoinRequestMapper.selectPageByTenantId(new Page<>(pageNum, pageSize), tenantId);
         List<TenantJoinReqListRespDTO.TenantJoinReqInfo> records = pages.getRecords();
