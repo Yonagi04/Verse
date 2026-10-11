@@ -127,11 +127,6 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         costBudgetService.check(ctx);
     }
 
-    @Override
-    public void recordCostRejection(UserContext ctx, String requestId, com.yonagi.verse.common.convention.exception.AbstractException error) {
-        costBudgetService.recordRejection(ctx, requestId, error);
-    }
-
     /** JSON 能力共享 Chat 的租户、限流、熔断、降级和终态编排。 */
     public String jsonCompletion(UserContext ctx, ModelOperation operation, String body,
                                  String requestId, Instant requestStartedAt) {

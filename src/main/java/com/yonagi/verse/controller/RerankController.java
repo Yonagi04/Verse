@@ -43,7 +43,6 @@ public class RerankController {
     }
 
     private ResponseEntity<String> error(AbstractException e, String requestId) {
-            forwardService.recordCostRejection(UserContextHolder.get(), requestId, e);
             if (com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(e)) {
                 return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
                         .body(com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.body(e, requestId));

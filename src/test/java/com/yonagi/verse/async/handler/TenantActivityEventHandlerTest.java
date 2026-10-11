@@ -6,6 +6,8 @@ import com.yonagi.verse.common.enums.*;
 import com.yonagi.verse.dao.entity.TenantActivityLogDO;
 import com.yonagi.verse.dao.mapper.TenantActivityLogMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.dao.DuplicateKeyException;
 import static org.junit.jupiter.api.Assertions.*;
@@ -13,6 +15,12 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class TenantActivityEventHandlerTest {
+    @ParameterizedTest
+    @ValueSource(strings = {"API_KEY_COST_CONFIGURED", "API_KEY_COST_REJECTED"})
+    void retiredCostTypesAreNotInEventContract(String type) {
+        assertThrows(IllegalArgumentException.class, () -> TenantActivityType.valueOf(type));
+    }
+
     @Test void persistsImmutableSnapshotAndOriginalOccurredAt() {
         TenantActivityLogMapper mapper=mock(TenantActivityLogMapper.class); DomainOutboxMetrics metrics=mock(DomainOutboxMetrics.class);
         TenantActivityEventHandler handler=new TenantActivityEventHandler(mapper,metrics); TenantActivityEvent event=event();

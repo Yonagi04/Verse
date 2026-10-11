@@ -288,7 +288,6 @@ public class LlmForwardController {
      * 业务异常 → OpenAI error 格式。
      */
     private ResponseEntity<Publisher<String>> toOpenAiError(AbstractException e, String requestId) {
-        llmForwardService.recordCostRejection(UserContextHolder.get(), requestId, e);
         if (com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(e)) {
             return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
                     .body(Mono.just(com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.body(e, requestId)));
@@ -301,7 +300,6 @@ public class LlmForwardController {
 
     /** 二进制接口的错误体必须是实际 JSON 字符串，不能把 Mono 交给 Jackson 序列化。 */
     private ResponseEntity<String> toOpenAiMediaError(AbstractException e, String requestId) {
-        llmForwardService.recordCostRejection(UserContextHolder.get(), requestId, e);
         if (com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(e)) {
             return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
                     .body(com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.body(e, requestId));

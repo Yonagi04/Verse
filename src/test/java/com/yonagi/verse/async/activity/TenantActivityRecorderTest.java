@@ -63,18 +63,16 @@ class TenantActivityRecorderTest {
         assertFalse(allowed.contains("invitecode"));
     }
 
-    @Test void activityCatalogueOnlyIncludesCostBudgetApiKeyActionsAndExcludesInviteCreation() {
+    @Test void activityCatalogueExcludesPersonalApiKeyActionsAndInviteCreation() {
         assertFalse(java.util.Arrays.stream(TenantActivityCategory.values())
                 .anyMatch(category -> "API_KEY".equals(category.name())));
-        assertTrue(java.util.Arrays.stream(TenantActivityTargetType.values())
+        assertFalse(java.util.Arrays.stream(TenantActivityTargetType.values())
                 .anyMatch(targetType -> "API_KEY".equals(targetType.name())));
         String activityTypes = java.util.Arrays.stream(TenantActivityType.values())
                 .map(Enum::name)
                 .collect(java.util.stream.Collectors.joining(","));
-        assertEquals(java.util.Set.of("API_KEY_COST_CONFIGURED", "API_KEY_COST_REJECTED"),
-                java.util.Arrays.stream(TenantActivityType.values()).map(Enum::name)
-                        .filter(name -> name.startsWith("API_KEY"))
-                        .collect(java.util.stream.Collectors.toSet()));
+        assertFalse(java.util.Arrays.stream(TenantActivityType.values())
+                .anyMatch(type -> type.name().startsWith("API_KEY")));
         assertFalse(activityTypes.contains("INVITE_CREATED"));
     }
 }

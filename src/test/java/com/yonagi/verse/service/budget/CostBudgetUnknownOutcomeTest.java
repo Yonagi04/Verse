@@ -43,7 +43,7 @@ class CostBudgetUnknownOutcomeTest {
         Instant now = Instant.parse("2026-10-07T01:00:00Z");
         var service = new CostBudgetService(keys, invocations, settlements, periods,
                 new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC)), mock(BudgetExecutionRegistry.class),
-                outbox, new UsageOutboxProperties(), manager, mock(CostBudgetAudit.class));
+                outbox, new UsageOutboxProperties(), manager);
         ReflectionTestUtils.setField(service, "costingEnabled", true);
         var key = new ApiKeyDO(); key.setTenantId(2L); key.setApiKeyId(3L); key.setUserId(1L);
         key.setCostLimitEnabled(true); key.setCostLimitDailyFen(new BigDecimal("100")); key.setCostDataState("READY");

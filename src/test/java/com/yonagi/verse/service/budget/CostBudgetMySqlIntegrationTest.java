@@ -80,7 +80,7 @@ class CostBudgetMySqlIntegrationTest {
     }
     private CostBudgetService service(BudgetExecutionRegistry proof) {
         CostBudgetService result = new CostBudgetService(keys, invocations, settlements, periods,
-                new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC)), proof, outbox, new UsageOutboxProperties(), manager, mock(CostBudgetAudit.class));
+                new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC)), proof, outbox, new UsageOutboxProperties(), manager);
         ReflectionTestUtils.setField(result, "costingEnabled", true);
         return result;
     }

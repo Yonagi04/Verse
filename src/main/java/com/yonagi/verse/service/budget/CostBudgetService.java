@@ -39,7 +39,6 @@ public class CostBudgetService {
     private final BudgetExecutionRegistry registry;
     private final UsageOutboxStager outbox;
     private final UsageOutboxProperties outboxProperties;
-    private final CostBudgetAudit audit;
     private final TransactionTemplate transaction;
     private final Map<String, TokenUsageEvent> pendingSnapshots = new java.util.concurrent.ConcurrentHashMap<>();
     @Value("${verse.llm.costing.enabled:true}") private boolean costingEnabled;
@@ -47,11 +46,10 @@ public class CostBudgetService {
     public CostBudgetService(ApiKeyMapper keys, CostBudgetInvocationMapper invocations,
             CostBudgetSettlementMapper settlements, CostBudgetPeriodMapper periods,
             BudgetPeriodResolver time, BudgetExecutionRegistry registry, UsageOutboxStager outbox,
-            UsageOutboxProperties outboxProperties, PlatformTransactionManager manager, CostBudgetAudit audit) {
+            UsageOutboxProperties outboxProperties, PlatformTransactionManager manager) {
         this.keys = keys; this.invocations = invocations; this.settlements = settlements;
         this.periods = periods; this.time = time; this.registry = registry;
         this.outbox = outbox; this.outboxProperties = outboxProperties;
-        this.audit = audit;
         transaction = new TransactionTemplate(manager);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
@@ -89,13 +87,7 @@ public class CostBudgetService {
         CostLimitConfig next = CostLimitConfig.from(key);
         if (!previous.equals(next)) {
             key.setCostConfigVersion(Long.parseLong(previous.version()) + 1);
-            audit.configured(key);
         }
-    }
-
-    public void recordRejection(UserContext ctx, String requestId, com.yonagi.verse.common.convention.exception.AbstractException exception) {
-        try { audit.rejected(ctx, requestId, exception); }
-        catch (RuntimeException e) { log.warn("[cost-budget] 拒绝审计暂存失败: requestId={}", requestId, e); }
     }
 
     public ApiKeyCostStatusRespDTO status(Long tenantId, Long keyId, Long userId) {
