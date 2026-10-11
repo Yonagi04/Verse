@@ -47,6 +47,10 @@ public class MessagingProperties {
         private String resetTemplateCode = "10001";
         /** 账号注销模板代码。 */
         private String closureTemplateCode = "10002";
+        /** 已审核成本预警模板；生产必须显式配置。 */
+        private String costWarningTemplateCode = "10003";
+        /** 已审核成本达限模板；生产必须显式配置。 */
+        private String costLimitTemplateCode = "10004";
         /** 每手机号首次计数起 24 小时固定窗口内的发码尝试上限，包含明确拒绝。 */
         private int dailyLimit = 10;
         /** 模拟服务 API 地址。 */

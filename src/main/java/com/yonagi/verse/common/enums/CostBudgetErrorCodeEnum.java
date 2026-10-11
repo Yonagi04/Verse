@@ -9,6 +9,9 @@ public enum CostBudgetErrorCodeEnum implements IErrorCode {
     INVALID_CONFIG("A000604", "成本限额须为有效的正整数分，开启时至少配置一个周期"),
     VERSION_CONFLICT("A000605", "成本配置已更新，请刷新当前配置后重试"),
     NOT_READY("A000606", "成本数据尚未就绪或计费未开启，暂不能开启成本限额"),
+    LLM_PRICE_REQUIRED("A000607", "请先配置模型价格"),
+    LLM_PRICE_DISABLE_REQUIRES_BUDGET_OFF("A000608", "关闭模型价格前必须显式关闭成本限额"),
+    WARNING_INVALID("A000609", "成本预警须有有效预算、50～99整数阈值和至少一个合法渠道"),
     LIMIT_EXCEEDED("A000809", "此 API Key 的调用成本已达到限额"),
     UNAVAILABLE("B000802", "预算校验暂不可用，请稍后重试");
 

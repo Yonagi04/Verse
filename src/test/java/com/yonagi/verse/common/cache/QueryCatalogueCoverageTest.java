@@ -58,6 +58,9 @@ class QueryCatalogueCoverageTest {
             "/api/v1/tenants/{tenantId}/invites",
             // 实时成本快照参与熔断判断，不允许通过查询缓存返回旧状态。
             "/api/v1/api-keys/{tenantId}/{apiKeyId}/cost-status",
+            "/api/v1/llm-services/{serviceId}/cost-status",
+            "/api/v1/llm-services/cost-status",
+            "/api/v1/llm-services/cost-notification-readiness",
             "/api/v1/usage/{tenantId}/export", "/api/v1/usage-events/{tenantId}/reconciliation");
 
     @Test void everyCoreGetHasPolicyAndEveryGetIsClassified() throws Exception {

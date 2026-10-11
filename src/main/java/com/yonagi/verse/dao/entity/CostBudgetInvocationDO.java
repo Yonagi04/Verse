@@ -13,6 +13,8 @@ public class CostBudgetInvocationDO {
     private Long tenantId;
     /** Key 标识。 */
     private Long apiKeyId;
+    /** API_KEY 或 PLAYGROUND。 */
+    private String source;
     /** 唯一逻辑请求标识。 */
     private String requestId;
     /** 预分配终态标识。 */

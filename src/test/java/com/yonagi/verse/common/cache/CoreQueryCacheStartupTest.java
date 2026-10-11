@@ -32,6 +32,8 @@ class CoreQueryCacheStartupTest {
             .withBean(AesUtil.class, () -> mock(AesUtil.class))
             .withBean(DomainEventPublisher.class, () -> mock(DomainEventPublisher.class))
             .withBean(TokenUsageEventPublisher.class, () -> mock(TokenUsageEventPublisher.class))
+            .withBean(com.yonagi.verse.service.budget.LlmCostBudgetLedger.class, () -> mock(com.yonagi.verse.service.budget.LlmCostBudgetLedger.class))
+            .withBean(io.micrometer.core.instrument.MeterRegistry.class, () -> new io.micrometer.core.instrument.simple.SimpleMeterRegistry())
             .withBean(CostBudgetService.class, () -> mock(CostBudgetService.class))
             .withBean(RateLimiter.class, () -> mock(RateLimiter.class))
             .withBean(CircuitBreaker.class, () -> mock(CircuitBreaker.class))
@@ -62,8 +64,6 @@ class CoreQueryCacheStartupTest {
                 .withConfiguration(org.springframework.boot.autoconfigure.AutoConfigurations.of(
                         com.baomidou.mybatisplus.autoconfigure.MybatisPlusAutoConfiguration.class))
                 .withBean(org.redisson.api.RedissonClient.class, () -> mock(org.redisson.api.RedissonClient.class))
-                .withBean(io.micrometer.core.instrument.MeterRegistry.class,
-                        () -> new io.micrometer.core.instrument.simple.SimpleMeterRegistry())
                 .run(application -> {
                     assertThat(application).hasNotFailed();
                     assertThat(application).hasSingleBean(LlmForwardService.class);

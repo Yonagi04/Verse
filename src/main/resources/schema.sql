@@ -117,9 +117,8 @@ CREATE TABLE IF NOT EXISTS `t_api_key` (
     cost_limit_daily_fen DECIMAL(20,0) NULL COMMENT '日限额，分',
     cost_limit_weekly_fen DECIMAL(20,0) NULL COMMENT '周限额，分',
     cost_limit_monthly_fen DECIMAL(20,0) NULL COMMENT '月限额，分',
-    cost_config_version BIGINT NOT NULL DEFAULT 0 COMMENT '成本配置版本',
-    cost_data_state VARCHAR(24) NOT NULL DEFAULT 'INITIALIZING' COMMENT '成本数据完整性',
-    cost_data_reason VARCHAR(64) NULL COMMENT '内部不可用原因',
+    cost_config_version BIGINT NOT NULL DEFAULT 0 COMMENT '当前成本配置并发版本；变更递增，不保存历史版本行',
+    cost_data_reason VARCHAR(64) NULL COMMENT '持久化费用故障原因码；NULL表示没有已知故障',
     `create_time`   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_api_key` (`api_key`),
@@ -353,7 +352,8 @@ CREATE TABLE IF NOT EXISTS `t_tenant_activity_log` (
     `tenant_id` BIGINT NOT NULL COMMENT '租户ID',
     `category` VARCHAR(32) NOT NULL COMMENT '动态分类',
     `activity_type` VARCHAR(64) NOT NULL COMMENT '动态类型',
-    `actor_user_id` BIGINT NOT NULL COMMENT '操作人用户ID',
+    `actor_type` VARCHAR(16) NOT NULL DEFAULT 'USER' COMMENT '动态操作人类型：USER用户，SYSTEM系统',
+    `actor_user_id` BIGINT NULL COMMENT '操作人用户业务ID；SYSTEM动态为NULL',
     `actor_username` VARCHAR(64) NOT NULL COMMENT '操作人用户名快照',
     `actor_nickname` VARCHAR(100) DEFAULT NULL COMMENT '操作人昵称快照',
     `target_type` VARCHAR(32) DEFAULT NULL COMMENT '目标对象类型',
@@ -379,7 +379,7 @@ CREATE TABLE IF NOT EXISTS `t_llm_tag` (
     `sort_order` SMALLINT NOT NULL,
     PRIMARY KEY (`tag_code`),
     UNIQUE KEY `uk_llm_tag_sort_order` (`sort_order`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LLM 固定能力标签字典';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM 固定能力标签字典';
 
 CREATE TABLE IF NOT EXISTS `t_llm_service_tag` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -389,7 +389,7 @@ CREATE TABLE IF NOT EXISTS `t_llm_service_tag` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_llm_service_tag` (`service_id`, `tag_code`),
     KEY `idx_llm_service_tag_code` (`tag_code`, `service_id`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LLM 服务能力标签关联';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM 服务能力标签关联';
 
 CREATE TABLE IF NOT EXISTS `t_llm_service_pricing` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -409,7 +409,7 @@ CREATE TABLE IF NOT EXISTS `t_llm_service_pricing` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_llm_pricing_id` (`pricing_id`),
     KEY `idx_llm_pricing_lookup` (`tenant_id`, `service_id`, `effective_from`, `effective_to`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LLM 服务不可变计费版本';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM 服务不可变计费版本';
 
 CREATE TABLE IF NOT EXISTS `t_llm_pricing_peak_period` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
@@ -427,7 +427,7 @@ CREATE TABLE IF NOT EXISTS `t_llm_pricing_peak_period` (
     UNIQUE KEY `uk_llm_peak_period_id` (`period_id`),
     KEY `idx_llm_peak_pricing` (`pricing_id`),
     CHECK (`start_minute` < `end_minute` AND `end_minute` <= 1440)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='LLM 计费高峰期规则';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='LLM 计费高峰期规则';
 
 INSERT INTO `t_llm_tag` (`tag_code`, `display_name`, `description`, `sort_order`) VALUES
 ('text-generation', '文本生成', '支持文本理解与生成', 1),
@@ -705,7 +705,8 @@ CREATE TABLE IF NOT EXISTS t_user_external_auth_audit (
 CREATE TABLE IF NOT EXISTS t_cost_budget_invocation (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '接管主键',
     tenant_id BIGINT NOT NULL COMMENT '租户标识',
-    api_key_id BIGINT NOT NULL COMMENT 'Key 标识',
+    api_key_id BIGINT NULL COMMENT 'API Key业务ID；PLAYGROUND调用为NULL',
+    source VARCHAR(16) NOT NULL DEFAULT 'API_KEY' COMMENT '调用来源：API_KEY/PLAYGROUND',
     request_id VARCHAR(64) NOT NULL COMMENT '逻辑请求标识',
     event_id VARCHAR(64) NOT NULL COMMENT '预分配稳定终态标识',
     request_started_at DATETIME(6) NOT NULL COMMENT '上海请求开始时间',
@@ -716,43 +717,46 @@ CREATE TABLE IF NOT EXISTS t_cost_budget_invocation (
     last_heartbeat_at DATETIME(6) NULL COMMENT '执行心跳',
     last_error_code VARCHAR(64) NULL COMMENT '恢复原因',
     update_time DATETIME(6) NOT NULL COMMENT '更新时间',
-    PRIMARY KEY(id), UNIQUE KEY uk_budget_invocation_request(request_id),
+    PRIMARY KEY(id),
+    UNIQUE KEY uk_budget_invocation_request(request_id),
     UNIQUE KEY uk_budget_invocation_event(event_id),
     KEY idx_budget_invocation_key(tenant_id,api_key_id,request_started_at,state),
     KEY idx_budget_invocation_recovery(state,update_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成本调用接管及异常栅栏';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='成本调用接管及异常栅栏';
 
 CREATE TABLE IF NOT EXISTS t_cost_budget_settlement (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '账本主键',
     event_id VARCHAR(64) NOT NULL COMMENT '稳定终态标识',
     tenant_id BIGINT NOT NULL COMMENT '租户标识',
     user_id BIGINT NOT NULL COMMENT '用户标识',
-    api_key_id BIGINT NOT NULL COMMENT 'Key 标识',
+    api_key_id BIGINT NULL COMMENT 'API Key业务ID；PLAYGROUND调用为NULL',
     service_id BIGINT NOT NULL COMMENT '实际服务标识',
-    source VARCHAR(16) NOT NULL COMMENT '调用来源',
+    source VARCHAR(16) NOT NULL COMMENT '调用来源：API_KEY/PLAYGROUND',
     operation VARCHAR(40) NOT NULL COMMENT '能力',
     request_id VARCHAR(64) NOT NULL COMMENT '逻辑请求标识',
     request_started_at DATETIME(6) NOT NULL COMMENT '上海请求开始时间',
-    cost_status VARCHAR(24) NOT NULL COMMENT '原始费用状态',
+    cost_status VARCHAR(24) NOT NULL COMMENT '原费用状态：CALCULATED/UNPRICED/UNCALCULABLE/NOT_CHARGEABLE',
     estimated_cost_fen DECIMAL(38,18) NULL COMMENT '原始预估费用，分',
     currency VARCHAR(8) NOT NULL COMMENT '币种',
     event_payload_json LONGTEXT NOT NULL COMMENT '可重放费用终态',
     payload_hash CHAR(64) NOT NULL COMMENT '不可变快照摘要',
-    budget_applied TINYINT NOT NULL DEFAULT 0 COMMENT '累计和 Outbox 是否原子提交',
-    origin VARCHAR(24) NOT NULL COMMENT 'LIVE/HISTORY_IMPORT',
+    budget_applied TINYINT NOT NULL DEFAULT 0 COMMENT 'Key与模型累计及LIVE Outbox是否已在同一事务提交：0否，1是',
+    origin VARCHAR(24) NOT NULL COMMENT '账本来源：LIVE实时结算，HISTORY_IMPORT历史导入',
     create_time DATETIME(6) NOT NULL COMMENT '暂存时间',
     applied_at DATETIME(6) NULL COMMENT '同步结算时间',
-    PRIMARY KEY(id), UNIQUE KEY uk_budget_settlement_event(event_id),
+    PRIMARY KEY(id),
+    UNIQUE KEY uk_budget_settlement_event(event_id),
     UNIQUE KEY uk_budget_settlement_request(tenant_id,source,request_id),
     KEY idx_budget_settlement_rebuild(tenant_id,api_key_id,request_started_at,id),
-    KEY idx_budget_settlement_pending(budget_applied,id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成本同步不可变账本';
+    KEY idx_budget_settlement_pending(budget_applied,id),
+    KEY idx_budget_settlement_model(tenant_id,service_id,request_started_at,id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='成本同步不可变账本';
 
 CREATE TABLE IF NOT EXISTS t_cost_budget_period (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '累计主键',
     tenant_id BIGINT NOT NULL COMMENT '租户标识',
-    scope_type VARCHAR(16) NOT NULL COMMENT 'API_KEY；后续复用 LLM/TENANT',
-    scope_id BIGINT NOT NULL COMMENT '作用域标识',
+    scope_type VARCHAR(16) NOT NULL COMMENT '预算作用域：API_KEY个人密钥，LLM模型服务',
+    scope_id BIGINT NOT NULL COMMENT '对应作用域的API Key或模型服务业务ID',
     period_type VARCHAR(8) NOT NULL COMMENT 'DAY/WEEK/MONTH',
     period_start DATETIME(6) NOT NULL COMMENT '上海周期开始，含',
     period_end DATETIME(6) NOT NULL COMMENT '上海周期结束，不含',
@@ -761,10 +765,11 @@ CREATE TABLE IF NOT EXISTS t_cost_budget_period (
     unpriced_count BIGINT NOT NULL DEFAULT 0 COMMENT '未计价数量',
     uncalculable_count BIGINT NOT NULL DEFAULT 0 COMMENT '不可计算数量',
     not_chargeable_count BIGINT NOT NULL DEFAULT 0 COMMENT '不计费数量',
-    rebuild_version BIGINT NOT NULL DEFAULT 0 COMMENT '重建版本',
+    rebuild_version BIGINT NOT NULL DEFAULT 0 COMMENT '累计覆盖重建次数；不属于配置版本',
     update_time DATETIME(6) NOT NULL COMMENT '更新时间',
-    PRIMARY KEY(id), UNIQUE KEY uk_budget_period(tenant_id,scope_type,scope_id,period_type,period_start)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成本日周月持久化累计';
+    PRIMARY KEY(id),
+    UNIQUE KEY uk_budget_period(tenant_id,scope_type,scope_id,period_type,period_start)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='成本日周月持久化累计';
 
 CREATE TABLE IF NOT EXISTS t_sms_send_record (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '发送记录主键',
@@ -797,7 +802,7 @@ CREATE TABLE IF NOT EXISTS t_sms_send_record (
     KEY idx_sms_task_due (status, next_attempt_at, id),
     KEY idx_sms_task_deadline (status, deadline_at),
     KEY idx_sms_task_stale (status, update_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='短信服务商调用记录，不表示送达';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='短信服务商调用记录，不表示送达';
 
 CREATE TABLE IF NOT EXISTS t_email_send_record (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '发送记录主键',
@@ -829,4 +834,84 @@ CREATE TABLE IF NOT EXISTS t_email_send_record (
     KEY idx_email_task_due (status, next_attempt_at, id),
     KEY idx_email_task_deadline (status, deadline_at),
     KEY idx_email_task_stale (status, update_time)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='邮件服务商调用记录，不表示送达';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='邮件服务商调用记录，不表示送达';
+
+CREATE TABLE IF NOT EXISTS t_llm_cost_budget (
+    id BIGINT NOT NULL PRIMARY KEY COMMENT '预算配置主键',
+    tenant_id BIGINT NOT NULL COMMENT '租户业务ID',
+    service_id BIGINT NOT NULL COMMENT '模型服务业务ID；同租户每个模型仅保留一条当前配置',
+    cost_limit_enabled TINYINT NOT NULL DEFAULT 0 COMMENT '成本限额开关：0关闭，1开启',
+    daily_limit_fen DECIMAL(20,0) NULL COMMENT '日限额，整数分；NULL表示不限制日额度',
+    weekly_limit_fen DECIMAL(20,0) NULL COMMENT '周限额，整数分；NULL表示不限制周额度',
+    monthly_limit_fen DECIMAL(20,0) NULL COMMENT '月限额，整数分；NULL表示不限制月额度',
+    warning_enabled TINYINT NOT NULL DEFAULT 0 COMMENT '预警草稿开关；仅限额和价格均启用时生效',
+    warning_threshold_percent INT NOT NULL DEFAULT 80 COMMENT '各周期共用预警阈值，百分比整数',
+    warning_channels JSON NOT NULL COMMENT '预警渠道JSON数组：IN_APP/SMS/EMAIL；关闭时保留草稿',
+    config_version BIGINT NOT NULL DEFAULT 0 COMMENT '当前配置并发版本；有效配置变更递增，不保存历史版本行',
+    cost_data_reason VARCHAR(64) NULL COMMENT '持久化费用故障原因码；NULL表示没有已知故障',
+    create_time DATETIME(6) NOT NULL COMMENT '配置首次创建时间，上海时间',
+    update_time DATETIME(6) NOT NULL COMMENT '最近配置保存时间，上海时间；费用累计不更新本字段',
+    UNIQUE KEY uk_llm_budget(tenant_id,service_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型预算配置与锁';
+
+CREATE TABLE IF NOT EXISTS t_cost_budget_invocation_model (
+    request_id VARCHAR(64) NOT NULL COMMENT '逻辑调用请求ID；关联调用接管记录',
+    tenant_id BIGINT NOT NULL COMMENT '调用所属租户业务ID',
+    service_id BIGINT NOT NULL COMMENT '实际上游调用参与的模型服务业务ID',
+    first_registered_at DATETIME(6) NOT NULL COMMENT '该请求首次登记此模型的时间；发送上游前登记，上海时间',
+    PRIMARY KEY(request_id,service_id),
+    KEY idx_invocation_model(tenant_id,service_id,request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='上游发送前模型参与证据';
+
+CREATE TABLE IF NOT EXISTS t_llm_cost_alert_event (
+    id BIGINT NOT NULL PRIMARY KEY COMMENT '告警事实主键',
+    event_id VARCHAR(64) NOT NULL COMMENT '稳定告警业务ID；用于Outbox与派发幂等',
+    tenant_id BIGINT NOT NULL COMMENT '租户业务ID',
+    service_id BIGINT NOT NULL COMMENT '模型服务业务ID',
+    period_type VARCHAR(8) NOT NULL COMMENT '自然周期：DAY/WEEK/MONTH',
+    period_start DATETIME(6) NOT NULL COMMENT '自然周期起点，包含，上海时间',
+    period_end DATETIME(6) NOT NULL COMMENT '自然周期终点，不包含，上海时间',
+    event_type VARCHAR(16) NOT NULL COMMENT '告警类型：WARNING预警，LIMIT达限',
+    triggered_at DATETIME(6) NOT NULL COMMENT '首次触发时间，上海时间',
+    limit_fen DECIMAL(20,0) NOT NULL COMMENT '触发时限额快照，整数分',
+    used_cost_fen DECIMAL(65,18) NOT NULL COMMENT '触发时累计费用快照，分，保留原精度',
+    remaining_cost_fen DECIMAL(65,18) NOT NULL COMMENT '触发时剩余额度快照，分，最低为0',
+    threshold_percent INT NOT NULL COMMENT '触发时预警百分比阈值快照',
+    config_version BIGINT NOT NULL COMMENT '触发时配置版本快照；不参与周期告警去重',
+    channels_json JSON NOT NULL COMMENT '触发时渠道JSON数组；达限强制IN_APP/SMS/EMAIL',
+    tenant_name VARCHAR(128) NOT NULL COMMENT '触发时租户名称快照',
+    service_name VARCHAR(128) NOT NULL COMMENT '触发时模型服务名称快照',
+    retry_at DATETIME(6) NULL COMMENT '触发时最晚模型预算恢复时间；无命中时NULL，上海时间',
+    activity_enabled_snapshot TINYINT NOT NULL COMMENT '触发时租户动态记录开关快照：0关闭，1开启',
+    activity_event_id VARCHAR(64) NOT NULL COMMENT '固定租户动态事件ID；用于动态去重',
+    notification_id BIGINT NOT NULL COMMENT '固定站内公告ID；用于公告去重',
+    status VARCHAR(24) NOT NULL COMMENT '事件登记状态；收件人与渠道派发状态保存在任务表',
+    create_time DATETIME(6) NOT NULL COMMENT '告警事实创建时间，上海时间',
+    update_time DATETIME(6) NOT NULL COMMENT '事件记录更新时间，上海时间',
+    UNIQUE KEY uk_cost_alert_event(event_id),
+    UNIQUE KEY uk_cost_alert_period(tenant_id,service_id,period_type,period_start,event_type)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='按模型自然周期唯一告警事实';
+
+CREATE TABLE IF NOT EXISTS t_llm_cost_alert_delivery (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY COMMENT '派发任务自增主键',
+    event_id VARCHAR(64) NOT NULL COMMENT '所属告警业务ID',
+    channel VARCHAR(16) NOT NULL COMMENT '派发渠道：IN_APP/SMS/EMAIL；ACTIVITY表示租户动态',
+    recipient_user_id BIGINT NOT NULL COMMENT '快照收件人业务ID；系统任务或无收件人占位为0',
+    contact_hash VARCHAR(64) NULL COMMENT '触发时联系方式查询摘要；无联系方式时NULL',
+    dispatch_contact_hash VARCHAR(64) NULL COMMENT '实际外发地址唯一摘要；重复地址非主任务为NULL',
+    contact_encrypted VARCHAR(2048) NULL COMMENT '触发时联系方式AES-GCM密文；站内或无联系方式时NULL',
+    canonical_delivery_id BIGINT NULL COMMENT '重复联系方式对应的主派发任务ID；主任务为NULL',
+    request_id VARCHAR(64) NOT NULL COMMENT '固定消息请求ID；重试复用，禁止换ID重发',
+    status VARCHAR(24) NOT NULL COMMENT '任务状态：PENDING/RETRY_WAIT/CLAIMED/QUEUED/ACCEPTED/REJECTED/UNKNOWN/EXPIRED/SKIPPED/CANCELLED',
+    reason_code VARCHAR(64) NULL COMMENT '脱敏的跳过、取消、失败或恢复原因码',
+    attempt_count INT NOT NULL DEFAULT 0 COMMENT '本地外发派发认领次数；不等同于供应商实际发送次数',
+    next_retry_at DATETIME(6) NOT NULL COMMENT '下次允许认领时间，上海时间',
+    execution_token VARCHAR(64) NULL COMMENT '本次认领CAS标识；防止过期执行者覆盖新结果',
+    lease_until DATETIME(6) NULL COMMENT '本地派发认领租约终点，上海时间',
+    create_time DATETIME(6) NOT NULL COMMENT '任务创建时间，上海时间',
+    update_time DATETIME(6) NOT NULL COMMENT '最近任务状态更新时间，上海时间',
+    UNIQUE KEY uk_cost_delivery_user(event_id,channel,recipient_user_id),
+    UNIQUE KEY uk_cost_delivery_contact(event_id,channel,dispatch_contact_hash),
+    UNIQUE KEY uk_cost_delivery_request(request_id),
+    KEY idx_cost_delivery_pending(status,next_retry_at,id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='告警收件人快照与渠道结果';

@@ -16,4 +16,8 @@ public interface CostBudgetSettlementMapper extends BaseMapper<CostBudgetSettlem
             + "AND request_started_at >= #{start} ORDER BY id")
     List<CostBudgetSettlementDO> history(@Param("tenantId") Long tenantId, @Param("keyId") Long keyId,
                                           @Param("start") LocalDateTime start);
+    @Select("SELECT * FROM t_cost_budget_settlement WHERE tenant_id=#{tenantId} AND service_id=#{serviceId} "
+            + "AND request_started_at >= #{start} ORDER BY id")
+    List<CostBudgetSettlementDO> modelHistory(@Param("tenantId") Long tenantId,
+            @Param("serviceId") Long serviceId, @Param("start") LocalDateTime start);
 }

@@ -97,7 +97,6 @@ public class ApiKeyServiceImpl extends ServiceImpl<ApiKeyMapper, ApiKeyDO> imple
         apiKeyDO.setCreateTime(new Date());
         apiKeyDO.setCostLimitEnabled(false);
         apiKeyDO.setCostConfigVersion(0L);
-        apiKeyDO.setCostDataState("READY");
         costBudgetService.merge(apiKeyDO, requestParam.getCostLimit());
         int inserted = baseMapper.insert(apiKeyDO);
         if (inserted < 1) {

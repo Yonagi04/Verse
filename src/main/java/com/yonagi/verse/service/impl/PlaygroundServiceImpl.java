@@ -196,7 +196,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, noRollbackFor = {
+            com.yonagi.verse.service.budget.CostLimitExceededException.class,
+            com.yonagi.verse.service.budget.CostBudgetUnavailableException.class})
     public PreparedTurn prepareSend(UserContext actor, Long tenantId, Long sessionId, String prompt,
                                     String idempotencyKey) {
         requireEnabled(actor, tenantId);
@@ -236,16 +238,6 @@ public class PlaygroundServiceImpl implements PlaygroundService {
         }
         playgroundRateLimiter.check(tenantId, service.getServiceId());
         String requestId = Long.toString(SnowflakeIdUtil.nextId());
-        Flux<ServerSentEvent<String>> upstream;
-        try {
-            upstream = llmForwardService.playgroundChatStream(actor, service.getServiceId(), messages,
-                    requestId, java.time.Instant.now());
-        } catch (ClientException ex) {
-            if ("A000802".equals(ex.getErrorCode())) {
-                throw new ClientException(PlaygroundErrorCodeEnum.SHARED_LIMIT);
-            }
-            throw ex;
-        }
         PlaygroundTurnDO turn = new PlaygroundTurnDO();
         turn.setTurnId(SnowflakeIdUtil.nextId());
         turn.setTenantId(tenantId);
@@ -258,6 +250,21 @@ public class PlaygroundServiceImpl implements PlaygroundService {
         turn.setStatus("PENDING");
         turn.setCreateTime(LocalDateTime.now(ZONE));
         turn.setUpdateTime(turn.getCreateTime());
+        Flux<ServerSentEvent<String>> upstream;
+        try {
+            upstream = llmForwardService.playgroundChatStream(actor, service.getServiceId(), messages,
+                    requestId, java.time.Instant.now());
+        } catch (com.yonagi.verse.service.budget.CostLimitExceededException | com.yonagi.verse.service.budget.CostBudgetUnavailableException rejected) {
+            if (rejected instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) budget.requestId(requestId);
+            turn.setStatus("FAILED"); turn.setFinishedAt(LocalDateTime.now(ZONE)); turnMapper.insert(turn);
+            if (sessionMapper.release(tenantId, actor.getUserId(), sessionId) != 1) throw new IllegalStateException("PlayGround 拒绝后生成锁释放失败");
+            throw rejected;
+        } catch (ClientException ex) {
+            if ("A000802".equals(ex.getErrorCode())) {
+                throw new ClientException(PlaygroundErrorCodeEnum.SHARED_LIMIT);
+            }
+            throw ex;
+        }
         turnMapper.insert(turn);
         if (session.getTurnCount() == 0) {
             String title = cleanPrompt.length() > 40 ? cleanPrompt.substring(0, 40) : cleanPrompt;
@@ -326,8 +333,14 @@ public class PlaygroundServiceImpl implements PlaygroundService {
             PlaygroundErrorCodeEnum code = error instanceof ClientException client
                     && PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE.code().equals(client.getErrorCode())
                     ? PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE : PlaygroundErrorCodeEnum.UPSTREAM_ERROR;
-            return Mono.just(event("error", JSONObject.of("turnId", turnId, "status", "FAILED",
-                    "code", code.code(), "message", code.message())));
+            JSONObject payload = JSONObject.of("turnId", turnId, "status", "FAILED", "code", code.code(), "message", code.message());
+            if (error instanceof com.yonagi.verse.common.convention.exception.AbstractException business
+                    && com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(business)) {
+                payload.put("code", business.getErrorCode()); payload.put("message", business.getErrorMessage());
+                if (business instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget)
+                    payload.put("data", com.yonagi.verse.common.web.PlaygroundCostError.data(budget, turn.getRequestId()));
+            }
+            return Mono.just(event("error", payload));
         });
         return Flux.just(accepted).concatWith(completed)
                 .doOnCancel(() -> finish(actor, turn, reply.toString(), "STOPPED", finished));

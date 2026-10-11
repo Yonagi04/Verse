@@ -89,7 +89,7 @@ class LlmManageServiceDescriptionTest {
         ReflectionTestUtils.setField(service, "baseMapper", llmServiceMapper);
         when(tenantMapper.selectOne(any())).thenReturn(new TenantDO());
         when(userTenantService.isUserJoinedTenant(1L, 2L)).thenReturn(true);
-        when(users.selectActiveUserForUpdate(1L)).thenReturn(new com.yonagi.verse.dao.entity.UserDO());
+        when(users.selectActiveUserForShare(1L)).thenReturn(new com.yonagi.verse.dao.entity.UserDO());
     }
 
     @Test

@@ -37,6 +37,21 @@ class TenantActivityRecorderTest {
         assertEquals("20",event.getKey()); assertEquals("alice",event.getActorUsername()); assertEquals("小艾",event.getActorNickname());
     }
 
+    @Test void systemActivityUsesCapturedSwitchIdentityAndOriginalTime() {
+        var tenants=mock(TenantMapper.class); var actors=mock(ActorSnapshotResolver.class); var publisher=mock(ReliableDomainEventPublisher.class);
+        var recorder=new TenantActivityRecorder(tenants,actors,publisher,new DomainOutboxProperties());
+        var source=new com.yonagi.verse.dao.entity.LlmCostAlertEventDO(); source.setTenantId(2L); source.setServiceId(3L);
+        source.setServiceName("模型"); source.setActivityEventId("fixed-system-id"); source.setPeriodType("DAY");
+        source.setPeriodStart(java.time.LocalDateTime.parse("2026-10-11T00:00:00")); source.setPeriodEnd(source.getPeriodStart().plusDays(1));
+        source.setTriggeredAt(source.getPeriodStart().plusHours(1)); source.setRetryAt(source.getPeriodEnd());
+        source.setActivityEnabledSnapshot(false); recorder.recordSystemSnapshot(source); verifyNoInteractions(publisher,tenants,actors);
+        source.setActivityEnabledSnapshot(true); recorder.recordSystemSnapshot(source);
+        var captured=ArgumentCaptor.forClass(com.yonagi.verse.async.api.DomainEvent.class); verify(publisher).publish(captured.capture(),eq(2L));
+        var event=(TenantActivityEvent)captured.getValue(); assertEquals("fixed-system-id",event.getEventId());
+        assertEquals("SYSTEM",event.getActorType()); assertNull(event.getActorUserId()); assertEquals("系统",event.getActorNickname());
+        assertEquals("2026-10-12T00:00+08:00",event.getDetails().get("retryAt")); verifyNoInteractions(tenants,actors);
+    }
+
     @Test void rejectsNonWhitelistedAndOversizedDetails() {
         assertThrows(IllegalArgumentException.class,()->TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_CREATED).detail("apiKey","secret"));
         TenantMapper mapper=mock(TenantMapper.class); TenantDO tenant=new TenantDO(); tenant.setActivityRecordingEnabled(1); when(mapper.selectOne(any())).thenReturn(tenant);

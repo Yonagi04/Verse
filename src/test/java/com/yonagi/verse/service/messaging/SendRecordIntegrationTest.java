@@ -86,6 +86,19 @@ class SendRecordIntegrationTest {
         assertEquals(MessagingErrorCode.REQUEST_CONFLICT.code(), conflict.getErrorCode());
     }
 
+    @Test void eligibilityCancellationAndUnavailableNeverReachProvider() {
+        service().send(request()); var worker=worker();
+        worker.setEligibility(List.of((scene,id) -> new MessageSubmissionRespDTO(MessageSubmissionStatus.CANCELLED,null,null,"BUDGET_DISABLED")));
+        worker.execute(MessageChannel.SMS,id()); assertEquals("CANCELLED",status()); verify(sms,never()).send(any());
+        assertEquals(MessageSubmissionStatus.CANCELLED,service().send(request()).status());
+        service().send(request("unknown-budget","123456"));
+        long id=jdbc.queryForObject("SELECT id FROM t_sms_send_record WHERE request_id='unknown-budget'",Long.class);
+        worker.setEligibility(List.of((scene,requestId) -> { throw new IllegalStateException("budget database down"); }));
+        worker.execute(MessageChannel.SMS,id);
+        assertEquals("QUEUED",jdbc.queryForObject("SELECT status FROM t_sms_send_record WHERE id=?",String.class,id));
+        verify(sms,never()).send(any());
+    }
+
     @Test void concurrentSubmissionsAndWorkersHaveSingleInvocation() throws Exception {
         try (var pool = Executors.newFixedThreadPool(8)) {
             var start = new CountDownLatch(1); var jobs = new ArrayList<Future<?>>();

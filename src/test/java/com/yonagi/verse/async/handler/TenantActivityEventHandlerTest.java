@@ -39,10 +39,22 @@ class TenantActivityEventHandlerTest {
     }
 
     @Test void rejectsUnsupportedVersionAndMissingFields() {
-        TenantActivityEvent unsupported=event(); unsupported.setSchemaVersion(2);
+        TenantActivityEvent unsupported=event(); unsupported.setSchemaVersion(3);
         assertThrows(IllegalArgumentException.class,()->new TenantActivityEventHandler(mock(TenantActivityLogMapper.class),mock(DomainOutboxMetrics.class)).onEvent(unsupported));
         TenantActivityEvent invalid=event(); invalid.setActorUsername(null);
         assertThrows(IllegalArgumentException.class,()->new TenantActivityEventHandler(mock(TenantActivityLogMapper.class),mock(DomainOutboxMetrics.class)).onEvent(invalid));
+    }
+
+    @Test void acceptsLegacyUserAndSystemWithoutFabricatingUserId() {
+        var mapper=mock(TenantActivityLogMapper.class); var handler=new TenantActivityEventHandler(mapper,mock(DomainOutboxMetrics.class));
+        var legacy=event(); legacy.setSchemaVersion(1); handler.onEvent(legacy);
+        var system=event(); system.setSchemaVersion(2); system.setActorType("SYSTEM"); system.setActorUserId(null);
+        system.setActorUsername("system"); system.setActorNickname("系统"); system.setActivityType(TenantActivityType.LLM_COST_LIMIT_REACHED);
+        handler.onEvent(system);
+        var saved=ArgumentCaptor.forClass(TenantActivityLogDO.class); verify(mapper,times(2)).insert(saved.capture());
+        assertEquals("USER",saved.getAllValues().getFirst().getActorType());
+        assertEquals("SYSTEM",saved.getValue().getActorType()); assertNull(saved.getValue().getActorUserId());
+        system.setActorUserId(0L); assertThrows(IllegalArgumentException.class,()->handler.onEvent(system));
     }
 
     private TenantActivityEvent event(){

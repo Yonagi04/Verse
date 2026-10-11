@@ -34,6 +34,24 @@ public class TenantActivityRecorder {
     /** 开启首事件和关闭末事件绕过更新后的开关过滤。 */
     public void recordToggle(Long tenantId, TenantActivityDraft draft) { publish(tenantId, draft); }
 
+    /** 已固化开关的系统事实，不读取当前用户或最新动态开关。 */
+    public void recordSystemSnapshot(com.yonagi.verse.dao.entity.LlmCostAlertEventDO source) {
+        if (!Boolean.TRUE.equals(source.getActivityEnabledSnapshot())) return;
+        TenantActivityEvent event = new TenantActivityEvent(); event.setEventId(source.getActivityEventId());
+        event.setOccurredAt(source.getTriggeredAt().atZone(java.time.ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli());
+        event.setTenantId(source.getTenantId()); event.setKey(source.getActivityEventId());
+        event.setCategory(com.yonagi.verse.common.enums.TenantActivityCategory.LLM_SERVICE);
+        event.setActivityType(com.yonagi.verse.common.enums.TenantActivityType.LLM_COST_LIMIT_REACHED);
+        event.setActorType("SYSTEM"); event.setActorUsername("system"); event.setActorNickname("系统");
+        event.setTargetType(com.yonagi.verse.common.enums.TenantActivityTargetType.LLM_SERVICE);
+        event.setTargetId(String.valueOf(source.getServiceId())); event.setTargetName(source.getServiceName());
+        java.util.Map<String,Object> details = new java.util.LinkedHashMap<>();
+        details.put("period", source.getPeriodType()); details.put("periodStart", source.getPeriodStart().atZone(java.time.ZoneId.of("Asia/Shanghai")).toOffsetDateTime().toString());
+        details.put("periodEnd", source.getPeriodEnd().atZone(java.time.ZoneId.of("Asia/Shanghai")).toOffsetDateTime().toString()); details.put("triggeredAt", source.getTriggeredAt().atZone(java.time.ZoneId.of("Asia/Shanghai")).toOffsetDateTime().toString());
+        if (source.getRetryAt()!=null) details.put("retryAt", source.getRetryAt().atZone(java.time.ZoneId.of("Asia/Shanghai")).toOffsetDateTime().toString());
+        event.setDetails(details); publisher.publish(event, source.getTenantId());
+    }
+
     private void publish(Long tenantId, TenantActivityDraft draft) {
         ActorSnapshot actor = actorResolver.resolve(draft.actorUserId());
         TenantActivityEvent event = new TenantActivityEvent();

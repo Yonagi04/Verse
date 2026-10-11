@@ -11,8 +11,6 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.ComponentScan;
-import org.springframework.context.annotation.FilterType;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
@@ -29,15 +27,17 @@ class CostBudgetActivityPrivacyTest {
             .withBean(CostBudgetInvocationMapper.class, () -> mock(CostBudgetInvocationMapper.class))
             .withBean(CostBudgetSettlementMapper.class, () -> mock(CostBudgetSettlementMapper.class))
             .withBean(CostBudgetPeriodMapper.class, () -> mock(CostBudgetPeriodMapper.class))
+            .withBean(BudgetPeriodResolver.class, BudgetPeriodResolver::new)
             .withBean(BudgetExecutionRegistry.class, () -> mock(BudgetExecutionRegistry.class))
             .withBean(UsageOutboxStager.class, () -> mock(UsageOutboxStager.class))
+            .withBean(LlmCostBudgetLedger.class, () -> mock(LlmCostBudgetLedger.class))
+            .withBean(io.micrometer.core.instrument.MeterRegistry.class, () -> new io.micrometer.core.instrument.simple.SimpleMeterRegistry())
             .withBean(UsageOutboxProperties.class, UsageOutboxProperties::new)
             .withBean(PlatformTransactionManager.class, () -> mock(PlatformTransactionManager.class))
             .withBean(TenantActivityRecorder.class, () -> activities);
 
     @TestConfiguration(proxyBeanMethods = false)
-    @ComponentScan(basePackageClasses = CostBudgetService.class, excludeFilters =
-            @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = BudgetExecutionRegistry.class))
+    @org.springframework.context.annotation.Import(CostBudgetService.class)
     static class BudgetComponents { }
 
     @ParameterizedTest
@@ -51,7 +51,7 @@ class CostBudgetActivityPrivacyTest {
             CostBudgetService budget = application.getBean(CostBudgetService.class);
             ApiKeyDO key = new ApiKeyDO();
             key.setApiKeyId(3L); key.setTenantId(2L); key.setUserId(1L);
-            key.setCostLimitEnabled(false); key.setCostConfigVersion(0L); key.setCostDataState("READY");
+            key.setCostLimitEnabled(false); key.setCostConfigVersion(0L);
             ObjectMapper json = new ObjectMapper();
 
             // 新建时开启、调整、重复提交和关闭都只影响个人配置。

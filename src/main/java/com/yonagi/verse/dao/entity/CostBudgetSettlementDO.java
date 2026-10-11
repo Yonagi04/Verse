@@ -37,7 +37,7 @@ public class CostBudgetSettlementDO {
     private String eventPayloadJson;
     /** 规范快照摘要。 */
     private String payloadHash;
-    /** 是否完成累计与 Outbox 接管。 */
+    /** Key、模型累计及实时 Outbox 是否已在同一事务提交。 */
     private Boolean budgetApplied;
     /** 实时或历史导入。 */
     private String origin;

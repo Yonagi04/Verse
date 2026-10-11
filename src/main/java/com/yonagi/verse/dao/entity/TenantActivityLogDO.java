@@ -14,6 +14,7 @@ public class TenantActivityLogDO {
     /** 租户 ID。 */ private Long tenantId;
     /** 动态分类。 */ private String category;
     /** 动态类型。 */ private String activityType;
+    /** USER 或 SYSTEM。 */ private String actorType;
     /** 操作人用户 ID。 */ private Long actorUserId;
     /** 操作人用户名快照。 */ private String actorUsername;
     /** 操作人昵称快照。 */ private String actorNickname;

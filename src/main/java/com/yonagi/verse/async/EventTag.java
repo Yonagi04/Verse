@@ -18,4 +18,5 @@ public final class EventTag {
 
     private EventTag() {
     }
+    public static final String LLM_COST_ALERT = "LLM_COST_ALERT";
 }

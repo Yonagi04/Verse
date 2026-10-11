@@ -42,6 +42,7 @@ class CostBudgetMySqlIntegrationTest {
     private CostBudgetSettlementMapper settlements;
     private CostBudgetInvocationMapper invocations;
     private CostBudgetPeriodMapper periods;
+    private LlmCostBudgetMapper models;
     private DataSourceTransactionManager manager;
     private CostBudgetService instanceA;
     private CostBudgetService instanceB;
@@ -59,28 +60,33 @@ class CostBudgetMySqlIntegrationTest {
         try (var connection = database.getConnection()) {
             // CI checkout 仅依赖已跟踪的当前 schema，不依赖本地增量 SQL。
             for (String name : List.of("t_api_key", "t_token_usage_outbox", "t_cost_budget_invocation",
-                    "t_cost_budget_settlement", "t_cost_budget_period")) {
+                    "t_cost_budget_settlement", "t_cost_budget_period", "t_llm_cost_budget", "t_cost_budget_invocation_model")) {
                 ScriptUtils.executeSqlScript(connection,
                         new ByteArrayResource(table(schema, name).getBytes(StandardCharsets.UTF_8)));
             }
         }
         MybatisConfiguration config = new MybatisConfiguration(); config.setMapUnderscoreToCamelCase(true);
         for (Class<?> mapper : List.of(ApiKeyMapper.class, CostBudgetSettlementMapper.class,
-                CostBudgetInvocationMapper.class, CostBudgetPeriodMapper.class, TokenUsageOutboxMapper.class, UserMapper.class)) config.addMapper(mapper);
+                CostBudgetInvocationMapper.class, CostBudgetPeriodMapper.class, LlmCostBudgetMapper.class, TokenUsageOutboxMapper.class, UserMapper.class)) config.addMapper(mapper);
         MybatisSqlSessionFactoryBean factory = new MybatisSqlSessionFactoryBean(); factory.setDataSource(database); factory.setConfiguration(config);
         SqlSessionTemplate session = new SqlSessionTemplate(Objects.requireNonNull(factory.getObject()));
         keys = session.getMapper(ApiKeyMapper.class); settlements = session.getMapper(CostBudgetSettlementMapper.class);
         invocations = session.getMapper(CostBudgetInvocationMapper.class); periods = session.getMapper(CostBudgetPeriodMapper.class);
+        models = session.getMapper(LlmCostBudgetMapper.class);
         manager = new DataSourceTransactionManager(database);
         registry = new BudgetExecutionRegistry(mock(RedissonClient.class));
         outbox = spy(new UsageOutboxStager(session.getMapper(TokenUsageOutboxMapper.class), new UsageOutboxProperties(), session.getMapper(UserMapper.class)));
+        jdbc.update("INSERT INTO t_llm_cost_budget(id,tenant_id,service_id,warning_channels,create_time,update_time) VALUES(10,2,10,'[]',NOW(6),NOW(6)),(11,2,11,'[]',NOW(6),NOW(6))");
         instanceA = service(registry); instanceB = service(new BudgetExecutionRegistry(mock(RedissonClient.class)));
-        jdbc.update("INSERT INTO t_api_key(api_key_id,user_id,tenant_id,api_key,key_prefix,name,cost_data_state) "
-                + "VALUES (3,1,2,'hash','sk_test','测试 Key','READY'),(5,4,2,'hash2','sk_other','其他 Key','READY')");
+        jdbc.update("INSERT INTO t_api_key(api_key_id,user_id,tenant_id,api_key,key_prefix,name) "
+                + "VALUES (3,1,2,'hash','sk_test','测试 Key'),(5,4,2,'hash2','sk_other','其他 Key')");
     }
     private CostBudgetService service(BudgetExecutionRegistry proof) {
+        var clock = new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC));
+        var ledger = new LlmCostBudgetLedger(models,settlements,periods,proof,clock,new UsageOutboxProperties(),mock(LlmCostAlertCaptureService.class));
+        ReflectionTestUtils.setField(ledger,"costingEnabled",true);
         CostBudgetService result = new CostBudgetService(keys, invocations, settlements, periods,
-                new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC)), proof, outbox, new UsageOutboxProperties(), manager);
+                new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC)), proof, outbox, new UsageOutboxProperties(), manager, ledger);
         ReflectionTestUtils.setField(result, "costingEnabled", true);
         return result;
     }
@@ -110,31 +116,32 @@ class CostBudgetMySqlIntegrationTest {
         event.setCostResult(new CostResult(status, amount == null ? null : new BigDecimal(amount))); return event;
     }
     private void call(String id, String amount, CostStatus status) {
-        instanceA.begin(ctx, id, now); instanceA.sent(id); instanceA.settle(event(id, amount, status, now));
+        instanceA.begin(ctx, event(id,amount,status,now).getServiceId(), id, now); instanceA.sent(id); instanceA.settle(event(id, amount, status, now));
     }
 
     @Test void uncertainFailureStagesOnceAndKeepsBudgetUnavailableAcrossInstances() throws Exception {
         configure("{\"enabled\":true,\"dailyLimitFen\":\"100\"}");
-        instanceA.begin(ctx, "uncertain-upstream", now); instanceA.sent("uncertain-upstream");
+        instanceA.begin(ctx, 10L, "uncertain-upstream", now); instanceA.sent("uncertain-upstream");
         var failure = event("uncertain-upstream", null, CostStatus.UNCALCULABLE, now);
         failure.setStatus("FAIL"); failure.setUsageSource(TokenUsageEvent.SOURCE_UNKNOWN);
+        failure.setExecutionOutcome(com.yonagi.verse.service.forward.UpstreamExecutionOutcome.UNKNOWN);
         instanceA.settle(failure);
         String eventId = jdbc.queryForObject("SELECT event_id FROM t_cost_budget_settlement", String.class);
         instanceB.apply(eventId); instanceA.settle(failure);
         assertEquals("UNKNOWN", jdbc.queryForObject("SELECT state FROM t_cost_budget_invocation", String.class));
         assertEquals("UPSTREAM_RESULT_UNKNOWN", jdbc.queryForObject("SELECT last_error_code FROM t_cost_budget_invocation", String.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM t_token_usage_outbox", Integer.class));
-        assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_period WHERE uncalculable_count=1", Integer.class));
+        assertEquals(6, jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_period WHERE uncalculable_count=1", Integer.class));
         assertEquals("UNKNOWN", instanceB.status(2L, 3L, 1L).budgetState());
-        assertThrows(CostBudgetUnavailableException.class, () -> instanceA.check(ctx));
-        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx));
+        assertThrows(CostBudgetUnavailableException.class, () -> instanceA.check(ctx,10L));
+        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx,10L));
         assertThrows(IllegalStateException.class, () -> instanceB.rebuild(2L, 3L));
-        configure("{\"enabled\":false}"); instanceB.check(ctx);
+        configure("{\"enabled\":false}"); instanceB.check(ctx,10L);
     }
 
     @Test void partialStreamCostIsPersistedOnceAndStillBlocksOtherInstances() throws Exception {
         configure("{\"enabled\":true,\"dailyLimitFen\":\"100\"}");
-        instanceA.begin(ctx, "partial-stream", now); instanceA.sent("partial-stream");
+        instanceA.begin(ctx, 10L, "partial-stream", now); instanceA.sent("partial-stream");
         var partial = event("partial-stream", "0.125", CostStatus.CALCULATED, now);
         partial.setStatus("ABORTED"); partial.setUsageSource(TokenUsageEvent.SOURCE_ESTIMATED);
         partial.setExecutionOutcome(com.yonagi.verse.service.forward.UpstreamExecutionOutcome.UNKNOWN);
@@ -143,10 +150,10 @@ class CostBudgetMySqlIntegrationTest {
         instanceB.apply(eventId); instanceA.settle(partial);
         assertEquals("UNKNOWN", jdbc.queryForObject("SELECT state FROM t_cost_budget_invocation", String.class));
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM t_token_usage_outbox", Integer.class));
-        assertEquals(3, jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_period WHERE used_cost_fen=0.125", Integer.class));
+        assertEquals(6, jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_period WHERE used_cost_fen=0.125", Integer.class));
         String payload = jdbc.queryForObject("SELECT event_payload_json FROM t_cost_budget_settlement", String.class);
         assertEquals("UNKNOWN", JSON.parseObject(payload).getString("executionOutcome"));
-        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx));
+        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx,10L));
         assertThrows(IllegalStateException.class, () -> instanceB.rebuild(2L, 3L));
     }
 
@@ -156,12 +163,12 @@ class CostBudgetMySqlIntegrationTest {
         var status = instanceB.status(2L, 3L, 1L);
         assertEquals("LIMITED", status.budgetState()); assertEquals("1", status.periods().getFirst().usedCostFen());
         assertEquals("8", status.periods().getFirst().calculatedCount());
-        assertThrows(CostLimitExceededException.class, () -> instanceB.check(ctx));
-        instanceB.check(new UserContext().setCurrentTenantId(2L).setApiKeyId(5L));
-        configure("{\"dailyLimitFen\":\"2\",\"expectedVersion\":\"1\"}"); instanceB.check(ctx);
+        assertThrows(CostLimitExceededException.class, () -> instanceB.check(ctx,10L));
+        instanceB.check(new UserContext().setCurrentTenantId(2L).setApiKeyId(5L),10L);
+        configure("{\"dailyLimitFen\":\"2\",\"expectedVersion\":\"1\"}"); instanceB.check(ctx,10L);
         configure("{\"enabled\":false}"); call("over", "10", CostStatus.CALCULATED);
         assertEquals("11", instanceB.status(2L, 3L, 1L).periods().getFirst().usedCostFen());
-        configure("{\"enabled\":true}"); assertThrows(CostLimitExceededException.class, () -> instanceB.check(ctx));
+        configure("{\"enabled\":true}"); assertThrows(CostLimitExceededException.class, () -> instanceB.check(ctx,10L));
     }
     @Test void idempotencyMissingPeriodAndRebuildNeverDoubleCount() {
         call("unique", "0.000000000000000001", CostStatus.CALCULATED);
@@ -182,18 +189,18 @@ class CostBudgetMySqlIntegrationTest {
         assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_settlement WHERE budget_applied=0", Integer.class));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM t_token_usage_outbox", Integer.class));
         assertEquals(0, jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_period WHERE used_cost_fen<>0", Integer.class));
-        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx));
+        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx,10L));
         doCallRealMethod().when(outbox).stage(any(), any(), any());
         instanceA.retryLocalSnapshots();
         assertEquals("1.123456789012345678", instanceB.status(2L, 3L, 1L).periods().getFirst().usedCostFen());
-        instanceB.check(ctx);
+        instanceB.check(ctx,10L);
     }
     @Test void originalPeriodLateEventsLatestRecoveryAndZeroUnpricedCounts() throws Exception {
         configure("{\"enabled\":false,\"weeklyLimitFen\":\"1\",\"monthlyLimitFen\":\"1\"}");
         call("free", "0", CostStatus.CALCULATED); call("unpriced", null, CostStatus.UNPRICED);
         call("unknown", null, CostStatus.UNCALCULABLE); call("failed", null, CostStatus.NOT_CHARGEABLE);
         Instant yesterday = Instant.parse("2026-09-29T15:59:59Z");
-        instanceA.begin(ctx, "late", yesterday); instanceA.sent("late"); instanceA.settle(event("late", "2", CostStatus.CALCULATED, yesterday));
+        instanceA.begin(ctx, 10L, "late", yesterday); instanceA.sent("late"); instanceA.settle(event("late", "2", CostStatus.CALCULATED, yesterday));
         configure("{\"enabled\":true}");
         var status = instanceB.status(2L, 3L, 1L);
         assertEquals("0", status.periods().getFirst().usedCostFen());
@@ -207,11 +214,11 @@ class CostBudgetMySqlIntegrationTest {
         assertThrows(ClientException.class, () -> instanceB.status(9L, 3L, 1L));
         configure("{\"enabled\":true,\"dailyLimitFen\":\"100\"}");
         assertThrows(ClientException.class, () -> configure("{\"dailyLimitFen\":\"101\",\"expectedVersion\":\"0\"}"));
-        instanceA.begin(ctx, "orphan", now); instanceA.sent("orphan");
-        instanceA.check(ctx); // 本地新鲜证明为合法并发。
-        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx));
-        instanceA.finalizing("orphan"); assertThrows(CostBudgetUnavailableException.class, () -> instanceA.check(ctx));
-        configure("{\"enabled\":false}"); instanceB.check(ctx);
+        instanceA.begin(ctx, 10L, "orphan", now); instanceA.sent("orphan");
+        instanceA.check(ctx,10L); // 本地新鲜证明为合法并发。
+        assertThrows(CostBudgetUnavailableException.class, () -> instanceB.check(ctx,10L));
+        instanceA.finalizing("orphan"); assertThrows(CostBudgetUnavailableException.class, () -> instanceA.check(ctx,10L));
+        configure("{\"enabled\":false}"); instanceB.check(ctx,10L);
         assertThrows(ClientException.class, () -> configure("{\"enabled\":true}"));
     }
     @Test void concurrentInstancesApplyOneSnapshotOnce() throws Exception {

@@ -251,6 +251,26 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
                 .set(PlaygroundAttemptDO::getStatus, "STREAMING").set(PlaygroundAttemptDO::getUpdateTime, now()));
         if (claimed != 1) throw new ClientException(PlaygroundErrorCodeEnum.DUPLICATE_SEND);
         Sinks.One<Boolean> stopSignal = Sinks.one(); stops.put(attemptId, stopSignal);
+        long preparedStarted = System.currentTimeMillis();
+        JSONObject preparedSnapshot = JSON.parseObject(a.getSnapshot());
+        JSONObject preparedRequest = preparedSnapshot.getJSONObject("request");
+        Flux<ServerSentEvent<String>> preparedUpstream;
+        try {
+            LlmServiceDO service = model(tenant, a.getServiceId());
+            PlaygroundConfiguration.parameters(preparedSnapshot.getJSONObject("config"), caps(service));
+            checkContext(service, preparedRequest); rateLimiter.check(tenant, a.getServiceId());
+            List<ChatMessage> messages = preparedRequest.getJSONArray("messages").stream().map(m -> {
+                JSONObject value = (JSONObject) m; return new ChatMessage(value.getString("role"), value.getString("content"));
+            }).toList();
+            JSONObject params = new JSONObject();
+            for (String name : Set.of("temperature", "top_p", "max_tokens")) if (preparedRequest.containsKey(name)) params.put(name, preparedRequest.get(name));
+            preparedUpstream = forwardService.playgroundChatStream(actor, a.getServiceId(), messages, params, a.getRequestId(), Instant.ofEpochMilli(preparedStarted));
+        } catch (RuntimeException rejected) {
+            if (rejected instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) budget.requestId(a.getRequestId());
+            finish(a, "", "FAILED", -1, preparedStarted, error(rejected).toJSONString(), new AtomicBoolean());
+            stops.remove(attemptId, stopSignal);
+            throw rejected;
+        }
         AtomicBoolean subscribed = new AtomicBoolean();
         return Flux.defer(() -> {
             if (!subscribed.compareAndSet(false, true)) return Flux.error(new ClientException(PlaygroundErrorCodeEnum.DUPLICATE_SEND));
@@ -262,15 +282,7 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
             Flux<ServerSentEvent<String>> upstream = Flux.defer(() -> {
                 String currentStatus = ownedAttempt(actor, tenant, attemptId).getStatus();
                 if (Set.of("STOPPED", "STOPPING").contains(currentStatus)) { stopped.set(true); return Flux.empty(); }
-                LlmServiceDO service = model(tenant, a.getServiceId());
-                PlaygroundConfiguration.parameters(snapshot.getJSONObject("config"), caps(service));
-                checkContext(service, request); rateLimiter.check(tenant, a.getServiceId());
-                List<ChatMessage> messages = request.getJSONArray("messages").stream().map(m -> {
-                    JSONObject value = (JSONObject) m; return new ChatMessage(value.getString("role"), value.getString("content"));
-                }).toList();
-                JSONObject params = new JSONObject();
-                for (String name : Set.of("temperature", "top_p", "max_tokens")) if (request.containsKey(name)) params.put(name, request.get(name));
-                return forwardService.playgroundChatStream(actor, a.getServiceId(), messages, params, a.getRequestId(), Instant.ofEpochMilli(started));
+                return preparedUpstream;
             });
             // 跨实例停止也能生效；数据库查询放在有界阻塞线程池。
             Mono<Boolean> remoteStop = Flux.interval(Duration.ofMillis(500)).publishOn(Schedulers.boundedElastic())
@@ -491,6 +503,8 @@ public class PlaygroundWorkbenchServiceImpl implements PlaygroundWorkbenchServic
             result.put("code", e.getErrorCode()); result.put("message", e.getErrorMessage());
             if ("A000802".equals(e.getErrorCode())) { result.put("code", PlaygroundErrorCodeEnum.SHARED_LIMIT.code()); result.put("message", PlaygroundErrorCodeEnum.SHARED_LIMIT.message()); }
         }
+        if (ex instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget)
+            result.put("data", com.yonagi.verse.common.web.PlaygroundCostError.data(budget, budget.getRequestId()));
         if (ex instanceof PlaygroundRateLimiter.LimitException limit) { result.put("reason", limit.getReason()); result.put("retryAfterSeconds", limit.getRetryAfterSeconds()); }
         return result;
     }

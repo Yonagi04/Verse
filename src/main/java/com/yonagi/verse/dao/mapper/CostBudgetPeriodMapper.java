@@ -12,4 +12,8 @@ public interface CostBudgetPeriodMapper extends BaseMapper<CostBudgetPeriodDO> {
             + "AND scope_id=#{keyId} AND period_type=#{type} AND period_start=#{start} FOR UPDATE")
     CostBudgetPeriodDO lockPeriod(@Param("tenantId") Long tenantId, @Param("keyId") Long keyId,
                                     @Param("type") String type, @Param("start") LocalDateTime start);
+    @Select("SELECT * FROM t_cost_budget_period WHERE tenant_id=#{tenantId} AND scope_type=#{scope} "
+            + "AND scope_id=#{scopeId} AND period_type=#{type} AND period_start=#{start} FOR UPDATE")
+    CostBudgetPeriodDO lockScope(@Param("tenantId") Long tenantId, @Param("scope") String scope,
+            @Param("scopeId") Long scopeId, @Param("type") String type, @Param("start") LocalDateTime start);
 }

@@ -20,6 +20,9 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 @Slf4j
 public class MessageDeliveryWorker {
+    private java.util.List<MessageSendEligibility> eligibility = java.util.List.of();
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setEligibility(java.util.List<MessageSendEligibility> guards) { eligibility = java.util.List.copyOf(guards); }
     private final SendRecordStore records;
     private final SmsProvider sms;
     private final EmailProvider email;
@@ -48,10 +51,15 @@ public class MessageDeliveryWorker {
                 // Redis 预检也可能耗时，外发前再次确认任务仍在有效期内。
                 if (!reservation.row().getDeadlineAt().after(new Date())) result = MessageSubmissionRespDTO.expired("TASK_EXPIRED");
                 else {
-                    invoking = true;
-                    result = channel == MessageChannel.SMS ? sms.send(payload.sms()) : email.send(payload.email());
-                    if (result == null || result.status() == MessageSubmissionStatus.QUEUED || result.status() == MessageSubmissionStatus.EXPIRED) {
-                        result = MessageSubmissionRespDTO.unknown("INVALID_ADAPTER_RESULT");
+                    MessageSubmissionRespDTO denied = eligibilityResult(payload);
+                    if (denied != null) result = denied;
+                    else if (!reservation.row().getDeadlineAt().after(new Date())) result = MessageSubmissionRespDTO.expired("TASK_EXPIRED");
+                    else {
+                        invoking = true;
+                        result = channel == MessageChannel.SMS ? sms.send(payload.sms()) : email.send(payload.email());
+                        if (result == null || result.status() == MessageSubmissionStatus.QUEUED || result.status() == MessageSubmissionStatus.EXPIRED) {
+                            result = MessageSubmissionRespDTO.unknown("INVALID_ADAPTER_RESULT");
+                        }
                     }
                 }
             }
@@ -88,6 +96,15 @@ public class MessageDeliveryWorker {
                 log.error("[messaging] 验证码恢复失败: recordId={}", reservation.row().getId());
             }
         }
+    }
+
+    private MessageSubmissionRespDTO eligibilityResult(MessageDeliveryTaskDTO payload) {
+        String scene = payload.sms() != null ? payload.sms().scene() : payload.email().scene();
+        String requestId = payload.sms() != null ? payload.sms().requestId() : payload.email().requestId();
+        try {
+            for (var guard : eligibility) { var result = guard.verify(scene, requestId); if (result != null) return result; }
+            return null;
+        } catch (RuntimeException unavailable) { return MessageSubmissionRespDTO.retryable("ELIGIBILITY_UNAVAILABLE"); }
     }
 
     private VerificationCodeStore.Reservation verification(MessageDeliveryTaskDTO payload) {

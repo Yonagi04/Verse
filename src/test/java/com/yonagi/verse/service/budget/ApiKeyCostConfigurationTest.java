@@ -50,7 +50,7 @@ class ApiKeyCostConfigurationTest {
     @BeforeEach void setup() {
         budget = new CostBudgetService(keys, invocations, mock(CostBudgetSettlementMapper.class), mock(CostBudgetPeriodMapper.class),
                 new BudgetPeriodResolver(), registry, mock(UsageOutboxStager.class), outbox,
-                mock(PlatformTransactionManager.class));
+                mock(PlatformTransactionManager.class), mock(LlmCostBudgetLedger.class));
         ReflectionTestUtils.setField(budget, "costingEnabled", true);
         when(invocations.unfinished(anyLong(), anyLong(), any())).thenReturn(List.of());
         when(tenants.selectOne(any())).thenReturn(new TenantDO());
@@ -79,7 +79,7 @@ class ApiKeyCostConfigurationTest {
         assertEquals("1", response.getCostLimit().version());
         var inserted = ArgumentCaptor.forClass(ApiKeyDO.class);
         verify(keys).insert(inserted.capture());
-        assertEquals("READY", inserted.getValue().getCostDataState());
+        assertNull(inserted.getValue().getCostDataReason());
         assertEquals(1, inserted.getValue().getStatus());
     }
 
@@ -92,30 +92,30 @@ class ApiKeyCostConfigurationTest {
         verify(keys, never()).insert(any(ApiKeyDO.class));
     }
 
-    @ParameterizedTest @ValueSource(strings = {"INITIALIZING", "UNAVAILABLE"})
-    void incompleteKeyCannotEnableButCanCloseBudget(String state) throws Exception {
-        ApiKeyDO key = existingKey(state);
+    @ParameterizedTest @ValueSource(strings = {"SNAPSHOT_CONFLICT", "INVOCATION_WRITE_FAILED"})
+    void incompleteKeyCannotEnableButCanCloseBudget(String reason) throws Exception {
+        ApiKeyDO key = existingKey(reason);
         var enable = json.readValue("{\"enabled\":true,\"dailyLimitFen\":\"100\"}", CostLimitPatch.class);
         ClientException error = assertThrows(ClientException.class, () -> budget.merge(key, enable));
         assertEquals(CostBudgetErrorCodeEnum.NOT_READY.code(), error.getErrorCode());
         budget.merge(key, json.readValue("{\"enabled\":false}", CostLimitPatch.class));
         assertFalse(key.getCostLimitEnabled());
-        assertEquals(state, key.getCostDataState());
+        assertEquals(reason, key.getCostDataReason());
     }
 
     @Test void unconfirmedInvocationStillPreventsEnabling() throws Exception {
-        ApiKeyDO key = existingKey("READY");
+        ApiKeyDO key = existingKey(null);
         CostBudgetInvocationDO invocation = new CostBudgetInvocationDO(); invocation.setState("RUNNING");
         when(invocations.unfinished(anyLong(), anyLong(), any())).thenReturn(List.of(invocation));
         var patch = json.readValue("{\"enabled\":true,\"dailyLimitFen\":\"100\"}", CostLimitPatch.class);
         ClientException error = assertThrows(ClientException.class, () -> budget.merge(key, patch));
         assertEquals(CostBudgetErrorCodeEnum.NOT_READY.code(), error.getErrorCode());
-        verify(registry).confirm(invocation);
+        verify(registry).confirmed(List.of(invocation));
     }
 
-    private ApiKeyDO existingKey(String state) {
+    private ApiKeyDO existingKey(String reason) {
         ApiKeyDO key = new ApiKeyDO(); key.setApiKeyId(3L); key.setTenantId(2L); key.setUserId(1L);
-        key.setCostLimitEnabled(false); key.setCostConfigVersion(0L); key.setCostDataState(state);
+        key.setCostLimitEnabled(false); key.setCostConfigVersion(0L); key.setCostDataReason(reason);
         return key;
     }
 }

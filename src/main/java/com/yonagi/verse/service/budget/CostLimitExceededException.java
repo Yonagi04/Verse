@@ -7,9 +7,14 @@ import lombok.Getter;
 
 @Getter
 public class CostLimitExceededException extends ClientException {
-    private final ApiKeyCostStatusRespDTO status;
+    private final CostBudgetDecision status;
+    private String requestId;
+    public CostLimitExceededException requestId(String value) { requestId = value; return this; }
     public CostLimitExceededException(ApiKeyCostStatusRespDTO status) {
-        super("此 API Key " + switch (status.limits().getFirst().period()) {
+        this(new CostBudgetDecision(status.limits(), false));
+    }
+    public CostLimitExceededException(CostBudgetDecision status) {
+        super(("LLM".equals(status.limits().getFirst().scope()) ? "此模型 " : "此 API Key ") + switch (status.limits().getFirst().period()) {
             case "DAY" -> "本日"; case "WEEK" -> "本周"; default -> "本月";
         } + "的调用成本已达到限额，请联系管理员调整限额或等待相关周期重置后再重试。",
                 CostBudgetErrorCodeEnum.LIMIT_EXCEEDED);

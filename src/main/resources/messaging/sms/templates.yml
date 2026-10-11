@@ -4,3 +4,7 @@ templates:
     content: "您正在重置密码，验证码是${code}，5分钟内有效，请勿泄露或转发给其他人，以免造成账户或资金损失。"
   "10002":
     content: "您正在注销账号，验证码是${code}，5分钟内有效，请勿泄露或转发给其他人，以免造成账户或资金损失。"
+  "10003":
+    content: "${tenantName} 成本限额告警：${serviceName} 触发 ${period} 成本限额阈值，当前周期内的可用额度为 ${remainingYuan}。"
+  "10004":
+    content: "${tenantName} 成本限额告警：${serviceName} 在 ${period} 的调用成本已达限额，模型已停用。如需继续使用请调整限额"

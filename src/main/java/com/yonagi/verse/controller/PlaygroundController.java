@@ -155,14 +155,17 @@ public class PlaygroundController {
             case "A001000" -> HttpStatus.FORBIDDEN;
             case "A001001" -> HttpStatus.NOT_FOUND;
             case "A001002", "A001004", "A001010", "A001013", "A001015" -> HttpStatus.CONFLICT;
-            case "A001005", "A001006", "A001007" -> HttpStatus.TOO_MANY_REQUESTS;
+            case "A001005", "A001006", "A001007", "A000809" -> HttpStatus.TOO_MANY_REQUESTS;
+            case "B000802" -> HttpStatus.SERVICE_UNAVAILABLE;
             case "A001011" -> HttpStatus.UNPROCESSABLE_ENTITY;
             case "C001000" -> HttpStatus.BAD_GATEWAY;
             default -> HttpStatus.BAD_REQUEST;
         };
         Result<Object> result = new Result<>().setCode(error.getErrorCode())
                 .setMessage(error.getErrorMessage());
-        if (error instanceof PlaygroundRateLimiter.LimitException limit) {
+        if (error instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) {
+            result.setData(com.yonagi.verse.common.web.PlaygroundCostError.data(budget, budget.getRequestId()));
+        } else if (error instanceof PlaygroundRateLimiter.LimitException limit) {
             result.setData(Map.of("reason", limit.getReason(),
                     "retryAfterSeconds", limit.getRetryAfterSeconds()));
         } else if (error instanceof PlaygroundServiceImpl.DuplicateSendException duplicate) {
@@ -170,6 +173,10 @@ public class PlaygroundController {
                     "status", duplicate.original().getStatus()));
         } else if ("A001007".equals(error.getErrorCode())) {
             result.setData(Map.of("reason", "SHARED_LIMIT"));
+        }
+        if (error instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) {
+            return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(budget,
+                    budget.getRequestId() == null ? "" : budget.getRequestId(), java.time.Instant.now()).body(result);
         }
         return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(result);
     }

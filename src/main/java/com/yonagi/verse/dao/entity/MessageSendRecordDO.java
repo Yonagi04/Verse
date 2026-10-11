@@ -27,7 +27,7 @@ public abstract class MessageSendRecordDO {
     @ToString.Exclude private String recipientEncrypted;
     /** 收件人带 pepper 查询哈希。 */
     @ToString.Exclude private String recipientHash;
-    /** QUEUED、SUBMITTING、ACCEPTED、REJECTED、UNKNOWN 或 EXPIRED。 */
+    /** QUEUED、SUBMITTING、ACCEPTED、REJECTED、UNKNOWN、EXPIRED 或 CANCELLED。 */
     private String status;
     /** 服务商请求标识。 */
     private String providerRequestId;

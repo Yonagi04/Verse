@@ -24,6 +24,9 @@ public class TenantActivityItemRespDTO {
     @JsonSerialize(using = ToStringSerializer.class)
     private Long actorUserId;
 
+    /** 操作人类型；系统不关联真实用户。 */
+    private String actorType;
+
     /** 操作人用户名快照。 */
     private String actorUsername;
 

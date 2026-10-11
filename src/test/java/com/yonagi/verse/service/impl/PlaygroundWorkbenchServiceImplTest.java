@@ -156,6 +156,20 @@ class PlaygroundWorkbenchServiceImplTest {
         assertEquals("PENDING", history.get(1).getStatus());
     }
 
+    @Test void budgetRejectionFinishesOnlyOneLaneBeforeHeadersAndRetainsStructuredError() {
+        Long id=group(); service.round(actor,2L,id,"保留问题",UUID.randomUUID().toString());
+        var budget=new com.yonagi.verse.service.budget.CostLimitExceededException(new com.yonagi.verse.service.budget.CostBudgetDecision(
+                List.of(new com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO.Hit("LLM","DAY","2026-10-12T00:00:00+08:00")),false));
+        when(forward.playgroundChatStream(any(),anyLong(),anyList(),anyMap(),anyString(),any())).thenThrow(budget)
+                .thenReturn(Flux.just(ServerSentEvent.<String>builder("{\"choices\":[{\"delta\":{\"content\":\"另一栏成功\"}}]}").build()));
+        assertSame(budget,assertThrows(com.yonagi.verse.service.budget.CostLimitExceededException.class,()->service.stream(actor,2L,history.get(0).getAttemptId())));
+        assertEquals("FAILED",history.get(0).getStatus()); assertEquals("PENDING",history.get(1).getStatus());
+        var error=JSON.parseObject(history.get(0).getErrorJson()); assertEquals("A000809",error.getString("code"));
+        assertEquals(history.get(0).getRequestId(),error.getJSONObject("data").getString("requestId"));
+        service.stream(actor,2L,history.get(1).getAttemptId()).collectList().block(Duration.ofSeconds(3));
+        assertEquals("COMPLETED",history.get(1).getStatus()); assertEquals(0,store.get(id).getGenerating());
+    }
+
     @Test
     void stoppingOneLaneCancelsOnlyItsStreamAndKeepsPartialOutput() throws Exception {
         Long id = group(); service.round(actor, 2L, id, "问题", UUID.randomUUID().toString());

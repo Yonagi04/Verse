@@ -94,4 +94,11 @@ public class LlmServiceUpdateReqDTO {
 
     /** {@code null} 表示不修改；禁用时关闭计费；启用时创建完整的新定价版本。 */
     private PricingConfigReqDTO pricing;
+
+    /** 限额补丁；省略保持。 */
+    @com.fasterxml.jackson.annotation.JsonSetter(nulls = com.fasterxml.jackson.annotation.Nulls.FAIL)
+    private CostLimitPatch costLimit;
+    /** 预警补丁；省略保持。 */
+    @com.fasterxml.jackson.annotation.JsonSetter(nulls = com.fasterxml.jackson.annotation.Nulls.FAIL)
+    private CostWarningPatch costWarning;
 }

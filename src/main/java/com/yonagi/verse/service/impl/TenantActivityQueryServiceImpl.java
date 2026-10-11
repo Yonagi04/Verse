@@ -143,10 +143,11 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
         response.setEventId(row.getEventId());
         response.setCategory(row.getCategory());
         response.setActivityType(row.getActivityType());
+        response.setActorType(row.getActorType() == null ? "USER" : row.getActorType());
         response.setActorUserId(row.getActorUserId());
         response.setActorUsername(row.getActorUsername());
         // 操作人仍是当前租户成员时展示实时昵称，否则保留事件发生时的昵称快照。
-        response.setActorNickname(row.getCurrentActorNickname() != null
+        response.setActorNickname("SYSTEM".equals(row.getActorType()) ? "系统" : row.getCurrentActorNickname() != null
                 ? row.getCurrentActorNickname() : row.getActorNickname());
         response.setTargetType(row.getTargetType());
         response.setTargetId(row.getTargetId());

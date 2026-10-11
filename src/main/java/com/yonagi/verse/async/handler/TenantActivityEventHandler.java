@@ -23,6 +23,7 @@ public class TenantActivityEventHandler implements DomainEventHandler<TenantActi
         try{
             validate(event); TenantActivityLogDO row=new TenantActivityLogDO();
             row.setEventId(event.getEventId()); row.setTenantId(event.getTenantId()); row.setCategory(event.getCategory().name());
+            row.setActorType(event.getSchemaVersion() == 1 ? "USER" : event.getActorType());
             row.setActivityType(event.getActivityType().name()); row.setActorUserId(event.getActorUserId());
             row.setActorUsername(event.getActorUsername()); row.setActorNickname(event.getActorNickname());
             row.setTargetType(event.getTargetType()==null?null:event.getTargetType().name()); row.setTargetId(event.getTargetId());
@@ -37,10 +38,17 @@ public class TenantActivityEventHandler implements DomainEventHandler<TenantActi
         }catch(RuntimeException e){metrics.consumeFailed();throw e;}
     }
     private void validate(TenantActivityEvent e){
-        if(e==null||e.getEventId()==null||e.getEventId().isBlank()||e.getTenantId()==null||e.getActorUserId()==null
+        if(e==null||e.getEventId()==null||e.getEventId().isBlank()||e.getTenantId()==null
                 ||e.getActorUsername()==null||e.getActorUsername().isBlank()||e.getCategory()==null||e.getActivityType()==null
                 ||e.getOccurredAt()<=0) throw new IllegalArgumentException("租户动态事件缺少必要字段");
-        if(e.getSchemaVersion()!=TenantActivityEvent.CURRENT_SCHEMA_VERSION) throw new IllegalArgumentException("不支持的租户动态事件版本");
+        if(e.getSchemaVersion()!=1 && e.getSchemaVersion()!=TenantActivityEvent.CURRENT_SCHEMA_VERSION) throw new IllegalArgumentException("不支持的租户动态事件版本");
+        boolean system = e.getSchemaVersion() == 2 && "SYSTEM".equals(e.getActorType());
+        if (system) {
+            if (e.getActorUserId()!=null || !"system".equals(e.getActorUsername()) || !"系统".equals(e.getActorNickname())
+                    || e.getActivityType()!=com.yonagi.verse.common.enums.TenantActivityType.LLM_COST_LIMIT_REACHED)
+                throw new IllegalArgumentException("系统动态身份非法");
+        } else if (e.getActorUserId()==null || e.getSchemaVersion()==2 && !"USER".equals(e.getActorType()))
+            throw new IllegalArgumentException("用户动态身份非法");
         if(e.getCategory()!=e.getActivityType().category()) throw new IllegalArgumentException("租户动态分类与类型不一致");
     }
 }

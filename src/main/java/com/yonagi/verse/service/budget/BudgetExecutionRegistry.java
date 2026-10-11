@@ -77,20 +77,36 @@ public class BudgetExecutionRegistry {
         synchronized (execution) { return execution.running; }
     }
     public boolean confirm(CostBudgetInvocationDO invocation) {
-        if (owner.equals(invocation.getOwnerId())) {
-            return generation.equals(invocation.getOwnerGeneration()) && active(invocation.getRequestId());
-        }
-        String nonce = UUID.randomUUID().toString();
-        CompletableFuture<Boolean> reply = new CompletableFuture<>(); replies.put(nonce, reply);
+        return confirmed(List.of(invocation)).contains(invocation.getRequestId());
+    }
+    /** 一批远端证明共用 500ms 等待预算，避免持有数据库锁逐项等待。 */
+    public Set<String> confirmed(Collection<? extends CostBudgetInvocationDO> invocations) {
+        Set<String> confirmed = new HashSet<>();
+        Map<String, CompletableFuture<Boolean>> pending = new HashMap<>();
+        Map<String, String> nonces = new HashMap<>();
         try {
-            redis.getTopic(PREFIX + invocation.getOwnerId()).publishAsync(owner + "|" + nonce + "|"
-                    + invocation.getOwnerGeneration() + "|" + invocation.getRequestId())
-                    .whenComplete((count, error) -> { if (error != null) reply.complete(false); });
-            return reply.get(500, TimeUnit.MILLISECONDS);
+            for (var invocation : invocations) {
+                String id = invocation.getRequestId();
+                if (owner.equals(invocation.getOwnerId())) {
+                    if (generation.equals(invocation.getOwnerGeneration()) && active(id)) confirmed.add(id);
+                    continue;
+                }
+                if (pending.containsKey(id)) continue;
+                String nonce = UUID.randomUUID().toString();
+                var reply = new CompletableFuture<Boolean>();
+                pending.put(id, reply); nonces.put(id, nonce); replies.put(nonce, reply);
+                try {
+                    redis.getTopic(PREFIX + invocation.getOwnerId()).publishAsync(owner + "|" + nonce + "|"
+                            + invocation.getOwnerGeneration() + "|" + id)
+                            .whenComplete((count, error) -> { if (error != null) reply.complete(false); });
+                } catch (RuntimeException failure) { reply.complete(false); }
+            }
+            CompletableFuture.allOf(pending.values().toArray(CompletableFuture[]::new)).get(500, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
-            return false;
-        } finally { replies.remove(nonce); }
+        } finally { nonces.values().forEach(replies::remove); }
+        pending.forEach((id, reply) -> { if (Boolean.TRUE.equals(reply.getNow(false))) confirmed.add(id); });
+        return Set.copyOf(confirmed);
     }
     private static final class Execution {
         private boolean running = true;

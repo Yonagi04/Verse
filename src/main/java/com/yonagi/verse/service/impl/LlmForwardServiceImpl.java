@@ -8,7 +8,6 @@ import com.alibaba.fastjson2.JSONArray;
 import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.async.api.DomainEventPublisher;
-import com.yonagi.verse.async.api.TokenUsageEventPublisher;
 import com.yonagi.verse.async.api.DomainEvent;
 import com.yonagi.verse.async.event.LlmAuditEvent;
 import com.yonagi.verse.async.event.TokenUsageEvent;
@@ -79,7 +78,6 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private final ProviderAdapter providerAdapter;
     private final AesUtil aesUtil;
     private final DomainEventPublisher eventPublisher;
-    private final TokenUsageEventPublisher tokenUsageEventPublisher;
     private final TenantMapper tenantMapper;
     private final LlmServiceMapper llmServiceMapper;
     private final RateLimiter rateLimiter;
@@ -124,7 +122,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         LlmServiceDO service = modelResolver.resolve(ctx.getCurrentTenantId(), json.getString("model"));
         modelResolver.requireBinding(service, operation);
         apiOutputBody(service, body, operation);
-        costBudgetService.check(ctx);
+        costBudgetService.check(ctx, service.getServiceId());
     }
 
     /** JSON 能力共享 Chat 的租户、限流、熔断、降级和终态编排。 */
@@ -154,7 +152,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         RateLimitContext actualCtx = primaryCtx;
         String response;
         long start = requestStartedAt.toEpochMilli();
-        costBudgetService.begin(ctx, requestId, requestStartedAt);
+        costBudgetService.begin(ctx, primary.getServiceId(), requestId, requestStartedAt);
         try {
             response = forwardWithResilience(primary, primaryCtx, body, operation, ctx, requestId);
         } catch (UpstreamFailureException e) {
@@ -321,7 +319,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         String requestBody = source == InvocationSource.API_KEY
                 ? apiOutputBody(service, body, ModelOperation.CHAT_COMPLETIONS) : body;
         RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
-        if (source == InvocationSource.API_KEY) costBudgetService.check(ctx);
+        costBudgetService.check(ctx, service.getServiceId());
         rateLimiter.check(rateCtx);
 
         String serviceId = String.valueOf(service.getServiceId());
@@ -344,12 +342,15 @@ public class LlmForwardServiceImpl implements LlmForwardService {
 
         boolean auditEnabled = Integer.valueOf(1).equals(tenant.getAuditEnabled());
 
-        if (source == InvocationSource.API_KEY) costBudgetService.begin(ctx, requestId, requestStartedAt);
+        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt);
+        try { costBudgetService.prepareStream(ctx, service.getServiceId(), requestId); }
+        catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); throw rejected; }
         AtomicBoolean subscribed = new AtomicBoolean();
         // API 许可只能消费一次，避免冷 Flux 二次订阅重复执行上游。
         return Flux.defer(() -> {
             if (!subscribed.compareAndSet(false, true)) return Flux.error(new IllegalStateException("stream already subscribed"));
-            if (source == InvocationSource.API_KEY) costBudgetService.sent(requestId);
+            try { costBudgetService.sent(requestId); }
+            catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); return Flux.error(rejected); }
             long start = requestStartedAt.toEpochMilli();
             AtomicBoolean firstChunk = new AtomicBoolean(false);
             AtomicBoolean finalized = new AtomicBoolean(false);
@@ -398,7 +399,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         var protocol = modelResolver.protocolFor(service, ModelOperation.RESPONSES);
         String requestBody = apiOutputBody(service, body, ModelOperation.RESPONSES);
         RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
-        costBudgetService.check(ctx);
+        costBudgetService.check(ctx, service.getServiceId());
         rateLimiter.check(rateCtx);
         String serviceId = String.valueOf(service.getServiceId());
         if (circuitBreaker.isOpen(serviceId)) {
@@ -412,11 +413,14 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 .operation(ModelOperation.RESPONSES).protocol(protocol)
                 .provider(service.getProvider()).providerSettings(service.getProviderSettings()).build();
 
-        costBudgetService.begin(ctx, requestId, requestStartedAt);
+        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt);
+        try { costBudgetService.prepareStream(ctx, service.getServiceId(), requestId); }
+        catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); throw rejected; }
         AtomicBoolean subscribed = new AtomicBoolean();
         return Flux.defer(() -> {
             if (!subscribed.compareAndSet(false, true)) return Flux.error(new IllegalStateException("stream already subscribed"));
-            costBudgetService.sent(requestId);
+            try { costBudgetService.sent(requestId); }
+            catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); return Flux.error(rejected); }
             AtomicBoolean firstEvent = new AtomicBoolean();
             AtomicBoolean receivedEvent = new AtomicBoolean();
             AtomicBoolean finalized = new AtomicBoolean();
@@ -470,7 +474,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         LlmServiceDO service = modelResolver.resolve(tenant.getTenantId(), modelAlias);
         var protocol = modelResolver.protocolFor(service, operation);
         RateLimitContext rateCtx = buildRateContext(ctx, tenant, service);
-        costBudgetService.check(ctx);
+        costBudgetService.check(ctx, service.getServiceId());
         rateLimiter.check(rateCtx);
         String serviceId = String.valueOf(service.getServiceId());
         if (circuitBreaker.isOpen(serviceId)) {
@@ -486,8 +490,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         }
         String safeRequest = mediaPreview(request);
         long start = requestStartedAt.toEpochMilli();
-        costBudgetService.begin(ctx, requestId, requestStartedAt);
-        costBudgetService.sent(requestId);
+        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt);
+        try { costBudgetService.permit(ctx, service.getServiceId(), requestId); }
+        catch (RuntimeException rejection) { costBudgetService.abandon(ctx, requestId); throw rejection; }
         try {
             AdapterExchange.Result result = mediaAdapter.invoke(context, request);
             costBudgetService.finalizing(requestId);
@@ -570,7 +575,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private String forwardWithResilience(LlmServiceDO service, RateLimitContext rateCtx,
                                          String body, ModelOperation operation, UserContext ctx, String requestId) {
         // 每次尝试前读取当前预算；成本异常不进入上游失败计数或重试。
-        costBudgetService.check(ctx);
+        costBudgetService.check(ctx, service.getServiceId());
         // 降级到备用服务时也按实际服务的 API 限额校验，不沿用主服务限额。
         body = apiOutputBody(service, body, operation);
         rateLimiter.check(rateCtx);
@@ -595,11 +600,11 @@ public class LlmForwardServiceImpl implements LlmForwardService {
 
         int maxAttempts = Math.max(1, maxRetries + 1);
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
-            costBudgetService.check(ctx);
+            costBudgetService.check(ctx, service.getServiceId());
             if (attempt > 1) rateLimiter.check(rateCtx);
             try {
                 String response = timeLimiter.execute(() -> {
-                    costBudgetService.sent(requestId);
+                    costBudgetService.permit(ctx, service.getServiceId(), requestId);
                     return providerAdapter.forward(forwardContext);
                 });
                 costBudgetService.finalizing(requestId);
@@ -816,7 +821,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                                     String requestId, long start, StreamResponseAccumulator accumulator,
                                     String status, String errorCode, InvocationSource source, UpstreamExecutionOutcome outcome) {
         if (finalized.compareAndSet(false, true)) {
-            if (source == InvocationSource.API_KEY) costBudgetService.finalizing(requestId);
+            costBudgetService.finalizing(requestId);
             finalizeStream(ctx, tenant, service, rateCtx, body, requestId, start, accumulator,
                     status, errorCode, source, outcome);
         }
@@ -862,9 +867,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                                    JSONObject responseEnvelope, String requestId, String status,
                                    String usageSource, long requestStartedAt, ModelOperation operation,
                                    InvocationSource source, UpstreamExecutionOutcome outcome) {
-        if (source == InvocationSource.API_KEY) costBudgetService.finalizing(requestId);
+        costBudgetService.finalizing(requestId);
         if (!costingEnabled) {
-            if (source == InvocationSource.API_KEY && ctx.getApiKeyId() != null) {
+            {
                 costBudgetService.markUnknown(tenantId, ctx.getApiKeyId(), requestId, "COSTING_DISABLED");
             }
             return;
@@ -923,11 +928,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             event.setCostResult(CostResult.of(CostStatus.UNCALCULABLE));
         }
         // Outbox 写入成功才代表计费用量事件已被可靠接管；失败必须显式向上传播。
-        if (source == InvocationSource.API_KEY && ctx.getApiKeyId() != null) {
-            costBudgetService.settle(event);
-        } else {
-            tokenUsageEventPublisher.publish(event);
-        }
+        costBudgetService.settle(event);
     }
 
     private void publishAuditStream(UserContext ctx, TenantDO tenant, LlmServiceDO service,

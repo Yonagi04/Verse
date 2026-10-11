@@ -322,6 +322,18 @@ class LlmForwardUsagePublicationTest {
                 : service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}", id, Instant.now());
     }
 
+    @ParameterizedTest @ValueSource(strings = {"CHAT_COMPLETIONS", "RESPONSES"})
+    void streamPermissionFailureIsSynchronousBeforeAnySubscription(String operation) {
+        var refused=new com.yonagi.verse.service.budget.CostBudgetUnavailableException();
+        doThrow(refused).when(budgets).prepareStream(context,10L,"preflight-permit");
+        assertSame(refused,assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class,
+                () -> stream(ModelOperation.valueOf(operation),"preflight-permit")));
+        verify(budgets).abandon(context,"preflight-permit");
+        verify(budgets,never()).sent(anyString());
+        verify(providerAdapter,never()).stream(any());
+        verify(circuitBreaker,never()).recordFailure(anyString());
+    }
+
     private TokenUsageEvent terminalEvent() {
         var captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
         verify(usagePublisher, times(1)).publish(captor.capture());
@@ -382,7 +394,7 @@ class LlmForwardUsagePublicationTest {
                 new DoubaoUsageNormalizer(), new KimiUsageNormalizer(), new MiniMaxUsageNormalizer(),
                 new OpenAiCompatibleUsageNormalizer()));
         service = new LlmForwardServiceImpl(modelResolver, providerAdapter, aesUtil, eventPublisher,
-                usagePublisher, tenantMapper, serviceMapper, rateLimiter, circuitBreaker, fallbackExecutor,
+                tenantMapper, serviceMapper, rateLimiter, circuitBreaker, fallbackExecutor,
                 timeLimiter, registry, pricingResolver, new CostCalculator(), budgets);
         ReflectionTestUtils.setField(service, "maxRetries", 0);
         ReflectionTestUtils.setField(service, "streamIdleTimeoutMs", 5000L);
@@ -402,7 +414,7 @@ class LlmForwardUsagePublicationTest {
     @ParameterizedTest
     @ValueSource(strings = {"CHAT_COMPLETIONS", "RESPONSES", "EMBEDDINGS", "IMAGE_GENERATION", "RERANK"})
     void initialBudgetRejectionNeverSendsChargesRetriesOrChangesHealth(String operation) {
-        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).begin(any(), any(), any());
+        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).begin(any(), anyLong(), any(), any());
         assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.jsonCompletion(
                 context, ModelOperation.valueOf(operation), "{\"model\":\"alias\"}", "budget-rejected", Instant.now()));
         verifyNoInteractions(providerAdapter, timeLimiter, fallbackExecutor, circuitBreaker, usagePublisher, rateLimiter);
@@ -410,24 +422,27 @@ class LlmForwardUsagePublicationTest {
     }
 
     @Test void streamsRejectBeforeHeadersAndPermitCannotBeSubscribedTwice() {
-        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context);
+        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context, 10L);
         assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.chatCompletionStream(
                 context, "{\"model\":\"alias\",\"stream\":true}", "stream-budget", Instant.now()));
         assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.responsesStream(
                 context, "{\"model\":\"alias\",\"stream\":true}", "responses-budget", Instant.now()));
         verifyNoInteractions(providerAdapter, rateLimiter, circuitBreaker, usagePublisher);
-        doNothing().when(budgets).check(context);
+        doNothing().when(budgets).check(context, 10L);
         when(providerAdapter.stream(any())).thenReturn(Flux.just(ServerSentEvent.builder("[DONE]").build()));
         var stream = service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}", "single-permit", Instant.now());
+        verify(budgets).prepareStream(context,10L,"single-permit");
+        verify(budgets,never()).sent("single-permit");
         stream.blockLast();
         assertThrows(IllegalStateException.class, stream::blockLast);
         verify(providerAdapter, times(1)).stream(any()); verify(budgets, times(1)).settle(any());
+        verify(budgets,times(1)).sent("single-permit");
     }
 
     @Test void retryBudgetRejectionStopsAttemptsAndPreservesOneOriginalFailureTerminal() {
         ReflectionTestUtils.setField(service, "maxRetries", 3);
         when(timeLimiter.execute(any())).thenThrow(retryableFailure());
-        doNothing().doNothing().doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context);
+        doNothing().doNothing().doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context, 10L);
         when(budgets.hasUpstream("retry-budget")).thenReturn(true);
         assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.chatCompletion(
                 context, "{\"model\":\"alias\"}", "retry-budget", Instant.now()));
@@ -440,7 +455,7 @@ class LlmForwardUsagePublicationTest {
 
     @ParameterizedTest @ValueSource(strings = {"SPEECH", "TRANSCRIPTION"})
     void audioBudgetRejectionOccursBeforeRateLimitOrAdapter(String operation) {
-        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context);
+        doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context, 10L);
         assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.media(
                 context, ModelOperation.valueOf(operation), "alias", null, "audio-budget", Instant.now()));
         verifyNoInteractions(providerAdapter, rateLimiter, circuitBreaker, usagePublisher);
@@ -844,7 +859,7 @@ class LlmForwardUsagePublicationTest {
         assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(context,
                 "{\"model\":\"alias\"}", "capacity", Instant.now()));
         verify(budgets).abandon(context, "capacity");
-        verify(budgets, never()).sent(anyString()); verify(budgets, never()).settle(any());
+        verify(budgets, never()).permit(any(), anyLong(), anyString()); verify(budgets, never()).settle(any());
         verify(circuitBreaker, never()).recordFailure(anyString());
         verifyNoInteractions(providerAdapter, fallbackExecutor, usagePublisher);
     }
@@ -855,7 +870,7 @@ class LlmForwardUsagePublicationTest {
         when(providerAdapter.forward(any())).thenThrow(UpstreamErrors.from(429, null))
                 .thenReturn("{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}");
         service.chatCompletion(context, "{\"model\":\"alias\"}", "safe-retry", Instant.now());
-        verify(providerAdapter, times(2)).forward(any()); verify(budgets, times(2)).sent("safe-retry");
+        verify(providerAdapter, times(2)).forward(any()); verify(budgets, times(2)).permit(context, 10L, "safe-retry");
         verify(rateLimiter, times(2)).check(any()); verify(budgets, times(1)).settle(any());
         verifyNoInteractions(fallbackExecutor);
     }
@@ -908,7 +923,7 @@ class LlmForwardUsagePublicationTest {
             assertEquals(1, calls.get()); assertEquals(1L, completed.getCount());
             var rejected = assertThrows(UpstreamFailureException.class, () -> realLimiter.execute(() -> "duplicate"));
             assertEquals(LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED.code(), rejected.getErrorCode());
-            verifyNoInteractions(fallbackExecutor); verify(budgets).sent("http-unknown");
+            verifyNoInteractions(fallbackExecutor); verify(budgets).permit(context, 10L, "http-unknown");
             var event = ArgumentCaptor.forClass(TokenUsageEvent.class); verify(budgets).settle(event.capture());
             assertEquals(CostStatus.UNCALCULABLE, event.getValue().getCostResult().status());
             release.countDown(); assertTrue(completed.await(2, TimeUnit.SECONDS));

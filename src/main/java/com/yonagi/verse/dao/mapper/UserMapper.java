@@ -59,6 +59,10 @@ public interface UserMapper extends BaseMapper<UserDO> {
     @Select("SELECT * FROM t_user WHERE user_id = #{userId} AND status = 1 AND del_flag = 0 FOR UPDATE")
     UserDO selectActiveUserForUpdate(@Param("userId") Long userId);
 
+    /** 创建资源只需阻止账号注销；与权限当前读统一使用共享锁，避免并发锁升级。 */
+    @Select("SELECT * FROM t_user WHERE user_id = #{userId} AND status = 1 AND del_flag = 0 FOR SHARE")
+    UserDO selectActiveUserForShare(@Param("userId") Long userId);
+
     /** 基于旧值执行 compare-and-set，避免自动修复覆盖并发切换。 */
     @Update("""
             <script>

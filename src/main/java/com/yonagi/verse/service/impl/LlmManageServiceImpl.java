@@ -87,6 +87,9 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
             "删除模型后将无法恢复。由于模型实例与模型服务ID唯一绑定，因此在删除模型后即使重新添加完全相同的模型也有可能会对存量业务带来影响。" +
             "建议在删除模型前观测模型的使用情况，并利用租户内公告进行周知租户成员，提前完成资源迁移。如有疑问，请联系技术支持。";
 
+    private com.yonagi.verse.service.budget.LlmCostBudgetConfigurationService costConfiguration;
+    @org.springframework.beans.factory.annotation.Autowired
+    public void setCostConfiguration(com.yonagi.verse.service.budget.LlmCostBudgetConfigurationService service) { this.costConfiguration = service; }
     private final TenantAccessPolicy tenantAccess;
     private final TenantMapper tenantMapper;
     private final UserTenantService userTenantService;
@@ -104,7 +107,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     @Transactional(rollbackFor = Exception.class)
     public Boolean addLlmService(Long userId, Long tenantId, LlmServiceAddReqDTO requestParam) {
         validateTenantAndMembership(userId, tenantId);
-        if (userMapper.selectActiveUserForUpdate(userId) == null) {
+        if (costConfiguration != null) costConfiguration.requireAdmin(tenantId, userId);
+        if (userMapper.selectActiveUserForShare(userId) == null) {
             throw new ClientException(com.yonagi.verse.common.enums.UserErrorCodeEnum.USER_ACCOUNT_CLOSED);
         }
 
@@ -160,7 +164,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                                 .eq(LlmServiceDO::getServiceId, llmServiceId)
                                 .set(LlmServiceDO::getActivePricingId, llmServiceDO.getActivePricingId()));
                     }
-                    replaceCapabilities(llmServiceId, bindings);
+                    if (costConfiguration != null) costConfiguration.create(userId, llmServiceDO,
+                            requestParam.getCostLimit(), requestParam.getCostWarning(), requestParam.getPricing());
+                    // 新模型没有旧绑定，直接插入，避免空范围 DELETE 的间隙锁阻塞并发创建。
+                    insertCapabilities(llmServiceId, bindings);
                     record(tenantId, TenantActivityDraft.of(TenantActivityType.LLM_SERVICE_CREATED).actor(userId)
                             .target(TenantActivityTargetType.LLM_SERVICE, llmServiceId, llmServiceDO.getName())
                             .detail("provider", llmServiceDO.getProvider()).detail("modelName", llmServiceDO.getModelName()));
@@ -244,11 +251,16 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
                 && requestParam.getTagCodes() == null
                 && requestParam.getContextWindow() == null
                 && requestParam.getMaxOutputTokens() == null
-                && requestParam.getPricing() == null) {
+                && requestParam.getPricing() == null
+                && requestParam.getCostLimit() == null && requestParam.getCostWarning() == null) {
             if (requestParam.getCapabilities() == null && requestParam.getCredentialMode() == null
                     && requestParam.getProviderSettings() == null) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_UPDATE_PARAM_EMPTY);
             }
+        }
+        if (costConfiguration != null) {
+            costConfiguration.requireAdmin(tenantId, userId);
+            costConfiguration.lockService(tenantId, serviceId);
         }
         // 查询对应的服务是否存在 or 是否启用
         LlmServiceDO llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
@@ -260,6 +272,8 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
         } else if (llmServiceDO.getStatus() == 0) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_CAN_NOT_UPDATE);
         }
+        if (costConfiguration != null && (requestParam.getPricing() != null || requestParam.getCostLimit() != null || requestParam.getCostWarning() != null))
+            costConfiguration.mergeForEdit(userId, llmServiceDO, requestParam.getCostLimit(), requestParam.getCostWarning(), requestParam.getPricing());
         List<CapabilityBindingReqDTO> bindings = requestParam.getCapabilities() == null
                 ? getCapabilities(serviceId) : CapabilityConfiguration.normalize(requestParam.getCapabilities());
         Long fallbackId = requestParam.getFallbackServiceId() == null ? llmServiceDO.getFallbackServiceId()
@@ -689,6 +703,10 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     private void replaceCapabilities(Long serviceId, List<CapabilityBindingReqDTO> bindings) {
         capabilityMapper.delete(Wrappers.lambdaQuery(LlmServiceCapabilityDO.class)
                 .eq(LlmServiceCapabilityDO::getServiceId, serviceId));
+        insertCapabilities(serviceId, bindings);
+    }
+
+    private void insertCapabilities(Long serviceId, List<CapabilityBindingReqDTO> bindings) {
         for (CapabilityBindingReqDTO binding : bindings) {
             LlmServiceCapabilityDO row = new LlmServiceCapabilityDO();
             row.setServiceId(serviceId);

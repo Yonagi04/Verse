@@ -87,10 +87,8 @@ public class ApiKeyDO {
     private java.math.BigDecimal costLimitWeeklyFen;
     /** 月限额，整数分。 */
     private java.math.BigDecimal costLimitMonthlyFen;
-    /** 成本配置版本。 */
+    /** 当前成本配置并发版本；变更递增，不表示历史版本行。 */
     private Long costConfigVersion;
-    /** 成本数据完整性状态。 */
-    private String costDataState;
-    /** 内部不可用原因。 */
+    /** 持久化费用故障原因；空值表示没有已知故障。 */
     private String costDataReason;
 }

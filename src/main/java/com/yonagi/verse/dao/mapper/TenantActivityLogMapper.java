@@ -21,7 +21,7 @@ public interface TenantActivityLogMapper extends BaseMapper<TenantActivityLogDO>
             <script>
             SELECT activity.id, activity.event_id, activity.tenant_id,
                    activity.category, activity.activity_type,
-                   activity.actor_user_id, activity.actor_username,
+                   activity.actor_type, activity.actor_user_id, activity.actor_username,
                    activity.actor_nickname,
                    CASE WHEN current_membership.id IS NOT NULL
                         THEN current_actor.nickname
@@ -32,7 +32,7 @@ public interface TenantActivityLogMapper extends BaseMapper<TenantActivityLogDO>
                    activity.occurred_at, activity.create_time
             FROM t_tenant_activity_log activity
             LEFT JOIN t_user current_actor
-              ON current_actor.username = activity.actor_username
+              ON activity.actor_type='USER' AND current_actor.username = activity.actor_username
             LEFT JOIN t_user_tenant current_membership
               ON current_membership.user_id = current_actor.user_id
              AND current_membership.tenant_id = activity.tenant_id

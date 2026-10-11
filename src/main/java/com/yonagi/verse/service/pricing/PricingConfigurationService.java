@@ -162,6 +162,29 @@ public class PricingConfigurationService {
         return value;
     }
 
+    /** 主库当前价格资格，不使用模型详情/定价查询缓存。零价格仍有效。 */
+    public boolean eligible(Long tenantId, Long serviceId) {
+        LlmServicePricingDO row = pricingMapper.selectOne(Wrappers.lambdaQuery(LlmServicePricingDO.class)
+                .eq(LlmServicePricingDO::getTenantId, tenantId).eq(LlmServicePricingDO::getServiceId, serviceId)
+                .isNull(LlmServicePricingDO::getEffectiveTo).orderByDesc(LlmServicePricingDO::getEffectiveFrom).last("LIMIT 1 FOR SHARE"));
+        return eligible(row);
+    }
+    /** 当前页价格资格一次主库查询；不读取详情缓存。 */
+    public java.util.Set<Long> eligibleBatch(Long tenantId, List<Long> ids) {
+        return pricingMapper.selectList(Wrappers.lambdaQuery(LlmServicePricingDO.class)
+                .eq(LlmServicePricingDO::getTenantId, tenantId).in(LlmServicePricingDO::getServiceId, ids)
+                .isNull(LlmServicePricingDO::getEffectiveTo).last("FOR SHARE")).stream()
+                .filter(PricingConfigurationService::eligible).map(LlmServicePricingDO::getServiceId)
+                .collect(java.util.stream.Collectors.toSet());
+    }
+    private static boolean eligible(LlmServicePricingDO row) {
+        if (row == null || !"CNY".equals(row.getCurrency()) || row.getBaseCacheHitInputPriceFen() != null && row.getBaseCacheHitInputPriceFen().signum() < 0) return false;
+        return "REQUEST".equals(row.getBillingMode()) ? row.getBaseRequestPriceFen() != null && row.getBaseRequestPriceFen().signum() >= 0
+                : "TOKEN".equals(row.getBillingMode()) && row.getBaseCacheMissInputPriceFen() != null
+                && row.getBaseOutputPriceFen() != null && row.getBaseCacheMissInputPriceFen().signum() >= 0
+                && row.getBaseOutputPriceFen().signum() >= 0;
+    }
+
     public void validate(PricingConfigReqDTO config) {
         if (!Boolean.TRUE.equals(config.getEnabled()) || config.getBillingMode() == null) {
             throw new ClientException(LlmManageErrorCodeEnum.LLM_PRICING_INCOMPLETE);

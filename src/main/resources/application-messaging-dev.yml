@@ -7,6 +7,8 @@ verse:
       sign-name: ${VERSE_SMS_SIGN_NAME:Verse}
       reset-template-code: ${VERSE_SMS_RESET_TEMPLATE_CODE:10001}
       closure-template-code: ${VERSE_SMS_CLOSURE_TEMPLATE_CODE:10002}
+      cost-warning-template-code: ${VERSE_SMS_COST_WARNING_TEMPLATE_CODE:10003}
+      cost-limit-template-code: ${VERSE_SMS_COST_LIMIT_TEMPLATE_CODE:10004}
       daily-limit: ${VERSE_SMS_DAILY_LIMIT:10}
     email:
       provider: mailpit

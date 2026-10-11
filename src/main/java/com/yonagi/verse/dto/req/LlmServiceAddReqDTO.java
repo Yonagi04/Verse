@@ -70,4 +70,11 @@ public class LlmServiceAddReqDTO {
 
     /** 完整定价配置。 */
     private PricingConfigReqDTO pricing;
+
+    /** 限额补丁；省略保持。 */
+    @com.fasterxml.jackson.annotation.JsonSetter(nulls = com.fasterxml.jackson.annotation.Nulls.FAIL)
+    private CostLimitPatch costLimit;
+    /** 预警补丁；省略保持。 */
+    @com.fasterxml.jackson.annotation.JsonSetter(nulls = com.fasterxml.jackson.annotation.Nulls.FAIL)
+    private CostWarningPatch costWarning;
 }

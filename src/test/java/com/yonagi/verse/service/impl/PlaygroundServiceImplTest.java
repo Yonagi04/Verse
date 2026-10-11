@@ -171,6 +171,20 @@ class PlaygroundServiceImplTest {
         verifyNoInteractions(forward, rateLimiter);
     }
 
+    @Test void synchronousBudgetRefusalPersistsFailureAndReleasesGeneratingLock() {
+        var session=new PlaygroundSessionDO(); session.setSessionId(11L); session.setTenantId(2L); session.setOwnerUserId(7L); session.setServiceId(9L); session.setTurnCount(0);
+        when(sessionMapper.selectOne(any())).thenReturn(session); when(sessionMapper.claim(2L,7L,11L)).thenReturn(1); when(sessionMapper.release(2L,7L,11L)).thenReturn(1);
+        var model=new LlmServiceDO(); model.setServiceId(9L); model.setName("model"); when(serviceMapper.selectOne(any())).thenReturn(model);
+        when(capabilityMapper.selectOne(any())).thenReturn(new LlmServiceCapabilityDO()); when(turnMapper.selectList(any())).thenReturn(List.of());
+        var budget=new com.yonagi.verse.service.budget.CostLimitExceededException(new com.yonagi.verse.service.budget.CostBudgetDecision(
+                List.of(new com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO.Hit("LLM","DAY","2026-10-12T00:00:00+08:00")),false));
+        when(forward.playgroundChatStream(any(),eq(9L),anyList(),anyString(),any())).thenThrow(budget);
+        assertSame(budget,assertThrows(com.yonagi.verse.service.budget.CostLimitExceededException.class,()->service.prepareSend(actor,2L,11L,"keep this prompt",UUID.randomUUID().toString())));
+        var saved=ArgumentCaptor.forClass(PlaygroundTurnDO.class); verify(turnMapper).insert(saved.capture());
+        assertEquals("FAILED",saved.getValue().getStatus()); assertEquals("keep this prompt",saved.getValue().getPrompt());
+        assertEquals(saved.getValue().getRequestId(),budget.getRequestId()); verify(sessionMapper).release(2L,7L,11L); verifyNoInteractions(finalizer);
+    }
+
     private PlaygroundTurnDO turn(String status, String prompt, String reply) {
         PlaygroundTurnDO turn = new PlaygroundTurnDO();
         turn.setStatus(status);

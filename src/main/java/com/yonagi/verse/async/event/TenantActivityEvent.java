@@ -14,11 +14,12 @@ import java.util.Map;
 @Setter
 @NoArgsConstructor
 public class TenantActivityEvent extends DomainEvent {
-    public static final int CURRENT_SCHEMA_VERSION = 1;
+    public static final int CURRENT_SCHEMA_VERSION = 2;
     /** 租户 ID。 */ private Long tenantId;
     /** 动态分类。 */ private TenantActivityCategory category;
     /** 动态类型。 */ private TenantActivityType activityType;
     /** 结构版本。 */ private int schemaVersion = CURRENT_SCHEMA_VERSION;
+    /** USER 或 SYSTEM；v1 缺省按 USER。 */ private String actorType = "USER";
     /** 操作人用户 ID。 */ private Long actorUserId;
     /** 操作人用户名快照。 */ private String actorUsername;
     /** 操作人昵称快照。 */ private String actorNickname;

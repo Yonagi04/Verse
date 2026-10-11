@@ -19,6 +19,7 @@ import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.asyncDispatch;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
@@ -73,6 +74,21 @@ class PlaygroundStreamMvcTest {
         String body = result.getResponse().getContentAsString();
         assertTrue(body.contains("event:accepted") || body.contains("event: accepted"));
         assertTrue(body.contains("data:{}") || body.contains("data: {}"));
+    }
+
+    @Test void costRefusalIsJson429AndUnknownIs503BeforeSse() throws Exception {
+        var service=mock(PlaygroundService.class);
+        var budget=new com.yonagi.verse.service.budget.CostLimitExceededException(new com.yonagi.verse.service.budget.CostBudgetDecision(
+                java.util.List.of(new com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO.Hit("LLM","DAY","2099-01-01T00:00:00+08:00")),false)).requestId("cost-request");
+        when(service.prepareSend(any(),eq(2L),eq(11L),eq("hello"),anyString())).thenThrow(budget).thenThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException());
+        UserContextHolder.set(new UserContext().setUserId(7L).setCurrentTenantId(2L));
+        var mvc=MockMvcBuilders.standaloneSetup(new PlaygroundController(service)).build();
+        mvc.perform(post("/api/v1/tenants/2/playground/sessions/11/turns/stream").header("Idempotency-Key","8f5e7338-6385-4f78-963e-889564109956").contentType("application/json").accept("text/event-stream").content("{\"prompt\":\"hello\"}"))
+                .andExpect(status().isTooManyRequests()).andExpect(header().exists("Retry-After"))
+                .andExpect(jsonPath("$.data.scope").value("LLM")).andExpect(jsonPath("$.data.requestId").value("cost-request"))
+                .andExpect(jsonPath("$.data.usedCostFen").doesNotExist()).andExpect(request().asyncNotStarted());
+        mvc.perform(post("/api/v1/tenants/2/playground/sessions/11/turns/stream").header("Idempotency-Key","8f5e7338-6385-4f78-963e-889564109956").contentType("application/json").accept("text/event-stream").content("{\"prompt\":\"hello\"}"))
+                .andExpect(status().isServiceUnavailable()).andExpect(jsonPath("$.code").value("B000802")).andExpect(request().asyncNotStarted());
     }
 
     @Test
