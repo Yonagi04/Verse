@@ -16,6 +16,7 @@ public enum TenantActivityType {
     JOIN_REQUEST_REJECTED(TenantActivityCategory.MEMBER, Set.of()),
     INVITE_ENABLED(TenantActivityCategory.INVITE, Set.of("status", "expiresAt")),
     INVITE_DISABLED(TenantActivityCategory.INVITE, Set.of("status", "expiresAt")),
+    TENANT_COST_LIMIT_REACHED(TenantActivityCategory.TENANT, Set.of("period", "periodStart", "periodEnd", "triggeredAt", "retryAt")),
     LLM_COST_LIMIT_REACHED(TenantActivityCategory.LLM_SERVICE, Set.of("period", "periodStart", "periodEnd", "triggeredAt", "retryAt")),
     LLM_SERVICE_CREATED(TenantActivityCategory.LLM_SERVICE, Set.of("provider", "modelName")),
     LLM_SERVICE_UPDATED(TenantActivityCategory.LLM_SERVICE, Set.of("changedFields", "credentialChanged")),

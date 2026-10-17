@@ -8,25 +8,15 @@ import java.util.List;
 
 @Mapper
 public interface LlmCostAlertDeliveryMapper extends BaseMapper<LlmCostAlertDeliveryDO> {
-    /** 用成员当前读生成固定收件集合，联系方式已经由用户领域加密。 */
-    @Insert("""
-        INSERT INTO t_llm_cost_alert_delivery(event_id,channel,recipient_user_id,contact_hash,contact_encrypted,
-          request_id,status,reason_code,attempt_count,next_retry_at,create_time,update_time)
-        SELECT #{eventId},#{channel},u.user_id,
-          CASE #{channel} WHEN 'SMS' THEN u.phone_hash WHEN 'EMAIL' THEN u.email_hash ELSE NULL END,
-          CASE #{channel} WHEN 'SMS' THEN u.phone WHEN 'EMAIL' THEN u.email ELSE NULL END,
-          SHA2(CONCAT(#{eventId},':',#{channel},':',u.user_id),256),
-          CASE WHEN (#{channel}='SMS' AND (u.phone IS NULL OR u.phone='')) OR
-                    (#{channel}='EMAIL' AND (u.email IS NULL OR u.email='')) THEN 'SKIPPED' ELSE 'PENDING' END,
-          CASE WHEN (#{channel}='SMS' AND (u.phone IS NULL OR u.phone='')) OR
-                    (#{channel}='EMAIL' AND (u.email IS NULL OR u.email='')) THEN 'SKIPPED_NO_CONTACT' ELSE NULL END,
-          0,#{now},#{now},#{now}
-        FROM t_user u JOIN t_user_tenant m ON m.user_id=u.user_id
-        WHERE m.tenant_id=#{tenantId} AND m.left_at IS NULL AND u.status=1 AND u.del_flag=0
-          AND (#{channel}='IN_APP' OR m.role IN ('ADMIN','SUPER_ADMIN'))
-        """)
-    int snapshotRecipients(@Param("eventId") String eventId, @Param("tenantId") Long tenantId,
-            @Param("channel") String channel, @Param("now") LocalDateTime now);
+    /** RC 普通读取先物化集合，避免 INSERT SELECT 对来源元数据隐式加锁。 */
+    @Select("SELECT u.user_id,m.role,u.phone,u.email,u.phone_hash,u.email_hash FROM t_user u JOIN t_user_tenant m ON m.user_id=u.user_id "
+            + "WHERE m.tenant_id=#{tenantId} AND m.left_at IS NULL AND u.status=1 AND u.del_flag=0 "
+            + "AND m.role IN ('MEMBER','ADMIN','SUPER_ADMIN') ORDER BY u.user_id")
+    List<com.yonagi.verse.dao.projection.CostAlertRecipient> recipientSnapshot(@Param("tenantId") Long tenantId);
+
+    @Insert({"<script>INSERT INTO t_llm_cost_alert_delivery(event_id,channel,recipient_user_id,contact_hash,contact_encrypted,request_id,status,reason_code,attempt_count,next_retry_at,create_time,update_time) VALUES",
+        "<foreach collection='rows' item='r' separator=','>(#{r.eventId},#{r.channel},#{r.recipientUserId},#{r.contactHash},#{r.contactEncrypted},#{r.requestId},#{r.status},#{r.reasonCode},#{r.attemptCount},#{r.nextRetryAt},#{r.createTime},#{r.updateTime})</foreach></script>"})
+    void insertBatch(@Param("rows") List<LlmCostAlertDeliveryDO> rows);
 
     @Update("""
         UPDATE t_llm_cost_alert_delivery d JOIN

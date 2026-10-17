@@ -12,6 +12,8 @@ public enum CostBudgetErrorCodeEnum implements IErrorCode {
     LLM_PRICE_REQUIRED("A000607", "请先配置模型价格"),
     LLM_PRICE_DISABLE_REQUIRES_BUDGET_OFF("A000608", "关闭模型价格前必须显式关闭成本限额"),
     WARNING_INVALID("A000609", "成本预警须有有效预算、50～99整数阈值和至少一个合法渠道"),
+    SETTINGS_VERSION_CONFLICT("A000610", "租户设置已更新，请刷新后重试"),
+    CONFIRMATION_INVALID("A000611", "确认凭证无效，请重新提交设置"),
     LIMIT_EXCEEDED("A000809", "此 API Key 的调用成本已达到限额"),
     UNAVAILABLE("B000802", "预算校验暂不可用，请稍后重试");
 

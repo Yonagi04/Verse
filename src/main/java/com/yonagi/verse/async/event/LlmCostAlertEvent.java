@@ -7,5 +7,5 @@ import lombok.Setter;
 public class LlmCostAlertEvent extends DomainEvent {
     /** 所属租户。 */ private Long tenantId;
     /** 本地告警标识。 */ private String alertEventId;
-    @Override public String eventType() { return EventTag.LLM_COST_ALERT; }
+    @Override public String eventType() { return EventTag.COST_ALERT; }
 }

@@ -234,7 +234,7 @@ class TenantActivityBusinessInstrumentationTest {
         when(currentState.closeTenantAndFallback(10L, 20L)).thenReturn(tenant);
         when(memberships.list(any(Wrapper.class))).thenReturn(List.of());
         TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenants, memberships),
-                tenants,
+                tenants, mock(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class),
                 memberships,
                 mock(UserMapper.class),
                 redis,

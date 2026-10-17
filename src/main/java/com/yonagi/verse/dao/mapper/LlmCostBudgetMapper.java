@@ -42,8 +42,8 @@ public interface LlmCostBudgetMapper extends BaseMapper<LlmCostBudgetDO> {
             + "AND m.role IN ('ADMIN','SUPER_ADMIN')")
     com.yonagi.verse.dto.resp.CostNotificationReadinessRespDTO.Administrators administratorContacts(@Param("tenantId") Long tenantId);
 
-    @Select("SELECT m.role FROM t_user_tenant m JOIN t_user u ON u.user_id=m.user_id "
-            + "WHERE m.tenant_id=#{tenantId} AND m.user_id=#{userId} AND m.left_at IS NULL "
-            + "AND u.status=1 AND u.del_flag=0 LIMIT 1 FOR SHARE")
+    /** 调用方先持有有效租户、有效用户共享锁；此处只锁成员关系，不再通过 JOIN 隐式锁用户。 */
+    @Select("SELECT role FROM t_user_tenant WHERE tenant_id=#{tenantId} AND user_id=#{userId} "
+            + "AND left_at IS NULL LIMIT 1 FOR SHARE")
     String role(@Param("tenantId") Long tenantId, @Param("userId") Long userId);
 }

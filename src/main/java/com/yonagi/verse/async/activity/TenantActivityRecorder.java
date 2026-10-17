@@ -40,11 +40,12 @@ public class TenantActivityRecorder {
         TenantActivityEvent event = new TenantActivityEvent(); event.setEventId(source.getActivityEventId());
         event.setOccurredAt(source.getTriggeredAt().atZone(java.time.ZoneId.of("Asia/Shanghai")).toInstant().toEpochMilli());
         event.setTenantId(source.getTenantId()); event.setKey(source.getActivityEventId());
-        event.setCategory(com.yonagi.verse.common.enums.TenantActivityCategory.LLM_SERVICE);
-        event.setActivityType(com.yonagi.verse.common.enums.TenantActivityType.LLM_COST_LIMIT_REACHED);
+        boolean tenant = "TENANT".equals(source.getScopeType());
+        event.setCategory(tenant ? com.yonagi.verse.common.enums.TenantActivityCategory.TENANT : com.yonagi.verse.common.enums.TenantActivityCategory.LLM_SERVICE);
+        event.setActivityType(tenant ? com.yonagi.verse.common.enums.TenantActivityType.TENANT_COST_LIMIT_REACHED : com.yonagi.verse.common.enums.TenantActivityType.LLM_COST_LIMIT_REACHED);
         event.setActorType("SYSTEM"); event.setActorUsername("system"); event.setActorNickname("系统");
-        event.setTargetType(com.yonagi.verse.common.enums.TenantActivityTargetType.LLM_SERVICE);
-        event.setTargetId(String.valueOf(source.getServiceId())); event.setTargetName(source.getServiceName());
+        event.setTargetType(tenant ? com.yonagi.verse.common.enums.TenantActivityTargetType.TENANT : com.yonagi.verse.common.enums.TenantActivityTargetType.LLM_SERVICE);
+        event.setTargetId(String.valueOf(tenant ? source.getTenantId() : source.getServiceId())); event.setTargetName(tenant ? source.getScopeName() : source.getServiceName());
         java.util.Map<String,Object> details = new java.util.LinkedHashMap<>();
         details.put("period", source.getPeriodType()); details.put("periodStart", source.getPeriodStart().atZone(java.time.ZoneId.of("Asia/Shanghai")).toOffsetDateTime().toString());
         details.put("periodEnd", source.getPeriodEnd().atZone(java.time.ZoneId.of("Asia/Shanghai")).toOffsetDateTime().toString()); details.put("triggeredAt", source.getTriggeredAt().atZone(java.time.ZoneId.of("Asia/Shanghai")).toOffsetDateTime().toString());

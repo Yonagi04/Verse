@@ -53,7 +53,7 @@ class TenantCrudServiceHomeTest {
         TenantMediaService mediaService = mock(TenantMediaService.class);
         CurrentTenantStateService currentState = mock(CurrentTenantStateService.class);
         TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
-                tenantMapper,
+                tenantMapper, mock(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class),
                 userTenantService,
                 mock(UserMapper.class),
                 redisTemplate,
@@ -96,7 +96,7 @@ class TenantCrudServiceHomeTest {
         UserTenantService userTenantService = mock(UserTenantService.class);
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
         TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
-                tenantMapper,
+                tenantMapper, mock(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class),
                 userTenantService,
                 mock(UserMapper.class),
                 redisTemplate,
@@ -131,7 +131,7 @@ class TenantCrudServiceHomeTest {
         UserTenantService userTenantService = mock(UserTenantService.class);
         CurrentTenantStateService currentState = mock(CurrentTenantStateService.class);
         TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
-                tenantMapper,
+                tenantMapper, mock(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class),
                 userTenantService,
                 mock(UserMapper.class),
                 mock(StringRedisTemplate.class),
@@ -167,7 +167,7 @@ class TenantCrudServiceHomeTest {
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
         CurrentTenantStateService currentState = mock(CurrentTenantStateService.class);
         TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
-                tenantMapper,
+                tenantMapper, mock(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class),
                 userTenantService,
                 mock(UserMapper.class),
                 redisTemplate,
@@ -194,7 +194,7 @@ class TenantCrudServiceHomeTest {
         UserTenantService userTenantService = mock(UserTenantService.class);
         StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class, RETURNS_DEEP_STUBS);
         TenantCrudServiceImpl service = new TenantCrudServiceImpl(com.yonagi.verse.support.AccessTestSupport.tenant(tenantMapper, userTenantService),
-                tenantMapper,
+                tenantMapper, mock(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class),
                 userTenantService,
                 mock(UserMapper.class),
                 redisTemplate,

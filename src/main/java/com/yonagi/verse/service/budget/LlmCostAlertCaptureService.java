@@ -24,35 +24,68 @@ public class LlmCostAlertCaptureService {
 
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public void capture(LlmCostBudgetDO config, List<CostBudgetPeriodDO> current) {
+        var service = services.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class).eq(LlmServiceDO::getTenantId, config.getTenantId())
+                .eq(LlmServiceDO::getServiceId, config.getServiceId()));
+        capture(config.getTenantId(), "LLM", config.getServiceId(), service.getName(),
+                Boolean.TRUE.equals(config.getCostLimitEnabled()), Boolean.TRUE.equals(config.getWarningEnabled()),
+                config.getWarningThresholdPercent(), config.getConfigVersion(), LlmCostBudgetLedger.channels(config),
+                p -> LlmCostBudgetLedger.limit(config, p), current);
+    }
+    @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
+    public void capture(TenantCostBudgetDO config, List<CostBudgetPeriodDO> current) {
+        var tenant = events.tenantSnapshot(config.getTenantId());
+        capture(config.getTenantId(), "TENANT", config.getTenantId(), tenant.getName(),
+                Boolean.TRUE.equals(config.getCostLimitEnabled()), Boolean.TRUE.equals(config.getWarningEnabled()),
+                config.getWarningThresholdPercent(), config.getConfigVersion(), TenantCostBudgetLedger.channels(config),
+                p -> TenantCostBudgetLedger.limit(config, p), current);
+    }
+    private void capture(Long tenantId, String scope, Long scopeId, String scopeName, boolean enabled, boolean warning,
+            int threshold, long version, List<String> warningChannels, java.util.function.Function<String,BigDecimal> limit,
+            List<CostBudgetPeriodDO> current) {
         var now = time.local(time.now());
-        var retryAt = current.stream().filter(row -> LlmCostAlertPolicy.event(true, LlmCostBudgetLedger.limit(config, row.getPeriodType()),
+        var retryAt = current.stream().filter(row -> LlmCostAlertPolicy.event(true, limit.apply(row.getPeriodType()),
                 row.getUsedCostFen(), false, 80) != null).map(CostBudgetPeriodDO::getPeriodEnd).max(Comparator.naturalOrder()).orElse(null);
         for (var period : current) {
-            String type = LlmCostAlertPolicy.event(Boolean.TRUE.equals(config.getCostLimitEnabled()), LlmCostBudgetLedger.limit(config, period.getPeriodType()),
-                    period.getUsedCostFen(), Boolean.TRUE.equals(config.getWarningEnabled()), config.getWarningThresholdPercent());
+            String type = LlmCostAlertPolicy.event(enabled, limit.apply(period.getPeriodType()),
+                    period.getUsedCostFen(), warning, threshold);
             if (type == null || !period.getPeriodEnd().isAfter(now)) continue;
             // 调用方已持有配置行锁；相同服务的周期创建串行，DB 唯一键仍是最终保障。
-            var existing = events.selectOne(Wrappers.lambdaQuery(LlmCostAlertEventDO.class).eq(LlmCostAlertEventDO::getTenantId, config.getTenantId())
-                    .eq(LlmCostAlertEventDO::getServiceId, config.getServiceId()).eq(LlmCostAlertEventDO::getPeriodType, period.getPeriodType())
+            var existing = events.selectOne(Wrappers.lambdaQuery(LlmCostAlertEventDO.class).eq(LlmCostAlertEventDO::getTenantId, tenantId)
+                    .eq(LlmCostAlertEventDO::getScopeType, scope).eq(LlmCostAlertEventDO::getScopeId, scopeId).eq(LlmCostAlertEventDO::getPeriodType, period.getPeriodType())
                     .eq(LlmCostAlertEventDO::getPeriodStart, period.getPeriodStart()).eq(LlmCostAlertEventDO::getEventType, type).last("FOR UPDATE"));
             if (existing != null) continue;
-            var tenant = events.tenantSnapshot(config.getTenantId());
-            var service = services.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class).eq(LlmServiceDO::getTenantId, config.getTenantId())
-                    .eq(LlmServiceDO::getServiceId, config.getServiceId()));
+            var tenant = events.tenantSnapshot(tenantId);
             var event = new LlmCostAlertEventDO(); event.setId(SnowflakeIdUtil.nextId()); event.setEventId(String.valueOf(event.getId()));
-            event.setTenantId(config.getTenantId()); event.setServiceId(config.getServiceId()); event.setPeriodType(period.getPeriodType());
+            event.setTenantId(tenantId); event.setScopeType(scope); event.setScopeId(scopeId); event.setScopeName(scopeName);
+            event.setServiceId("LLM".equals(scope) ? scopeId : null); event.setPeriodType(period.getPeriodType());
             event.setPeriodStart(period.getPeriodStart()); event.setPeriodEnd(period.getPeriodEnd()); event.setEventType(type); event.setTriggeredAt(now);
-            event.setLimitFen(LlmCostBudgetLedger.limit(config, period.getPeriodType())); event.setUsedCostFen(period.getUsedCostFen());
+            event.setLimitFen(limit.apply(period.getPeriodType())); event.setUsedCostFen(period.getUsedCostFen());
             event.setRemainingCostFen(event.getLimitFen().subtract(event.getUsedCostFen()).max(BigDecimal.ZERO));
-            event.setThresholdPercent(config.getWarningThresholdPercent()); event.setConfigVersion(config.getConfigVersion());
-            var channels = "LIMIT".equals(type) ? List.of("IN_APP", "SMS", "EMAIL") : LlmCostBudgetLedger.channels(config);
-            event.setChannelsJson(JSON.toJSONString(channels)); event.setTenantName(tenant.getName()); event.setServiceName(service.getName());
+            event.setThresholdPercent(threshold); event.setConfigVersion(version);
+            var channels = "LIMIT".equals(type) ? List.of("IN_APP", "SMS", "EMAIL") : warningChannels;
+            event.setChannelsJson(JSON.toJSONString(channels)); event.setTenantName(tenant.getName()); event.setServiceName("LLM".equals(scope) ? scopeName : null);
             event.setRetryAt(retryAt); event.setActivityEnabledSnapshot(Integer.valueOf(1).equals(tenant.getActivityRecordingEnabled()));
             event.setActivityEventId(String.valueOf(SnowflakeIdUtil.nextId())); event.setNotificationId(SnowflakeIdUtil.nextId());
             event.setStatus("CREATED"); event.setCreateTime(now); event.setUpdateTime(now); events.insert(event);
-            if ("LIMIT".equals(type)) events.cancelWarning(config.getTenantId(), config.getServiceId(), period.getPeriodType(), period.getPeriodStart(), now);
+            if ("LIMIT".equals(type)) events.cancelWarning(tenantId, scope, scopeId, period.getPeriodType(), period.getPeriodStart(), now);
+            var recipientsSnapshot = deliveries.recipientSnapshot(tenantId);
             for (String channel : channels) {
-                int recipients = deliveries.snapshotRecipients(event.getEventId(), config.getTenantId(), channel, now);
+                int recipients = 0;
+                List<LlmCostAlertDeliveryDO> batch = new ArrayList<>(500);
+                for (var recipient : recipientsSnapshot) {
+                    if (!"IN_APP".equals(channel) && !List.of("ADMIN", "SUPER_ADMIN").contains(recipient.getRole())) continue;
+                    var task = new LlmCostAlertDeliveryDO(); task.setEventId(event.getEventId()); task.setChannel(channel);
+                    task.setRecipientUserId(recipient.getUserId());
+                    task.setRequestId(cn.hutool.crypto.digest.DigestUtil.sha256Hex(event.getEventId()+":"+channel+":"+recipient.getUserId()));
+                    String contact = "SMS".equals(channel) ? recipient.getPhone() : "EMAIL".equals(channel) ? recipient.getEmail() : null;
+                    task.setContactEncrypted(contact); task.setContactHash("SMS".equals(channel) ? recipient.getPhoneHash() : "EMAIL".equals(channel) ? recipient.getEmailHash() : null);
+                    boolean missing = !"IN_APP".equals(channel) && (contact == null || contact.isBlank());
+                    task.setStatus(missing ? "SKIPPED" : "PENDING"); task.setReasonCode(missing ? "SKIPPED_NO_CONTACT" : null);
+                    task.setAttemptCount(0); task.setNextRetryAt(now); task.setCreateTime(now); task.setUpdateTime(now);
+                    batch.add(task); recipients++;
+                    if (batch.size() == 500) { deliveries.insertBatch(batch); batch.clear(); }
+                }
+                if (!batch.isEmpty()) deliveries.insertBatch(batch);
                 if (recipients == 0) {
                     var skipped = new LlmCostAlertDeliveryDO(); skipped.setEventId(event.getEventId()); skipped.setChannel(channel);
                     skipped.setRecipientUserId(0L); skipped.setRequestId("empty:" + event.getEventId() + ":" + channel);
@@ -67,8 +100,8 @@ public class LlmCostAlertCaptureService {
                 task.setReasonCode(event.getActivityEnabledSnapshot() ? null : "SKIPPED_RECORDING_DISABLED"); task.setAttemptCount(0);
                 task.setNextRetryAt(now); task.setCreateTime(now); task.setUpdateTime(now); deliveries.insert(task);
             }
-            var wakeup = new LlmCostAlertEvent(); wakeup.setTenantId(config.getTenantId()); wakeup.setAlertEventId(event.getEventId());
-            wakeup.setKey(event.getEventId()); publisher.publish(wakeup, config.getTenantId());
+            var wakeup = new LlmCostAlertEvent(); wakeup.setTenantId(tenantId); wakeup.setAlertEventId(event.getEventId());
+            wakeup.setKey(event.getEventId()); publisher.publish(wakeup, tenantId);
         }
     }
 }

@@ -86,7 +86,7 @@ class CostBudgetMySqlIntegrationTest {
         var ledger = new LlmCostBudgetLedger(models,settlements,periods,proof,clock,new UsageOutboxProperties(),mock(LlmCostAlertCaptureService.class));
         ReflectionTestUtils.setField(ledger,"costingEnabled",true);
         CostBudgetService result = new CostBudgetService(keys, invocations, settlements, periods,
-                new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC)), proof, outbox, new UsageOutboxProperties(), manager, ledger);
+                new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC)), proof, outbox, new UsageOutboxProperties(), manager, ledger, com.yonagi.verse.support.BudgetTestSupport.disabledTenantLedger(), org.mockito.Mockito.mock(com.yonagi.verse.dao.mapper.UserMapper.class));
         ReflectionTestUtils.setField(result, "costingEnabled", true);
         return result;
     }

@@ -78,7 +78,7 @@ import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServiceDO> implements LlmManageService {
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public void deleteClosedUsersServices(Long userId) {
         baseMapper.deleteClosedUsersServices(userId);
     }
@@ -104,7 +104,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     private final LlmServiceCapabilityMapper capabilityMapper;
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean addLlmService(Long userId, Long tenantId, LlmServiceAddReqDTO requestParam) {
         validateTenantAndMembership(userId, tenantId);
         if (costConfiguration != null) costConfiguration.requireAdmin(tenantId, userId);
@@ -235,7 +235,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean updateLlmService(Long userId, Long tenantId, Long serviceId, LlmServiceUpdateReqDTO requestParam) {
         validateTenantAndMembership(userId, tenantId);
 
@@ -515,7 +515,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean disableLlmService(Long userId, Long tenantId, Long serviceId) {
         validateTenantAndMembership(userId, tenantId);
         LlmServiceDO llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
@@ -548,7 +548,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean enableLlmService(Long userId, Long tenantId, Long serviceId) {
         validateTenantAndMembership(userId, tenantId);
         LlmServiceDO llmServiceDO = baseMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
@@ -598,7 +598,7 @@ public class LlmManageServiceImpl extends ServiceImpl<LlmServiceMapper, LlmServi
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean removeLlmService(Long userId, Long tenantId, Long serviceId, LlmServiceRemoveReqDTO requestParam) {
         validateTenantAndMembership(userId, tenantId);
         String requestToken = requestParam.getToken();

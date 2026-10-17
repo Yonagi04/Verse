@@ -26,6 +26,9 @@ public class TenantDO extends BaseDO {
      */
     private Long tenantId;
 
+    /** 整份设置并发版本。 */
+    private Long settingsVersion;
+
     /**
      * 租户名称
      */

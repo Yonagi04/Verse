@@ -14,7 +14,7 @@ public class CostLimitExceededException extends ClientException {
         this(new CostBudgetDecision(status.limits(), false));
     }
     public CostLimitExceededException(CostBudgetDecision status) {
-        super(("LLM".equals(status.limits().getFirst().scope()) ? "此模型 " : "此 API Key ") + switch (status.limits().getFirst().period()) {
+        super((switch (status.limits().getFirst().scope()) { case "TENANT" -> "此租户"; case "LLM" -> "此模型 "; default -> "此 API Key "; }) + switch (status.limits().getFirst().period()) {
             case "DAY" -> "本日"; case "WEEK" -> "本周"; default -> "本月";
         } + "的调用成本已达到限额，请联系管理员调整限额或等待相关周期重置后再重试。",
                 CostBudgetErrorCodeEnum.LIMIT_EXCEEDED);

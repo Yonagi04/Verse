@@ -210,7 +210,7 @@ class NotificationCreationTransactionIntegrationTest {
         UserTenantDO member = new UserTenantDO();
         member.setUserId(30L);
         when(memberships.getTenantAllMembers(20L)).thenReturn(List.of(member, member));
-        var tenant = new TenantCrudServiceImpl(mock(TenantAccessPolicy.class), mock(TenantMapper.class),
+        var tenant = new TenantCrudServiceImpl(mock(TenantAccessPolicy.class), mock(TenantMapper.class), mock(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class),
                 memberships, mock(UserMapper.class), mock(StringRedisTemplate.class), mock(JwtUtil.class),
                 service, mock(TenantValidationHelper.class), notifications, mock(TenantMediaService.class),
                 mock(CurrentTenantStateService.class), mock(TenantActivityRecorder.class));

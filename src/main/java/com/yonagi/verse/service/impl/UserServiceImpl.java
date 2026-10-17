@@ -595,7 +595,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public Boolean confirmCloseAccount(Long userId, ConfirmCloseAccountReqDTO requestParam) {
         // 与加入流程保持租户锁在用户锁之前，锁一直持有至注销和租户停用一起提交。
-        List<Long> lockedTeamTenantIds = tenantCrudService.lockOwnedTeamTenantsForAccountClosure(userId);
+        List<Long> lockedTenantIds = tenantCrudService.lockOwnedTenantsForAccountClosure(userId);
         securityGuards.ensure(userId); securityGuards.lock(userId);
         // 注销与绑定共用身份锁序，删除当前关系并释放外部身份名额。
         var bindings = externalBindings.selectList(Wrappers.lambdaQuery(com.yonagi.verse.dao.entity.UserExternalBindingDO.class)
@@ -612,7 +612,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         // 锁范围变化时要求重试，不在用户锁后补拿租户锁；角色和人数仍实时复核。
         validateAccountClosureHandover(userId);
-        tenantCrudService.validateAccountClosureTenantLocks(userId, lockedTeamTenantIds);
+        tenantCrudService.validateAccountClosureTenantLocks(userId, lockedTenantIds);
 
         // 验证验证码是否正确
         String codeKey = RedisKeyConstant.USER_CLOSE_ACCOUNT_SENDING_CODE_KEY + userId;
@@ -650,7 +650,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         securityGuards.invalidate(userId);
 
         // 提交前关闭单人团队，免审批加入即使已通过入口校验，也会在租户行锁后被拒绝。
-        tenantCrudService.deleteClosedUsersPersonalAndSoleMemberTenants(userId);
+        tenantCrudService.deleteClosedUsersLockedTenants(userId, lockedTenantIds);
 
         // 清理任务与注销状态原子提交；Broker 故障由现有 Outbox Relay 重试。
         reliableEvents.publish(com.yonagi.verse.async.event.UserClosedEvent.initial(userId), 0L);

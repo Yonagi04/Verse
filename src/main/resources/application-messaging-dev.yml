@@ -9,6 +9,8 @@ verse:
       closure-template-code: ${VERSE_SMS_CLOSURE_TEMPLATE_CODE:10002}
       cost-warning-template-code: ${VERSE_SMS_COST_WARNING_TEMPLATE_CODE:10003}
       cost-limit-template-code: ${VERSE_SMS_COST_LIMIT_TEMPLATE_CODE:10004}
+      tenant-cost-warning-template-code: ${VERSE_SMS_TENANT_COST_WARNING_TEMPLATE_CODE:10005}
+      tenant-cost-limit-template-code: ${VERSE_SMS_TENANT_COST_LIMIT_TEMPLATE_CODE:10006}
       daily-limit: ${VERSE_SMS_DAILY_LIMIT:10}
     email:
       provider: mailpit

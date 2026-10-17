@@ -11,6 +11,9 @@ public class LlmCostAlertEventDO {
     /** 事件主键。 */ private Long id;
     /** 稳定业务标识。 */ private String eventId;
     /** 租户标识。 */ private Long tenantId;
+    /** 告警作用域。 */ private String scopeType;
+    /** 作用域对象标识。 */ private Long scopeId;
+    /** 触发时对象名称。 */ private String scopeName;
     /** 模型标识。 */ private Long serviceId;
     /** 自然周期类型。 */ private String periodType;
     /** 周期开始。 */ private LocalDateTime periodStart;

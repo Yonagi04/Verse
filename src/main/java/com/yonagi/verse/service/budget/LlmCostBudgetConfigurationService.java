@@ -26,9 +26,13 @@ public class LlmCostBudgetConfigurationService {
     private final TenantAccessPolicy access;
     private final LlmCostBudgetLedger ledger;
     private final BudgetPeriodResolver time;
+    private final UserMapper users;
 
     public String requireMember(Long tenantId, Long userId) {
-        access.activeTenant(tenantId);
+        // 先以租户共享锁协调两种历史成员写锁序，避免多表 JOIN 的锁序由执行计划决定。
+        access.lockActiveTenantForShare(tenantId);
+        if (users.selectActiveUserForShare(userId) == null)
+            throw new ClientException(TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
         String role = budgets.role(tenantId, userId);
         if (!List.of("MEMBER", "ADMIN", "SUPER_ADMIN").contains(role == null ? "" : role))
             throw new ClientException(TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
@@ -109,7 +113,7 @@ public class LlmCostBudgetConfigurationService {
                 .set(LlmCostBudgetDO::getWarningThresholdPercent, row.getWarningThresholdPercent()).set(LlmCostBudgetDO::getWarningChannels, row.getWarningChannels())
                 .set(LlmCostBudgetDO::getConfigVersion, row.getConfigVersion()).set(LlmCostBudgetDO::getUpdateTime, row.getUpdateTime()));
     }
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public LlmCostStatusRespDTO update(Long userId, Long tenantId, Long serviceId, LlmCostBudgetUpdateReqDTO patch) {
         requireAdmin(tenantId, userId);
         var service = lockService(tenantId, serviceId);
@@ -122,13 +126,13 @@ public class LlmCostBudgetConfigurationService {
         return services.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class).eq(LlmServiceDO::getTenantId, tenantId)
                 .eq(LlmServiceDO::getServiceId, serviceId).eq(LlmServiceDO::getDelFlag, 0));
     }
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public LlmCostStatusRespDTO status(Long userId, Long tenantId, Long serviceId) {
         boolean admin = isAdmin(requireMember(tenantId, userId));
         exists(tenantId, List.of(serviceId));
         return view(tenantId, serviceId, admin);
     }
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public LlmCostStatusRespDTO.Batch statuses(Long userId, Long tenantId, List<Long> serviceIds) {
         boolean admin = isAdmin(requireMember(tenantId, userId));
         if (serviceIds == null || serviceIds.isEmpty() || serviceIds.size() > 100 || serviceIds.stream().anyMatch(Objects::isNull))

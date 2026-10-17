@@ -53,6 +53,7 @@ class RocketMQEventPublisherTest {
                     EventHandlerRegistry.class, RocketMQConsumerDispatcher.class)
             .withBean(RocketMQTemplate.class, () -> mock(RocketMQTemplate.class))
             .withBean(UserMapper.class, () -> mock(UserMapper.class))
+            .withBean(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class, () -> mock(com.yonagi.verse.service.budget.TenantCostBudgetLedger.class))
             .withBean(TenantMapper.class, () -> mock(TenantMapper.class))
             .withBean(com.yonagi.verse.service.tenant.TenantAccessPolicy.class,
                     () -> mock(com.yonagi.verse.service.tenant.TenantAccessPolicy.class))

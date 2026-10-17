@@ -37,6 +37,12 @@ import static org.mockito.Mockito.when;
 
 class TenantSettingsServiceImplTest {
 
+    @org.junit.jupiter.api.BeforeEach void beginSynchronization() {
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+    }
+    @org.junit.jupiter.api.AfterEach void clearSynchronization() {
+        org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+    }
     @BeforeAll
     static void initTableInfo() {
         MybatisConfiguration configuration = new MybatisConfiguration();
@@ -70,7 +76,7 @@ class TenantSettingsServiceImplTest {
         saved.setRateLimitTpm(60000);
         Fixture fixture = fixture("ADMIN", before);
         when(fixture.tenantMapper.update(any())).thenReturn(1);
-        when(fixture.tenantMapper.selectOne(any())).thenReturn(before, saved);
+        when(fixture.tenantMapper.selectOne(any())).thenReturn(saved);
 
         TenantSettingsUpdateReqDTO request = validRequest();
         request.setName("  Verse 团队  ");
@@ -85,6 +91,7 @@ class TenantSettingsServiceImplTest {
         assertNull(response.getRateLimitRpm());
         assertEquals(60000, response.getRateLimitTpm());
         assertTrue(response.getEditable());
+        org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations().forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
         verify(fixture.redisTemplate).delete("verse:tenant:info:20");
         verify(fixture.rateLimiter).invalidateTenantRpm(20L);
     }
@@ -117,7 +124,7 @@ class TenantSettingsServiceImplTest {
         TenantDO enabled = teamTenant(); enabled.setActivityRecordingEnabled(1);
         Fixture fixture = fixture("ADMIN", before); TenantActivityRecorder recorder = fixture.activityRecorder;
         when(fixture.tenantMapper.update(any())).thenReturn(1);
-        when(fixture.tenantMapper.selectOne(any())).thenReturn(before, enabled);
+        when(fixture.tenantMapper.selectOne(any())).thenReturn(enabled);
         TenantSettingsUpdateReqDTO request = validRequest(); request.setActivityRecordingEnabled(true);
         fixture.service.updateSettings(10L, 20L, request);
         ArgumentCaptor<TenantActivityDraft> captor=ArgumentCaptor.forClass(TenantActivityDraft.class);
@@ -125,7 +132,7 @@ class TenantSettingsServiceImplTest {
         assertEquals(TenantActivityType.ACTIVITY_RECORDING_ENABLED,captor.getValue().type());
 
         reset(recorder); before.setActivityRecordingEnabled(1); TenantDO disabled=teamTenant(); disabled.setActivityRecordingEnabled(0);
-        when(fixture.tenantMapper.selectOne(any())).thenReturn(before,disabled); request.setActivityRecordingEnabled(false);
+        when(fixture.tenantMapper.selectOne(any())).thenReturn(disabled); request.setActivityRecordingEnabled(false);
         fixture.service.updateSettings(10L,20L,request); verify(recorder).recordToggle(eq(20L),captor.capture());
         assertEquals(TenantActivityType.ACTIVITY_RECORDING_DISABLED,captor.getValue().type());
     }
@@ -161,6 +168,9 @@ class TenantSettingsServiceImplTest {
         membership.setTenantId(20L);
         membership.setRole(role);
         when(userTenantMapper.selectOne(any())).thenReturn(membership);
+        when(userTenantMapper.lockActiveJoiningUser(10L)).thenReturn(10L);
+        when(userTenantMapper.selectActiveMembershipForUpdate(10L,20L)).thenReturn(membership);
+        when(tenantMapper.selectActiveTenantForUpdate(20L)).thenReturn(tenant);
         when(tenantMapper.selectOne(any())).thenReturn(tenant);
         return new Fixture(tenantMapper, redisTemplate, rateLimiter, activityRecorder,
                 new TenantSettingsServiceImpl(new TenantAccessPolicy(tenantMapper, userTenantMapper),
@@ -173,7 +183,7 @@ class TenantSettingsServiceImplTest {
 
     private static TenantDO teamTenant() {
         TenantDO tenant = new TenantDO();
-        tenant.setTenantId(20L);
+        tenant.setTenantId(20L); tenant.setSettingsVersion(0L);
         tenant.setType("TEAM");
         tenant.setName("旧名称");
         tenant.setJoinApprovalMode(0);

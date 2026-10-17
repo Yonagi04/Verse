@@ -51,6 +51,10 @@ public class MessagingProperties {
         private String costWarningTemplateCode = "10003";
         /** 已审核成本达限模板；生产必须显式配置。 */
         private String costLimitTemplateCode = "10004";
+        /** 已审核的租户预警模板；通过环境配置。 */
+        private String tenantCostWarningTemplateCode;
+        /** 已审核的租户达限模板；通过环境配置。 */
+        private String tenantCostLimitTemplateCode;
         /** 每手机号首次计数起 24 小时固定窗口内的发码尝试上限，包含明确拒绝。 */
         private int dailyLimit = 10;
         /** 模拟服务 API 地址。 */

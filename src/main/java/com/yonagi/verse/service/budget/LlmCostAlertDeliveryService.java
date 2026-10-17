@@ -38,7 +38,10 @@ public class LlmCostAlertDeliveryService {
     private final BudgetPeriodResolver time;
     private final MeterRegistry metrics;
     private final TransactionTemplate tx;
-    /** 本实例轮询游标；进程重启可从头重扫，派发仍由数据库锁和固定请求 ID 保证幂等。 */
+    /** 受信前端地址，不接受事件载荷中的跳转目标。 */
+    @org.springframework.beans.factory.annotation.Value("${verse.frontend-baseurl}")
+    private String frontendBaseUrl;
+    /** 本实例轮询游标，重启重扫由固定请求 ID 保证幂等。 */
     private long scanAfterId;
     /** 本轮固定上界，避免持续入队导致旧任务一直无法重访。 */
     private long scanThroughId;
@@ -50,6 +53,7 @@ public class LlmCostAlertDeliveryService {
         this.events=events; this.deliveries=deliveries; this.ledger=ledger; this.guard=guard; this.notifications=notifications;
         this.activities=activities; this.sms=sms; this.email=email; this.smsRecords=smsRecords; this.emailRecords=emailRecords;
         this.properties=properties; this.aes=aes; this.time=time; this.metrics=metrics; this.tx=new TransactionTemplate(manager);
+        this.tx.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
     }
     @Scheduled(fixedDelayString="${verse.llm.cost-alert.poll-millis:2000}")
     public synchronized void scan() {
@@ -80,7 +84,7 @@ public class LlmCostAlertDeliveryService {
         var event=events.selectOne(Wrappers.lambdaQuery(LlmCostAlertEventDO.class).eq(LlmCostAlertEventDO::getEventId,lookup.getEventId()));
         if (event==null) throw new IllegalStateException("alert event missing");
         var task=tx.execute(ignored -> {
-            var config=ledger.lock(event.getTenantId(),event.getServiceId());
+            var config=guard.lockState(event);
             events.lock(event.getEventId());
             var row=deliveries.lock(lookup.getId());
             if (row==null || !List.of("PENDING","RETRY_WAIT","CLAIMED","QUEUED").contains(row.getStatus())) return null;
@@ -99,9 +103,9 @@ public class LlmCostAlertDeliveryService {
             if ("QUEUED".equals(row.getStatus())) { finish(row,"UNKNOWN","SEND_RECORD_MISSING"); return null; }
             String invalid=guard.stateReason(event,config);
             if (invalid!=null) { finish(row,"CANCELLED",invalid); return null; }
-            if (!ledger.ready(config,time.now())) { waitOrExpire(row,"BUDGET_UNAVAILABLE"); return null; }
+            if (!config.ready()) { waitOrExpire(row,"BUDGET_UNAVAILABLE"); return null; }
             if ("IN_APP".equals(row.getChannel())) { createAnnouncement(event,config); return null; }
-            invalid=guard.recipientReason(event,row);
+            invalid=guard.recipientReason(event,row,config);
             if (invalid!=null) { finish(row,"CANCELLED",invalid); return null; }
             if (!row.getCreateTime().plus(properties.getAsync().getMaxTaskAge()).isAfter(now)) { finish(row,"EXPIRED","TASK_EXPIRED"); return null; }
             row.setStatus("CLAIMED"); row.setExecutionToken(UUID.randomUUID().toString()); row.setLeaseUntil(now.plusSeconds(30));
@@ -123,16 +127,16 @@ public class LlmCostAlertDeliveryService {
         if ("EMAIL".equals(task.getChannel())) return emailRecords.selectOne(Wrappers.lambdaQuery(EmailSendRecordDO.class).eq(EmailSendRecordDO::getRequestId,task.getRequestId()));
         return null;
     }
-    private void createAnnouncement(LlmCostAlertEventDO event,LlmCostBudgetDO config) {
+    private void createAnnouncement(LlmCostAlertEventDO event,CostAlertDeliveryGuard.State config) {
         var candidates=deliveries.selectList(Wrappers.lambdaQuery(LlmCostAlertDeliveryDO.class).eq(LlmCostAlertDeliveryDO::getEventId,event.getEventId())
                 .eq(LlmCostAlertDeliveryDO::getChannel,"IN_APP").in(LlmCostAlertDeliveryDO::getStatus,"PENDING","RETRY_WAIT","CLAIMED").last("FOR UPDATE"));
         List<Long> recipients=new ArrayList<>();
         for (var row:candidates) {
-            String invalid=guard.recipientReason(event,row);
+            String invalid=guard.recipientReason(event,row,config);
             if (invalid==null) recipients.add(row.getRecipientUserId()); else finish(row,"CANCELLED",invalid);
         }
         if (recipients.isEmpty()) return;
-        String retryAt=ledger.decision(config).retryAt();
+        String retryAt=config.decision().get().retryAt();
         NotificationEvent notification=new NotificationEvent(); notification.setNotificationId(event.getNotificationId()); notification.setTenantId(event.getTenantId());
         notification.setType("SYSTEM"); notification.setSeverity("LIMIT".equals(event.getEventType()) ? "CRITICAL" : "WARNING");
         notification.setTitle(LlmCostAlertTemplates.title(event)); notification.setContent(LlmCostAlertTemplates.publicBody(event,retryAt));
@@ -140,11 +144,12 @@ public class LlmCostAlertDeliveryService {
         for (var row:candidates) if (recipients.contains(row.getRecipientUserId())) finish(row,"ACCEPTED",null);
     }
     private MessageSubmissionRespDTO enqueue(LlmCostAlertEventDO event,LlmCostAlertDeliveryDO task) {
-        boolean warning="WARNING".equals(event.getEventType()); String scene=warning ? "LLM_COST_WARNING" : "LLM_COST_LIMIT";
+        boolean warning="WARNING".equals(event.getEventType()); boolean tenant="TENANT".equals(event.getScopeType()); String scene=(tenant ? "TENANT_COST_" : "LLM_COST_")+(warning ? "WARNING" : "LIMIT");
         String contact=aes.decrypt(task.getContactEncrypted());
         if ("SMS".equals(task.getChannel())) {
             if ("disabled".equals(properties.getSms().getProvider())) return MessageSubmissionRespDTO.rejected("CHANNEL_DISABLED");
-            String template=warning ? properties.getSms().getCostWarningTemplateCode() : properties.getSms().getCostLimitTemplateCode();
+            String template=tenant ? (warning ? properties.getSms().getTenantCostWarningTemplateCode() : properties.getSms().getTenantCostLimitTemplateCode())
+                    : (warning ? properties.getSms().getCostWarningTemplateCode() : properties.getSms().getCostLimitTemplateCode());
             if (template==null || template.isBlank()) return MessageSubmissionRespDTO.rejected("TEMPLATE_MISSING");
             return sms.send(new SmsSendReqDTO(task.getRequestId(),scene,task.getRecipientUserId(),event.getTenantId(),
                     properties.getSms().getSignName(),contact,template,LlmCostAlertTemplates.sms(event)));
@@ -152,7 +157,13 @@ public class LlmCostAlertDeliveryService {
         if ("disabled".equals(properties.getEmail().getProvider())) return MessageSubmissionRespDTO.rejected("CHANNEL_DISABLED");
         return email.send(new EmailSendReqDTO(task.getRequestId(),scene,task.getRecipientUserId(),event.getTenantId(),contact,
                 "【"+LlmCostAlertTemplates.safe(properties.getEmail().getFromAlias())+"】"+LlmCostAlertTemplates.safe(event.getTenantName())+" "+LlmCostAlertTemplates.title(event),
-                LlmCostAlertTemplates.emailBody(event),null));
+                LlmCostAlertTemplates.emailBody(event) + "\n管理入口：" + settingsLink(event),null));
+    }
+    private String settingsLink(LlmCostAlertEventDO event) {
+        var origin = java.net.URI.create(frontendBaseUrl);
+        if (!List.of("http","https").contains(origin.getScheme()) || origin.getHost() == null || origin.getUserInfo() != null)
+            throw new IllegalStateException("Invalid frontend origin");
+        return origin.getScheme()+"://"+origin.getRawAuthority()+"/tenants/"+event.getTenantId()+"?tab=settings";
     }
     private void updateClaim(LlmCostAlertDeliveryDO task,MessageSubmissionRespDTO result,String reason) {
         var row=deliveries.lock(task.getId());

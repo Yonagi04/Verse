@@ -10,6 +10,10 @@ import java.util.List;
 public interface CostBudgetSettlementMapper extends BaseMapper<CostBudgetSettlementDO> {
     @Select("SELECT * FROM t_cost_budget_settlement WHERE event_id=#{eventId} FOR UPDATE")
     CostBudgetSettlementDO lockEvent(@Param("eventId") String eventId);
+    @Select("SELECT * FROM t_cost_budget_settlement WHERE tenant_id=#{tenantId} AND budget_applied=1 "
+            + "AND request_started_at >= #{start} AND request_started_at < #{end} ORDER BY id")
+    List<CostBudgetSettlementDO> tenantHistory(@Param("tenantId") Long tenantId,
+            @Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
     @Select("SELECT * FROM t_cost_budget_settlement WHERE budget_applied=0 ORDER BY id LIMIT 100")
     List<CostBudgetSettlementDO> pending();
     @Select("SELECT * FROM t_cost_budget_settlement WHERE tenant_id=#{tenantId} AND api_key_id=#{keyId} "

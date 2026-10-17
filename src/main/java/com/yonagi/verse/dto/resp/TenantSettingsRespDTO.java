@@ -13,6 +13,9 @@ public class TenantSettingsRespDTO {
     /** 租户业务 ID */
     private Long tenantId;
 
+    /** 整份设置并发版本，字符串防止精度丢失。 */
+    private String settingsVersion;
+
     /** 租户类型：PERSONAL / TEAM */
     private String type;
 

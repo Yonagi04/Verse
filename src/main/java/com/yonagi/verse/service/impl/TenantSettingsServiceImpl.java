@@ -58,16 +58,20 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public TenantSettingsRespDTO updateSettings(Long userId, Long tenantId,
                                                  TenantSettingsUpdateReqDTO requestParam) {
-        UserTenantDO membership = requireMembership(userId, tenantId);
+        TenantDO locked = tenantMapper.selectActiveTenantForUpdate(tenantId);
+        if (locked == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        if (userTenantMapper.lockActiveJoiningUser(userId) == null) throw new ClientException(TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
+        UserTenantDO membership = userTenantMapper.selectActiveMembershipForUpdate(userId, tenantId);
+        if (membership == null) throw new ClientException(TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
         RoleEnum role = RoleEnum.valueOf(membership.getRole());
         if (!role.isAdmin()) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
         }
 
-        TenantDO tenant = requireActiveTenant(tenantId);
+        TenantDO tenant = locked;
         Integer approvalMode = requestParam.getJoinApprovalMode();
         if (approvalMode == null || (approvalMode != 0 && approvalMode != 1)) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_APPROVAL_MODE_INVALID);
@@ -89,10 +93,12 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
                 ? oldPlaygroundEnabled : Boolean.TRUE.equals(requestParam.getPlaygroundEnabled());
         java.util.List<String> changedFields = changedFields(tenant, name, description, approvalMode,
                 requestParam.getAuditEnabled(), rpm, tpm, newActivityEnabled, newPlaygroundEnabled);
+        if (changedFields.isEmpty()) return toResponse(tenant, membership.getRole());
         int updated = tenantMapper.update(Wrappers.lambdaUpdate(TenantDO.class)
                 .eq(TenantDO::getTenantId, tenantId)
                 .eq(TenantDO::getStatus, 1)
                 .eq(TenantDO::getDelFlag, 0)
+                .set(TenantDO::getSettingsVersion, Math.addExact(tenant.getSettingsVersion(), 1))
                 .set(TenantDO::getName, name)
                 .set(TenantDO::getDescription, description)
                 .set(TenantDO::getJoinApprovalMode,
@@ -119,8 +125,13 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
         }
 
         // 设置保存后只清租户详情缓存和 RPM 配置；当前分钟 TPM 已用量必须保留。
-        stringRedisTemplate.delete(RedisKeyConstant.TENANT_INFO_KEY + tenantId);
-        rateLimiter.invalidateTenantRpm(tenantId);
+        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override public void afterCommit() {
+                        stringRedisTemplate.delete(RedisKeyConstant.TENANT_INFO_KEY + tenantId);
+                        rateLimiter.invalidateTenantRpm(tenantId);
+                    }
+                });
 
         TenantDO saved = requireActiveTenant(tenantId);
         return toResponse(saved, membership.getRole());
@@ -137,6 +148,7 @@ public class TenantSettingsServiceImpl implements TenantSettingsService {
     private TenantSettingsRespDTO toResponse(TenantDO tenant, String role) {
         TenantSettingsRespDTO response = new TenantSettingsRespDTO();
         response.setTenantId(tenant.getTenantId());
+        response.setSettingsVersion(String.valueOf(tenant.getSettingsVersion()));
         response.setType(tenant.getType());
         response.setName(tenant.getName());
         response.setDescription(tenant.getDescription());

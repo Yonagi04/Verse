@@ -50,7 +50,7 @@ class ApiKeyCostConfigurationTest {
     @BeforeEach void setup() {
         budget = new CostBudgetService(keys, invocations, mock(CostBudgetSettlementMapper.class), mock(CostBudgetPeriodMapper.class),
                 new BudgetPeriodResolver(), registry, mock(UsageOutboxStager.class), outbox,
-                mock(PlatformTransactionManager.class), mock(LlmCostBudgetLedger.class));
+                mock(PlatformTransactionManager.class), mock(LlmCostBudgetLedger.class), com.yonagi.verse.support.BudgetTestSupport.disabledTenantLedger(), org.mockito.Mockito.mock(com.yonagi.verse.dao.mapper.UserMapper.class));
         ReflectionTestUtils.setField(budget, "costingEnabled", true);
         when(invocations.unfinished(anyLong(), anyLong(), any())).thenReturn(List.of());
         when(tenants.selectOne(any())).thenReturn(new TenantDO());

@@ -67,6 +67,7 @@ public class TenantCrudServiceImpl implements TenantCrudService {
 
     private final TenantAccessPolicy tenantAccess;
     private final TenantMapper tenantMapper;
+    private final com.yonagi.verse.service.budget.TenantCostBudgetLedger tenantBudgets;
     private final UserTenantService userTenantService;
     private final UserMapper userMapper;
     private final StringRedisTemplate stringRedisTemplate;
@@ -80,11 +81,11 @@ public class TenantCrudServiceImpl implements TenantCrudService {
 
     @Override
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
-    public List<Long> lockOwnedTeamTenantsForAccountClosure(Long userId) {
+    public List<Long> lockOwnedTenantsForAccountClosure(Long userId) {
         // 最终注销低频且要求实时；按现有所有者索引读取候选，逐个主键加锁避免锁序不一致。
         List<Long> locked = new ArrayList<>();
-        for (Long tenantId : tenantMapper.selectActiveOwnedTeamTenantIds(userId)) {
-            if (tenantMapper.lockActiveOwnedTeamTenantForClosure(userId, tenantId) != null) {
+        for (Long tenantId : tenantMapper.selectOwnedTenantIdsForClosure(userId).stream().distinct().sorted().toList()) {
+            if (tenantMapper.lockOwnedTenantForClosure(userId, tenantId) != null) {
                 locked.add(tenantId);
             }
         }
@@ -93,10 +94,18 @@ public class TenantCrudServiceImpl implements TenantCrudService {
 
     @Override
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
-    public void validateAccountClosureTenantLocks(Long userId, List<Long> lockedTeamTenantIds) {
+    public void validateAccountClosureTenantLocks(Long userId, List<Long> lockedTenantIds) {
         // 不缓存所有权；获取用户锁前可能有新租户提交，不能在用户锁后补拿租户锁。
-        if (!lockedTeamTenantIds.containsAll(tenantMapper.selectActiveOwnedTeamTenantIds(userId))) {
+        if (!lockedTenantIds.containsAll(tenantMapper.selectOwnedTenantIdsForClosure(userId))) {
             throw new ClientException(UserErrorCodeEnum.USER_ACCOUNT_CLOSURE_TENANTS_CHANGED);
+        }
+    }
+
+    @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void deleteClosedUsersLockedTenants(Long userId, List<Long> lockedTenantIds) {
+        for (Long tenantId : lockedTenantIds.stream().distinct().sorted().toList()) {
+            tenantMapper.deleteClosedUsersLockedTenant(userId, tenantId);
         }
     }
 
@@ -193,19 +202,21 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         if (!isJoinedTenant) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         }
-        TenantDO before = tenantMapper.selectOne(Wrappers.lambdaQuery(TenantDO.class)
-                .eq(TenantDO::getTenantId, tenantId).eq(TenantDO::getStatus, 1).eq(TenantDO::getDelFlag, 0));
+        TenantDO before = tenantMapper.selectActiveTenantForUpdate(tenantId);
         LambdaUpdateWrapper<TenantDO> updateWrapper = Wrappers.lambdaUpdate(TenantDO.class)
                 .eq(TenantDO::getTenantId, tenantId)
                 .eq(TenantDO::getStatus, 1)
                 .eq(TenantDO::getDelFlag, 0)
                 .set(TenantDO::getName, requestParam.getName());
         if (StrUtil.isNotBlank(requestParam.getDescription())) {
-            updateWrapper.set(TenantDO::getDescription, requestParam.getDescription());
+            updateWrapper.set(TenantDO::getDescription, StrUtil.trimToNull(requestParam.getDescription()));
         } else if (requestParam.getDescription() != null) {
             updateWrapper.set(TenantDO::getDescription, null);
         }
 
+        boolean profileChanged = before != null && (!java.util.Objects.equals(before.getName(), requestParam.getName())
+                || requestParam.getDescription() != null && !java.util.Objects.equals(before.getDescription(), StrUtil.trimToNull(requestParam.getDescription())));
+        if (profileChanged) updateWrapper.set(TenantDO::getSettingsVersion, Math.addExact(before.getSettingsVersion(), 1));
         int update = tenantMapper.update(updateWrapper);
         if (update < 1) {
             log.error("Update tenant failed, tenantId: {}, userId: {}", tenantId, userId);
@@ -377,12 +388,14 @@ public class TenantCrudServiceImpl implements TenantCrudService {
         tenantDO.setOwnerId(userId);
         tenantDO.setDescription(description);
         tenantDO.setStatus(1);
+        tenantDO.setSettingsVersion(0L);
         int tenantInserted = tenantMapper.insert(tenantDO);
         if (tenantInserted < 1) {
             log.error("Create tenant failed, tenantName: {}, type: {}, userId: {}", name, type, userId);
             throw new ServerException(TenantErrorCodeEnum.TENANT_CREATE_ERROR);
         }
 
+        tenantBudgets.create(tenantId);
         Boolean createUserTenantResult = userTenantService.createUserTenant(userId, tenantId, RoleEnum.SUPER_ADMIN.name());
         if (createUserTenantResult.equals(Boolean.FALSE)) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_CREATE_ERROR);

@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS `t_user` (
 CREATE TABLE IF NOT EXISTS `t_tenant` (
     `id`          BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `tenant_id`   BIGINT       NOT NULL COMMENT '租户唯一标识（业务ID）',
+    `settings_version` BIGINT NOT NULL DEFAULT 0 COMMENT '整份租户设置并发版本',
     `name`        VARCHAR(100) NOT NULL COMMENT '租户名称',
     `type`        VARCHAR(20)  NOT NULL COMMENT '类型：PERSONAL / TEAM',
     `owner_id`    BIGINT       NOT NULL COMMENT '租户所有者用户ID，团队租户随超管交接更新',
@@ -720,6 +721,7 @@ CREATE TABLE IF NOT EXISTS t_cost_budget_invocation (
     PRIMARY KEY(id),
     UNIQUE KEY uk_budget_invocation_request(request_id),
     UNIQUE KEY uk_budget_invocation_event(event_id),
+    KEY idx_budget_invocation_tenant(tenant_id,request_started_at,state,id),
     KEY idx_budget_invocation_key(tenant_id,api_key_id,request_started_at,state),
     KEY idx_budget_invocation_recovery(state,update_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='成本调用接管及异常栅栏';
@@ -740,13 +742,14 @@ CREATE TABLE IF NOT EXISTS t_cost_budget_settlement (
     currency VARCHAR(8) NOT NULL COMMENT '币种',
     event_payload_json LONGTEXT NOT NULL COMMENT '可重放费用终态',
     payload_hash CHAR(64) NOT NULL COMMENT '不可变快照摘要',
-    budget_applied TINYINT NOT NULL DEFAULT 0 COMMENT 'Key与模型累计及LIVE Outbox是否已在同一事务提交：0否，1是',
+    budget_applied TINYINT NOT NULL DEFAULT 0 COMMENT '租户、Key与模型累计及LIVE Outbox是否已在同一事务提交：0否，1是',
     origin VARCHAR(24) NOT NULL COMMENT '账本来源：LIVE实时结算，HISTORY_IMPORT历史导入',
     create_time DATETIME(6) NOT NULL COMMENT '暂存时间',
     applied_at DATETIME(6) NULL COMMENT '同步结算时间',
     PRIMARY KEY(id),
     UNIQUE KEY uk_budget_settlement_event(event_id),
     UNIQUE KEY uk_budget_settlement_request(tenant_id,source,request_id),
+    KEY idx_budget_settlement_tenant(tenant_id,request_started_at,id),
     KEY idx_budget_settlement_rebuild(tenant_id,api_key_id,request_started_at,id),
     KEY idx_budget_settlement_pending(budget_applied,id),
     KEY idx_budget_settlement_model(tenant_id,service_id,request_started_at,id)
@@ -755,8 +758,8 @@ CREATE TABLE IF NOT EXISTS t_cost_budget_settlement (
 CREATE TABLE IF NOT EXISTS t_cost_budget_period (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '累计主键',
     tenant_id BIGINT NOT NULL COMMENT '租户标识',
-    scope_type VARCHAR(16) NOT NULL COMMENT '预算作用域：API_KEY个人密钥，LLM模型服务',
-    scope_id BIGINT NOT NULL COMMENT '对应作用域的API Key或模型服务业务ID',
+    scope_type VARCHAR(16) NOT NULL COMMENT '预算作用域：TENANT租户，API_KEY个人密钥，LLM模型服务',
+    scope_id BIGINT NOT NULL COMMENT '对应作用域的租户、API Key或模型服务业务ID',
     period_type VARCHAR(8) NOT NULL COMMENT 'DAY/WEEK/MONTH',
     period_start DATETIME(6) NOT NULL COMMENT '上海周期开始，含',
     period_end DATETIME(6) NOT NULL COMMENT '上海周期结束，不含',
@@ -836,6 +839,23 @@ CREATE TABLE IF NOT EXISTS t_email_send_record (
     KEY idx_email_task_stale (status, update_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='邮件服务商调用记录，不表示送达';
 
+CREATE TABLE IF NOT EXISTS t_tenant_cost_budget (
+    id BIGINT NOT NULL PRIMARY KEY COMMENT '预算配置主键',
+    tenant_id BIGINT NOT NULL COMMENT '租户业务ID',
+    cost_limit_enabled TINYINT NOT NULL DEFAULT 0 COMMENT '成本限额开关：0关闭，1开启',
+    daily_limit_fen DECIMAL(20,0) NULL COMMENT '日限额，整数分；NULL表示不限制日额度',
+    weekly_limit_fen DECIMAL(20,0) NULL COMMENT '周限额，整数分；NULL表示不限制周额度',
+    monthly_limit_fen DECIMAL(20,0) NULL COMMENT '月限额，整数分；NULL表示不限制月额度',
+    warning_enabled TINYINT NOT NULL DEFAULT 0 COMMENT '预警草稿开关；仅租户限额启用时生效',
+    warning_threshold_percent INT NOT NULL DEFAULT 80 COMMENT '各周期共用预警阈值，百分比整数',
+    warning_channels JSON NOT NULL COMMENT '预警渠道JSON数组：IN_APP/SMS/EMAIL；关闭时保留草稿',
+    config_version BIGINT NOT NULL DEFAULT 0 COMMENT '当前配置并发版本；有效配置变更递增，不保存历史版本行',
+    cost_data_reason VARCHAR(64) NULL COMMENT '持久化费用故障原因码；NULL表示没有已知故障',
+    create_time DATETIME(6) NOT NULL COMMENT '配置首次创建时间，上海时间',
+    update_time DATETIME(6) NOT NULL COMMENT '最近配置保存时间，上海时间；费用累计不更新本字段',
+    UNIQUE KEY uk_tenant_budget(tenant_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户预算配置与锁';
+
 CREATE TABLE IF NOT EXISTS t_llm_cost_budget (
     id BIGINT NOT NULL PRIMARY KEY COMMENT '预算配置主键',
     tenant_id BIGINT NOT NULL COMMENT '租户业务ID',
@@ -867,7 +887,10 @@ CREATE TABLE IF NOT EXISTS t_llm_cost_alert_event (
     id BIGINT NOT NULL PRIMARY KEY COMMENT '告警事实主键',
     event_id VARCHAR(64) NOT NULL COMMENT '稳定告警业务ID；用于Outbox与派发幂等',
     tenant_id BIGINT NOT NULL COMMENT '租户业务ID',
-    service_id BIGINT NOT NULL COMMENT '模型服务业务ID',
+    scope_type VARCHAR(16) NOT NULL COMMENT 'LLM或TENANT',
+    scope_id BIGINT NOT NULL COMMENT '作用域对象业务ID',
+    scope_name VARCHAR(128) NOT NULL COMMENT '触发时对象名称快照',
+    service_id BIGINT NULL COMMENT '仅LLM填写模型服务ID',
     period_type VARCHAR(8) NOT NULL COMMENT '自然周期：DAY/WEEK/MONTH',
     period_start DATETIME(6) NOT NULL COMMENT '自然周期起点，包含，上海时间',
     period_end DATETIME(6) NOT NULL COMMENT '自然周期终点，不包含，上海时间',
@@ -880,7 +903,7 @@ CREATE TABLE IF NOT EXISTS t_llm_cost_alert_event (
     config_version BIGINT NOT NULL COMMENT '触发时配置版本快照；不参与周期告警去重',
     channels_json JSON NOT NULL COMMENT '触发时渠道JSON数组；达限强制IN_APP/SMS/EMAIL',
     tenant_name VARCHAR(128) NOT NULL COMMENT '触发时租户名称快照',
-    service_name VARCHAR(128) NOT NULL COMMENT '触发时模型服务名称快照',
+    service_name VARCHAR(128) NULL COMMENT '触发时模型服务名称快照',
     retry_at DATETIME(6) NULL COMMENT '触发时最晚模型预算恢复时间；无命中时NULL，上海时间',
     activity_enabled_snapshot TINYINT NOT NULL COMMENT '触发时租户动态记录开关快照：0关闭，1开启',
     activity_event_id VARCHAR(64) NOT NULL COMMENT '固定租户动态事件ID；用于动态去重',
@@ -889,7 +912,7 @@ CREATE TABLE IF NOT EXISTS t_llm_cost_alert_event (
     create_time DATETIME(6) NOT NULL COMMENT '告警事实创建时间，上海时间',
     update_time DATETIME(6) NOT NULL COMMENT '事件记录更新时间，上海时间',
     UNIQUE KEY uk_cost_alert_event(event_id),
-    UNIQUE KEY uk_cost_alert_period(tenant_id,service_id,period_type,period_start,event_type)
+    UNIQUE KEY uk_cost_alert_period(tenant_id,scope_type,scope_id,period_type,period_start,event_type)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='按模型自然周期唯一告警事实';
 
 CREATE TABLE IF NOT EXISTS t_llm_cost_alert_delivery (

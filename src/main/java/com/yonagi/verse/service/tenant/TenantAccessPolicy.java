@@ -26,6 +26,14 @@ public class TenantAccessPolicy {
         return tenant;
     }
 
+    /** 仅用于事务内权限校验，必须在获取用户、成员或预算锁之前调用。 */
+    public TenantDO lockActiveTenantForShare(Long tenantId) {
+        if (tenantId == null) throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
+        TenantDO tenant = tenants.selectActiveTenantForShare(tenantId);
+        if (tenant == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_EXIST);
+        return tenant;
+    }
+
     public UserTenantDO membership(Long userId, Long tenantId) {
         if (userId == null) throw new ClientException(TenantErrorCodeEnum.USER_ID_IS_NULL);
         if (tenantId == null) throw new ClientException(TenantErrorCodeEnum.TENANT_ID_IS_NULL);
@@ -34,6 +42,12 @@ public class TenantAccessPolicy {
                 .isNull(UserTenantDO::getLeftAt).in(UserTenantDO::getRole, "MEMBER", "ADMIN", "SUPER_ADMIN"));
         if (relation == null) throw new ClientException(TenantErrorCodeEnum.TENANT_NOT_JOINED);
         return relation;
+    }
+
+    public void requireAdmin(Long userId, Long tenantId) {
+        requireMember(userId, tenantId);
+        if (!com.yonagi.verse.common.enums.RoleEnum.valueOf(membership(userId, tenantId).getRole()).isAdmin())
+            throw new ClientException(TenantErrorCodeEnum.TENANT_PERMISSION_DENIED);
     }
 
     public TenantDO requireMember(Long userId, Long tenantId) {

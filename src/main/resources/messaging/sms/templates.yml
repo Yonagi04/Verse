@@ -8,3 +8,7 @@ templates:
     content: "${tenantName} 成本限额告警：${serviceName} 触发 ${period} 成本限额阈值，当前周期内的可用额度为 ${remainingYuan}。"
   "10004":
     content: "${tenantName} 成本限额告警：${serviceName} 在 ${period} 的调用成本已达限额，模型已停用。如需继续使用请调整限额"
+  "10005":
+    content: "${tenantName} 租户成本限额告警：已触发 ${period} 成本限额阈值，当前周期内的可用额度为 ${remainingYuan}。"
+  "10006":
+    content: "${tenantName} 租户成本限额告警：${period} 的调用成本已达限额，租户下所有新的模型调用已被限制。如需继续使用请调整限额或等待相关周期重置"

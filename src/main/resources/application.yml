@@ -138,6 +138,8 @@ verse:
       # 审计概略截断长度（字符），超出部分追加 "..."，仅用于列表展示，详情回源 S3 取全量
       preview-length: 20
   security:
+    tenant-settings-confirmation:
+      secret: ${TENANT_SETTINGS_CONFIRMATION_SECRET:}
     jwt:
       secret: ${JWT_SECRET:your-256-bit-secret-key-change-in-production}
       expiration: 86400000

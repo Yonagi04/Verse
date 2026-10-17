@@ -23,6 +23,8 @@ class CostBudgetActivityPrivacyTest {
     private final TenantActivityRecorder activities = mock(TenantActivityRecorder.class);
     private final ApplicationContextRunner context = new ApplicationContextRunner()
             .withUserConfiguration(BudgetComponents.class)
+            .withBean(TenantCostBudgetLedger.class, () -> mock(TenantCostBudgetLedger.class))
+            .withBean(UserMapper.class, () -> mock(UserMapper.class))
             .withBean(ApiKeyMapper.class, () -> mock(ApiKeyMapper.class))
             .withBean(CostBudgetInvocationMapper.class, () -> mock(CostBudgetInvocationMapper.class))
             .withBean(CostBudgetSettlementMapper.class, () -> mock(CostBudgetSettlementMapper.class))

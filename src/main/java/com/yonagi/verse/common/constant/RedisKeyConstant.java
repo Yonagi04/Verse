@@ -151,7 +151,7 @@ public class RedisKeyConstant {
     public static final String TENANT_LIST_KEY = "verse:tenant:list:";
 
     /** 租户设置缓存键。 */
-    public static final String TENANT_SETTINGS_KEY = "verse:tenant:settings:";
+    public static final String TENANT_SETTINGS_KEY = "verse:tenant:settings:v2:";
 
     /** 批量租户概览缓存键。 */
     public static final String TENANT_OVERVIEW_LIST_KEY = "verse:tenant:overview:list:";

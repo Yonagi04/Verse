@@ -48,7 +48,7 @@ class CostBudgetUnknownOutcomeTest {
         when(models.decision(model)).thenReturn(new CostBudgetDecision(List.of(),false));
         var service = new CostBudgetService(keys, invocations, settlements, periods,
                 new BudgetPeriodResolver(Clock.fixed(now, ZoneOffset.UTC)), mock(BudgetExecutionRegistry.class),
-                outbox, new UsageOutboxProperties(), manager, models);
+                outbox, new UsageOutboxProperties(), manager, models, com.yonagi.verse.support.BudgetTestSupport.disabledTenantLedger(), org.mockito.Mockito.mock(com.yonagi.verse.dao.mapper.UserMapper.class));
         ReflectionTestUtils.setField(service, "costingEnabled", true);
         var key = new ApiKeyDO(); key.setTenantId(2L); key.setApiKeyId(3L); key.setUserId(1L);
         key.setCostLimitEnabled(true); key.setCostLimitDailyFen(new BigDecimal("100"));

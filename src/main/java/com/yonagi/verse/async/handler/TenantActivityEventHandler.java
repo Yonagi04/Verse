@@ -45,7 +45,8 @@ public class TenantActivityEventHandler implements DomainEventHandler<TenantActi
         boolean system = e.getSchemaVersion() == 2 && "SYSTEM".equals(e.getActorType());
         if (system) {
             if (e.getActorUserId()!=null || !"system".equals(e.getActorUsername()) || !"系统".equals(e.getActorNickname())
-                    || e.getActivityType()!=com.yonagi.verse.common.enums.TenantActivityType.LLM_COST_LIMIT_REACHED)
+                    || (e.getActivityType()!=com.yonagi.verse.common.enums.TenantActivityType.LLM_COST_LIMIT_REACHED
+                        && e.getActivityType()!=com.yonagi.verse.common.enums.TenantActivityType.TENANT_COST_LIMIT_REACHED))
                 throw new IllegalArgumentException("系统动态身份非法");
         } else if (e.getActorUserId()==null || e.getSchemaVersion()==2 && !"USER".equals(e.getActorType()))
             throw new IllegalArgumentException("用户动态身份非法");

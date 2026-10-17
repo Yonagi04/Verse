@@ -8,6 +8,8 @@ verse:
       sign-name: ${VERSE_SMS_SIGN_NAME:}
       reset-template-code: ${VERSE_SMS_RESET_TEMPLATE_CODE:}
       closure-template-code: ${VERSE_SMS_CLOSURE_TEMPLATE_CODE:}
+      tenant-cost-warning-template-code: ${VERSE_SMS_TENANT_COST_WARNING_TEMPLATE_CODE:}
+      tenant-cost-limit-template-code: ${VERSE_SMS_TENANT_COST_LIMIT_TEMPLATE_CODE:}
       daily-limit: ${VERSE_SMS_DAILY_LIMIT:10}
       aliyun:
         endpoint: ${VERSE_SMS_ENDPOINT:dysmsapi.aliyuncs.com}

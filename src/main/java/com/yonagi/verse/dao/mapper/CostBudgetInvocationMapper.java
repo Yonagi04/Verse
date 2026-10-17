@@ -14,6 +14,9 @@ public interface CostBudgetInvocationMapper extends BaseMapper<CostBudgetInvocat
             + "AND request_started_at >= #{start} AND state NOT IN ('SETTLED','NO_UPSTREAM') ORDER BY id LIMIT 1001 FOR UPDATE")
     List<CostBudgetInvocationDO> unfinished(@Param("tenantId") Long tenantId, @Param("keyId") Long keyId,
                                               @Param("start") LocalDateTime start);
+    @Select("SELECT * FROM t_cost_budget_invocation WHERE tenant_id=#{tenantId} AND request_started_at >= #{start} "
+            + "AND state NOT IN ('SETTLED','NO_UPSTREAM') ORDER BY id LIMIT 1001")
+    List<CostBudgetInvocationDO> tenantUnfinished(@Param("tenantId") Long tenantId, @Param("start") LocalDateTime start);
     @Select("SELECT COUNT(*) FROM t_cost_budget_invocation i WHERE i.tenant_id=#{tenantId} AND i.request_started_at >= #{start} "
             + "AND i.state NOT IN ('SETTLED','NO_UPSTREAM') AND NOT EXISTS "
             + "(SELECT 1 FROM t_cost_budget_invocation_model m WHERE m.request_id=i.request_id)")

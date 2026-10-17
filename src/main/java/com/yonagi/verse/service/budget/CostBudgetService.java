@@ -30,6 +30,8 @@ import java.util.*;
 @Service
 public class CostBudgetService {
     private final LlmCostBudgetLedger llmBudgets;
+    private final TenantCostBudgetLedger tenantBudgets;
+    private final UserMapper users;
     private io.micrometer.core.instrument.MeterRegistry metrics;
     @org.springframework.beans.factory.annotation.Autowired
     public void setMetrics(io.micrometer.core.instrument.MeterRegistry registry) { this.metrics = registry; }
@@ -49,12 +51,13 @@ public class CostBudgetService {
     public CostBudgetService(ApiKeyMapper keys, CostBudgetInvocationMapper invocations,
             CostBudgetSettlementMapper settlements, CostBudgetPeriodMapper periods,
             BudgetPeriodResolver time, BudgetExecutionRegistry registry, UsageOutboxStager outbox,
-            UsageOutboxProperties outboxProperties, PlatformTransactionManager manager, LlmCostBudgetLedger llmBudgets) {
-        this.llmBudgets = llmBudgets;
+            UsageOutboxProperties outboxProperties, PlatformTransactionManager manager, LlmCostBudgetLedger llmBudgets, TenantCostBudgetLedger tenantBudgets, UserMapper users) {
+        this.llmBudgets = llmBudgets; this.tenantBudgets = tenantBudgets; this.users = users;
         this.keys = keys; this.invocations = invocations; this.settlements = settlements;
         this.periods = periods; this.time = time; this.registry = registry;
         this.outbox = outbox; this.outboxProperties = outboxProperties;
         transaction = new TransactionTemplate(manager);
+        transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
         transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
@@ -117,19 +120,21 @@ public class CostBudgetService {
     public void check(UserContext ctx, Long serviceId) {
         try {
             shortTransactionVoid(ignored -> {
+                var tenant = tenantBudgets.lock(ctx.getCurrentTenantId());
                 ApiKeyDO key = ctx.getApiKeyId() == null ? null : lockKey(ctx.getCurrentTenantId(), ctx.getApiKeyId());
                 var model = llmBudgets.lock(ctx.getCurrentTenantId(), serviceId);
-                joint(key, model).enforce();
+                joint(tenant, key, model).enforce();
             });
         } catch (CostLimitExceededException | CostBudgetUnavailableException e) { throw e;
         } catch (RuntimeException e) { throw new CostBudgetUnavailableException(); }
     }
-    private CostBudgetDecision joint(ApiKeyDO key, LlmCostBudgetDO model) {
+    private CostBudgetDecision joint(TenantCostBudgetDO tenant, ApiKeyDO key, LlmCostBudgetDO model) {
         long started = System.nanoTime();
         try {
-            List<ApiKeyCostStatusRespDTO.Hit> hits = new ArrayList<>(); boolean unknown = false;
+            var tenantDecision = tenantBudgets.decision(tenant);
+            List<ApiKeyCostStatusRespDTO.Hit> hits = new ArrayList<>(tenantDecision.limits()); boolean unknown = tenantDecision.unavailable();
             if (key != null && Boolean.TRUE.equals(key.getCostLimitEnabled())) {
-                var state = snapshot(key, time.now()); hits.addAll(state.limits()); unknown = "UNKNOWN".equals(state.budgetState());
+                var state = snapshot(key, time.now()); hits.addAll(state.limits()); unknown |= "UNKNOWN".equals(state.budgetState());
             }
             var decision = llmBudgets.decision(model); hits.addAll(decision.limits()); unknown |= decision.unavailable();
             if (unknown && !hits.isEmpty()) log.warn("[cost-budget] 联合检查未知，保留已知命中: keyId={}, serviceId={}, knownLimits={}",
@@ -147,8 +152,9 @@ public class CostBudgetService {
         registry.register(requestId);
         try {
             shortTransactionVoid(ignored -> {
+                var tenant = tenantBudgets.lock(ctx.getCurrentTenantId());
                 ApiKeyDO key = ctx.getApiKeyId() == null ? null : lockKey(ctx.getCurrentTenantId(), ctx.getApiKeyId());
-                var model = llmBudgets.lock(ctx.getCurrentTenantId(), serviceId); joint(key, model).enforce();
+                var model = llmBudgets.lock(ctx.getCurrentTenantId(), serviceId); joint(tenant, key, model).enforce();
                 var row = new CostBudgetInvocationDO(); row.setId(SnowflakeIdUtil.nextId()); row.setTenantId(ctx.getCurrentTenantId());
                 row.setApiKeyId(ctx.getApiKeyId()); row.setSource(ctx.getApiKeyId() == null ? "PLAYGROUND" : "API_KEY");
                 row.setRequestId(requestId); row.setEventId(String.valueOf(SnowflakeIdUtil.nextId())); row.setRequestStartedAt(time.local(started));
@@ -159,7 +165,8 @@ public class CostBudgetService {
                     invocations.insert(row); llmBudgets.register(ctx.getCurrentTenantId(), requestId, serviceId); }
                 catch (RuntimeException storageFailure) {
                     if (storageFailure instanceof CostBudgetUnavailableException) throw storageFailure;
-                    if (Boolean.TRUE.equals(model.getCostLimitEnabled()) || key != null && Boolean.TRUE.equals(key.getCostLimitEnabled())) throw storageFailure;
+                    if (Boolean.TRUE.equals(tenant.getCostLimitEnabled()) || Boolean.TRUE.equals(model.getCostLimitEnabled()) || key != null && Boolean.TRUE.equals(key.getCostLimitEnabled())) throw storageFailure;
+                    tenantBudgets.unavailable(tenant, "INVOCATION_WRITE_FAILED");
                     llmBudgets.unavailable(List.of(model), "INVOCATION_WRITE_FAILED");
                     if (key != null) keys.update(Wrappers.lambdaUpdate(ApiKeyDO.class).eq(ApiKeyDO::getId, key.getId())
                             .set(ApiKeyDO::getCostDataReason, "INVOCATION_WRITE_FAILED"));
@@ -185,14 +192,16 @@ public class CostBudgetService {
     private void authorize(UserContext ctx, Long serviceId, String requestId) {
         if (untrackedRequests.contains(requestId)) {
             shortTransactionVoid(ignored -> {
+                var tenant = tenantBudgets.lock(ctx.getCurrentTenantId());
                 var key = ctx.getApiKeyId() == null ? null : lockKey(ctx.getCurrentTenantId(), ctx.getApiKeyId());
                 var model = llmBudgets.lock(ctx.getCurrentTenantId(), serviceId);
-                joint(key, model).enforce();
+                joint(tenant, key, model).enforce();
                 llmBudgets.unavailable(List.of(model), "INVOCATION_WRITE_FAILED");
             });
             return;
         }
         try { shortTransactionVoid(ignored -> {
+            var tenant = tenantBudgets.lock(ctx.getCurrentTenantId());
             ApiKeyDO key = ctx.getApiKeyId() == null ? null : lockKey(ctx.getCurrentTenantId(), ctx.getApiKeyId());
             var models = llmBudgets.lockForRequest(ctx.getCurrentTenantId(), requestId, serviceId);
             var invocation = invocations.lockRequest(requestId);
@@ -201,7 +210,7 @@ public class CostBudgetService {
                 throw new CostBudgetUnavailableException();
             llmBudgets.verifyParticipants(requestId, models);
             var target = models.stream().filter(row -> serviceId.equals(row.getServiceId())).findFirst().orElseThrow();
-            joint(key, target).enforce(); llmBudgets.register(ctx.getCurrentTenantId(), requestId, serviceId);
+            joint(tenant, key, target).enforce(); llmBudgets.register(ctx.getCurrentTenantId(), requestId, serviceId);
         }); } catch (CostLimitExceededException exceeded) { throw exceeded.requestId(requestId); }
         catch (CostBudgetUnavailableException unavailable) { throw unavailable; }
         catch (RuntimeException failure) { throw new CostBudgetUnavailableException(); }
@@ -216,6 +225,7 @@ public class CostBudgetService {
         if (!registry.noUpstream(requestId)) return;
         try {
             shortTransactionVoid(ignored -> {
+                tenantBudgets.lock(ctx.getCurrentTenantId());
                 if (ctx.getApiKeyId() != null) lockKey(ctx.getCurrentTenantId(), ctx.getApiKeyId());
                 var models = llmBudgets.lockForRequest(ctx.getCurrentTenantId(), requestId, null);
                 CostBudgetInvocationDO row = invocations.lockRequest(requestId);
@@ -308,6 +318,7 @@ public class CostBudgetService {
     public void retryLocalSnapshots() { List.copyOf(pendingSnapshots.values()).forEach(this::settle); }
 
     private String stage(TokenUsageEvent event) {
+        tenantBudgets.lock(event.getTenantId());
         ApiKeyDO key = event.getApiKeyId() == null ? null : lockKey(event.getTenantId(), event.getApiKeyId());
         var models = llmBudgets.lockForRequest(event.getTenantId(), event.getRequestId(), event.getServiceId());
         CostBudgetInvocationDO invocation = invocations.lockRequest(event.getRequestId());
@@ -344,6 +355,8 @@ public class CostBudgetService {
                 .eq(CostBudgetSettlementDO::getEventId, eventId));
         if (lookup == null) return;
         shortTransactionVoid(ignored -> {
+            users.lockResourceOwner(lookup.getUserId());
+            var tenant = tenantBudgets.lock(lookup.getTenantId());
             ApiKeyDO key = lookup.getApiKeyId() == null ? null : lockKey(lookup.getTenantId(), lookup.getApiKeyId());
             var models = llmBudgets.lockForRequest(lookup.getTenantId(), lookup.getRequestId(), lookup.getServiceId());
             CostBudgetInvocationDO invocation = invocations.lockRequest(lookup.getRequestId());
@@ -351,6 +364,7 @@ public class CostBudgetService {
             CostBudgetSettlementDO row = settlements.lockEvent(eventId);
             if (Boolean.TRUE.equals(row.getBudgetApplied())) return;
             Instant started = row.getRequestStartedAt().atZone(BudgetPeriodResolver.ZONE).toInstant();
+            tenantBudgets.apply(tenant, row);
             if (key != null) for (BudgetPeriodResolver.Period period : time.resolve(started)) {
                 CostBudgetPeriodDO cumulative = loadPeriod(key, period);
                 add(cumulative, row); cumulative.setUpdateTime(time.local(time.now())); periods.updateById(cumulative);
@@ -364,6 +378,7 @@ public class CostBudgetService {
                 invocation.setUpdateTime(time.local(time.now())); invocations.updateById(invocation);
             }
             llmBudgets.apply(models.stream().filter(model -> row.getServiceId().equals(model.getServiceId())).findFirst().orElseThrow(), row);
+            tenantBudgets.capture(tenant);
             if ("LIVE".equals(row.getOrigin())) outbox.stage(event, row.getEventPayloadJson(), time.local(time.now()));
             row.setBudgetApplied(true); row.setAppliedAt(time.local(time.now())); settlements.updateById(row);
 
@@ -386,6 +401,7 @@ public class CostBudgetService {
         registry.finalizing(requestId);
         try {
             shortTransactionVoid(ignored -> {
+                var tenant = tenantBudgets.lock(tenantId);
                 ApiKeyDO key = keyId == null ? null : lockKey(tenantId, keyId);
                 var models = llmBudgets.lockForRequest(tenantId, requestId, null);
                 CostBudgetInvocationDO invocation = invocations.lockRequest(requestId);
@@ -394,6 +410,7 @@ public class CostBudgetService {
                     invocation.setState("UNKNOWN"); invocation.setLastErrorCode(reason);
                     invocation.setUpdateTime(time.local(time.now())); invocations.updateById(invocation);
                 }
+                if ("SNAPSHOT_CONFLICT".equals(reason)) tenantBudgets.unavailable(tenant, reason);
                 if ("SNAPSHOT_CONFLICT".equals(reason)) llmBudgets.unavailable(models, reason);
                 if ("SNAPSHOT_CONFLICT".equals(reason) && key != null) {
                     key.setCostDataReason(reason); keys.updateById(key);
@@ -437,6 +454,7 @@ public class CostBudgetService {
             abandon(new UserContext().setCurrentTenantId(lookup.getTenantId()).setApiKeyId(lookup.getApiKeyId()), lookup.getRequestId());
         }
         shortTransactionVoid(ignored -> {
+            tenantBudgets.lock(lookup.getTenantId());
             if (lookup.getApiKeyId() != null) lockKey(lookup.getTenantId(), lookup.getApiKeyId());
             var models = llmBudgets.lockForRequest(lookup.getTenantId(), lookup.getRequestId(), null);
             CostBudgetInvocationDO row = invocations.lockRequest(lookup.getRequestId());

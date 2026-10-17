@@ -85,12 +85,12 @@ class LlmCostBudgetMySqlIntegrationTest {
         ledger = new LlmCostBudgetLedger(map(LlmCostBudgetMapper.class), map(CostBudgetSettlementMapper.class), map(CostBudgetPeriodMapper.class), registry, time, new UsageOutboxProperties(), capture);
         ReflectionTestUtils.setField(ledger, "costingEnabled", true);
         var outbox = new UsageOutboxStager(map(TokenUsageOutboxMapper.class), new UsageOutboxProperties(), map(UserMapper.class));
-        service = new CostBudgetService(map(ApiKeyMapper.class), map(CostBudgetInvocationMapper.class), map(CostBudgetSettlementMapper.class), map(CostBudgetPeriodMapper.class), time, registry, outbox, new UsageOutboxProperties(), manager, ledger);
+        service = new CostBudgetService(map(ApiKeyMapper.class), map(CostBudgetInvocationMapper.class), map(CostBudgetSettlementMapper.class), map(CostBudgetPeriodMapper.class), time, registry, outbox, new UsageOutboxProperties(), manager, ledger, com.yonagi.verse.support.BudgetTestSupport.disabledTenantLedger(), org.mockito.Mockito.mock(com.yonagi.verse.dao.mapper.UserMapper.class));
         ReflectionTestUtils.setField(service, "costingEnabled", true);
         pricing = new PricingConfigurationService(map(LlmServicePricingMapper.class), map(LlmPricingPeakPeriodMapper.class), map(LlmServiceMapper.class), mock(PricingResolver.class));
         config = new LlmCostBudgetConfigurationService(map(LlmCostBudgetMapper.class), map(LlmServiceMapper.class), pricing,
-                new TenantAccessPolicy(map(TenantMapper.class), map(UserTenantMapper.class)), ledger, time);
-        guard = new CostAlertDeliveryGuard(ledger, map(LlmCostBudgetMapper.class), map(LlmCostAlertEventMapper.class), map(LlmCostAlertDeliveryMapper.class), map(UserMapper.class), time);
+                new TenantAccessPolicy(map(TenantMapper.class), map(UserTenantMapper.class)), ledger, time, map(UserMapper.class));
+        guard = new CostAlertDeliveryGuard(ledger, mock(TenantCostBudgetLedger.class), map(TenantMapper.class), map(LlmCostAlertEventMapper.class), map(LlmCostAlertDeliveryMapper.class), map(UserMapper.class), time);
         jdbc.update("INSERT INTO t_user(user_id,username,nickname,password,email,email_hash) VALUES (1,'owner','管理员','test','encrypted','same-email'),(4,'member','成员','test','encrypted','same-email'),(5,'admin','管理员2','test','encrypted','same-email')");
         jdbc.update("INSERT INTO t_tenant(tenant_id,name,type,owner_id,activity_recording_enabled) VALUES(2,'测试团队','TEAM',1,1)");
         jdbc.update("INSERT INTO t_user_tenant(user_id,tenant_id,role) VALUES(1,2,'SUPER_ADMIN'),(4,2,'MEMBER'),(5,2,'ADMIN')");
