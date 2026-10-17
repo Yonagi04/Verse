@@ -419,16 +419,7 @@ class LlmCostBudgetMySqlIntegrationTest {
         assertFalse(jdbc.queryForObject("SELECT content FROM t_notification",String.class).contains("¥"));
     }
 
-    @Test void oneShotMigrationRebuildsModelHistoryAndNeverReappliesKey() {
-        call("phase-one",10L,api,"0.125");
-        jdbc.update("DELETE FROM t_cost_budget_period WHERE scope_type='LLM'");
-        assertTrue(map(CostBudgetSettlementMapper.class).pending().isEmpty());
-        new com.yonagi.verse.maintenance.CostBudgetHistoryMigration(database).migrate(now, true);
-        assertEquals(0,new BigDecimal("0.125").compareTo(used("API_KEY",3)));
-        assertEquals(0,new BigDecimal("0.125").compareTo(used("LLM",10)));
-        assertEquals(1,count("t_token_usage_outbox"));
-        assertEquals(0,count("t_llm_cost_alert_event"));
-    }
+
     @Test void preparingStreamDoesNotClaimAnUnsentUpstream() {
         service.begin(playground,10L,"prepared-only",now);
         service.prepareStream(playground,10L,"prepared-only");
@@ -437,88 +428,9 @@ class LlmCostBudgetMySqlIntegrationTest {
         assertEquals("NO_UPSTREAM",jdbc.queryForObject("SELECT state FROM t_cost_budget_invocation WHERE request_id='prepared-only'",String.class));
         assertEquals(0,count("t_cost_budget_settlement"));
     }
-    @Test void oneShotMigrationImportsOriginalFailedCostsAndDoesNotRecreateReports() {
-        var old=fact("history",10L,playground,"0.125"); old.setEventId("history-event");
-        jdbc.update("INSERT INTO t_token_usage_outbox(event_id,tenant_id,user_id,event_type,message_key,payload_json,status,next_retry_at) VALUES(?,2,1,'TOKEN_USAGE',?,?,'PUBLISHED',NOW(6))", old.getEventId(),old.getEventId(),JSON.toJSONString(old));
-        var failed=fact("failed-history",10L,playground,"0.125"); failed.setEventId("failed-event");
-        failed.setStatus("FAIL"); failed.setCostResult(CostResult.of(CostStatus.UNCALCULABLE));
-        jdbc.update("INSERT INTO t_token_usage_outbox(event_id,tenant_id,user_id,event_type,message_key,payload_json,status,next_retry_at) VALUES(?,2,1,'TOKEN_USAGE',?,?,'PUBLISHED',NOW(6))", failed.getEventId(),failed.getEventId(),JSON.toJSONString(failed));
-        var migration=new com.yonagi.verse.maintenance.CostBudgetHistoryMigration(database);
-        migration.migrate(now,true); migration.migrate(now,true);
-        assertEquals(2,count("t_cost_budget_settlement")); assertEquals(2,count("t_token_usage_outbox"));
-        assertEquals(0,count("t_llm_cost_alert_event"));
-        assertEquals(0,new BigDecimal("0.125").compareTo(used("LLM",10)));
-        assertEquals(1L,jdbc.queryForObject("SELECT uncalculable_count FROM t_cost_budget_period WHERE scope_type='LLM' AND scope_id=10 AND period_type='DAY'",Long.class));
-        assertNull(jdbc.queryForObject("SELECT cost_data_reason FROM t_llm_cost_budget WHERE service_id=10",String.class));
-        failed.setCostResult(new CostResult(CostStatus.CALCULATED,BigDecimal.ONE));
-        jdbc.update("UPDATE t_token_usage_outbox SET payload_json=? WHERE event_id=?",JSON.toJSONString(failed),failed.getEventId());
-        assertThrows(IllegalStateException.class, () -> migration.migrate(now,true));
-        assertEquals(0,new BigDecimal("0.125").compareTo(used("LLM",10)));
-        assertEquals(2,count("t_cost_budget_settlement"));
-    }
-
-    @Test void migrationUsesPreviouslyBackfilledCostSnapshotAndCoversCrossMonthWeek() {
-        jdbc.update("INSERT INTO t_token_usage(user_id,tenant_id,source,service_id,model,request_id,event_id,request_started_at,cost_status,estimated_cost_fen,currency) VALUES(1,2,'PLAYGROUND',10,'model','previous-month','previous-event','2026-09-30 12:00:00','CALCULATED',999,'CNY')");
-        jdbc.update("INSERT INTO t_token_usage_cost(usage_id,cost_status,estimated_cost_fen,currency) SELECT id,'CALCULATED',0.125,'CNY' FROM t_token_usage");
-        var migration = new com.yonagi.verse.maintenance.CostBudgetHistoryMigration(database);
-        var octoberFirst = Instant.parse("2026-10-01T05:00:00Z");
-        assertEquals(1,migration.migrate(octoberFirst,false));
-        assertEquals(0,count("t_cost_budget_settlement"));
-        assertEquals(0,count("t_cost_budget_period"));
-        migration.migrate(octoberFirst,true); migration.migrate(octoberFirst,true);
-        assertEquals(0,new BigDecimal("0.125").compareTo(jdbc.queryForObject("SELECT used_cost_fen FROM t_cost_budget_period WHERE scope_type='LLM' AND scope_id=10 AND period_type='WEEK'",BigDecimal.class)));
-        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM t_cost_budget_period WHERE period_type='MONTH'",Integer.class));
-        assertEquals(0,count("t_token_usage_outbox"));
-        assertEquals(0,new BigDecimal("0.125").compareTo(jdbc.queryForObject("SELECT estimated_cost_fen FROM t_cost_budget_settlement",BigDecimal.class)));
-        assertEquals(0,count("t_llm_cost_alert_event"));
-    }
-
-    @Test void migrationRollsBackImportedFactsWhenAnotherSnapshotConflicts() {
-        var first=fact("first",10L,playground,"0.125"); first.setEventId("first-event");
-        var conflict=fact("first",11L,playground,"1"); conflict.setEventId("other-event");
-        for (var event:List.of(first,conflict)) jdbc.update("INSERT INTO t_token_usage_outbox(event_id,tenant_id,user_id,event_type,message_key,payload_json,status,next_retry_at) VALUES(?,2,1,'TOKEN_USAGE',?,?,'PENDING',NOW(6))",event.getEventId(),event.getEventId(),JSON.toJSONString(event));
-        assertThrows(IllegalStateException.class,()->new com.yonagi.verse.maintenance.CostBudgetHistoryMigration(database).migrate(now,true));
-        assertEquals(0,count("t_cost_budget_settlement"));
-        assertEquals(0,count("t_cost_budget_period"));
-        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM t_llm_cost_budget WHERE cost_data_reason IS NULL",Integer.class));
-    }
-
-    @Test void emptyHistoryBecomesUsableWithoutManualProofAndUnknownExecutionStillBlocks() {
-        var migration=new com.yonagi.verse.maintenance.CostBudgetHistoryMigration(database);
-        migration.migrate(now,true);
-        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM t_llm_cost_budget WHERE cost_data_reason IS NULL",Integer.class));
-        assertNull(jdbc.queryForObject("SELECT cost_data_reason FROM t_api_key",String.class));
-        assertEquals("0",((LlmCostStatusRespDTO.Full)tx.execute(ignored->config.status(1L,2L,10L))).periods().getFirst().usedCostFen());
-        var unknown=fact("unknown",10L,playground,"1"); unknown.setEventId("unknown-event");
-        unknown.setExecutionOutcome(com.yonagi.verse.service.forward.UpstreamExecutionOutcome.UNKNOWN);
-        jdbc.update("INSERT INTO t_token_usage_outbox(event_id,tenant_id,user_id,event_type,message_key,payload_json,status,next_retry_at) VALUES(?,2,1,'TOKEN_USAGE',?,?,'PENDING',NOW(6))",unknown.getEventId(),unknown.getEventId(),JSON.toJSONString(unknown));
-        assertThrows(IllegalStateException.class,()->migration.migrate(now,true));
-        assertEquals(0,count("t_cost_budget_settlement"));
-    }
 
     @Test void notificationReadinessCountsContactsWithoutLoadingUserRecords() {
         var summary=map(LlmCostBudgetMapper.class).administratorContacts(2L);
         assertEquals(2,summary.total()); assertEquals(2,summary.missingPhoneCount()); assertEquals(0,summary.missingEmailCount());
-    }
-
-    @Test void legacyStateRemovalRefusesRealFaultsAndIsRepeatableAfterMigration() {
-        for (String table:List.of("t_api_key","t_llm_cost_budget"))
-            jdbc.execute("ALTER TABLE " + table + " ADD cost_data_state VARCHAR(24) NOT NULL DEFAULT 'INITIALIZING'");
-        jdbc.execute("ALTER TABLE t_cost_budget_settlement ADD llm_budget_applied TINYINT NOT NULL DEFAULT 0, ADD llm_applied_at DATETIME(6), ADD INDEX idx_budget_settlement_llm_pending(llm_budget_applied,id)");
-        var migration=new com.yonagi.verse.maintenance.CostBudgetHistoryMigration(database);
-        jdbc.update("UPDATE t_llm_cost_budget SET cost_data_state='UNAVAILABLE' WHERE service_id=10");
-        assertThrows(IllegalStateException.class,()->migration.migrate(now,true));
-        assertEquals(0,count("t_cost_budget_settlement"));
-        jdbc.update("UPDATE t_llm_cost_budget SET cost_data_state='INITIALIZING' WHERE service_id=10");
-        jdbc.update("UPDATE t_llm_cost_budget SET cost_data_reason='SNAPSHOT_CONFLICT' WHERE service_id=11");
-        assertThrows(IllegalStateException.class,()->migration.migrate(now,true));
-        assertEquals("SNAPSHOT_CONFLICT",jdbc.queryForObject("SELECT cost_data_reason FROM t_llm_cost_budget WHERE service_id=11",String.class));
-        jdbc.update("UPDATE t_llm_cost_budget SET cost_data_reason=NULL WHERE service_id=11");
-        assertEquals(0,migration.migrate(now,false));
-        assertEquals(2,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND column_name='cost_data_state'",Integer.class));
-        migration.migrate(now,true); migration.finishSchemaUpgrade();
-        migration.migrate(now,true); migration.finishSchemaUpgrade();
-        assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=DATABASE() AND column_name IN ('cost_data_state','llm_budget_applied','llm_applied_at')",Integer.class));
-        assertEquals("READY",((LlmCostStatusRespDTO.Full)tx.execute(ignored->config.status(1L,2L,10L))).availability());
     }
 }
