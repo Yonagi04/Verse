@@ -407,6 +407,8 @@ class LlmCostBudgetMySqlIntegrationTest {
         var delivery=new LlmCostAlertDeliveryService(map(LlmCostAlertEventMapper.class),map(LlmCostAlertDeliveryMapper.class),ledger,guard,
                 notification,activities,new com.yonagi.verse.service.messaging.SmsSendService(smsProvider,records,metrics,settings),
                 new com.yonagi.verse.service.messaging.EmailSendService(emailProvider,records,metrics,settings),map(SmsSendRecordMapper.class),map(EmailSendRecordMapper.class),settings,aes,time,metrics,manager);
+        // 手工构造不会触发 Spring 的 @Value 注入，邮件管理链接仍需要受信前端地址。
+        ReflectionTestUtils.setField(delivery,"frontendBaseUrl","https://verse.example");
         delivery.wake(jdbc.queryForObject("SELECT event_id FROM t_llm_cost_alert_event",String.class)); delivery.scan();
         assertEquals(1,count("t_notification")); assertEquals(3,count("t_notification_recipient"));
         assertEquals(1,count("t_email_send_record")); assertEquals(0,count("t_sms_send_record"));
