@@ -230,10 +230,10 @@ class LlmForwardUsagePublicationTest {
                 LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE, false, UpstreamExecutionOutcome.UNKNOWN, false);
         ModelOperation op = ModelOperation.valueOf(operation);
         if (op == ModelOperation.IMAGE_GENERATION) {
-            when(timeLimiter.execute(any())).thenThrow(failure);
+            when(timeLimiter.execute(any(), any())).thenThrow(failure);
             assertSame(failure, assertThrows(UpstreamFailureException.class, () -> service.jsonCompletion(
                     context, op, "{\"model\":\"alias\",\"prompt\":\"cat\"}", "image-limit", Instant.now())));
-            verify(timeLimiter, times(1)).execute(any());
+            verify(timeLimiter, times(1)).execute(any(), any());
         } else {
             var media = mock(ProviderAdapter.class, withSettings().extraInterfaces(MediaOperationAdapter.class));
             ReflectionTestUtils.setField(service, "providerAdapter", media);
@@ -329,7 +329,7 @@ class LlmForwardUsagePublicationTest {
         assertSame(refused,assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class,
                 () -> stream(ModelOperation.valueOf(operation),"preflight-permit")));
         verify(budgets).abandon(context,"preflight-permit");
-        verify(budgets,never()).sent(anyString());
+        verify(budgets,never()).subscribe(anyString());
         verify(providerAdapter,never()).stream(any());
         verify(circuitBreaker,never()).recordFailure(anyString());
     }
@@ -378,6 +378,11 @@ class LlmForwardUsagePublicationTest {
         eventPublisher = mock(DomainEventPublisher.class);
         usagePublisher = mock(TokenUsageEventPublisher.class);
         budgets = mock(com.yonagi.verse.service.budget.CostBudgetService.class);
+        when(budgets.attempt(anyString())).thenAnswer(i -> new com.yonagi.verse.service.budget.InvocationExecutionState(
+                com.yonagi.verse.service.budget.BudgetInvocationMode.SYNC).attempt());
+        when(budgets.outcome(anyString())).thenReturn(UpstreamExecutionOutcome.REJECTED);
+        doAnswer(i -> { ((com.yonagi.verse.service.forward.UpstreamAttemptControl) i.getArgument(3)).startSending(); return null; })
+                .when(budgets).permit(any(), anyLong(), anyString(), any());
         // 原计费断言继续捕获同一终态，API 的真实生产入口现在是同步结算。
         doAnswer(invocation -> { usagePublisher.publish(invocation.getArgument(0)); return null; }).when(budgets).settle(any());
         TenantMapper tenantMapper = mock(TenantMapper.class);
@@ -432,21 +437,21 @@ class LlmForwardUsagePublicationTest {
         when(providerAdapter.stream(any())).thenReturn(Flux.just(ServerSentEvent.builder("[DONE]").build()));
         var stream = service.chatCompletionStream(context, "{\"model\":\"alias\",\"stream\":true}", "single-permit", Instant.now());
         verify(budgets).prepareStream(context,10L,"single-permit");
-        verify(budgets,never()).sent("single-permit");
+        verify(budgets,never()).subscribe("single-permit");
         stream.blockLast();
         assertThrows(IllegalStateException.class, stream::blockLast);
         verify(providerAdapter, times(1)).stream(any()); verify(budgets, times(1)).settle(any());
-        verify(budgets,times(1)).sent("single-permit");
+        verify(budgets,times(1)).subscribe("single-permit");
     }
 
     @Test void retryBudgetRejectionStopsAttemptsAndPreservesOneOriginalFailureTerminal() {
         ReflectionTestUtils.setField(service, "maxRetries", 3);
-        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        when(timeLimiter.execute(any(), any())).thenThrow(retryableFailure());
         doNothing().doNothing().doThrow(new com.yonagi.verse.service.budget.CostBudgetUnavailableException()).when(budgets).check(context, 10L);
         when(budgets.hasUpstream("retry-budget")).thenReturn(true);
         assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class, () -> service.chatCompletion(
                 context, "{\"model\":\"alias\"}", "retry-budget", Instant.now()));
-        verify(timeLimiter, times(1)).execute(any()); verifyNoInteractions(fallbackExecutor);
+        verify(timeLimiter, times(1)).execute(any(), any()); verifyNoInteractions(fallbackExecutor);
         verify(circuitBreaker, times(1)).recordFailure("10");
         ArgumentCaptor<TokenUsageEvent> terminal = ArgumentCaptor.forClass(TokenUsageEvent.class);
         verify(budgets, times(1)).settle(terminal.capture());
@@ -463,7 +468,7 @@ class LlmForwardUsagePublicationTest {
 
     @Test
     void blockingSuccessStagesExactlyOneTerminalEvent() {
-        when(timeLimiter.execute(any())).thenReturn("""
+        when(timeLimiter.execute(any(), any())).thenReturn("""
                 {"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}
                 """);
         Instant startedAt = Instant.parse("2026-09-06T01:02:03Z");
@@ -482,7 +487,7 @@ class LlmForwardUsagePublicationTest {
         LlmServiceDO fallback = llm(11L, "fallback", "deepseek");
         when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
         UpstreamFailureException failure = retryableFailure();
-        when(timeLimiter.execute(any())).thenThrow(failure).thenReturn("""
+        when(timeLimiter.execute(any(), any())).thenThrow(failure).thenReturn("""
                 {"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}
                 """);
 
@@ -497,7 +502,7 @@ class LlmForwardUsagePublicationTest {
     @Test
     void retryExhaustionStagesExactlyOneFailureEvent() {
         ReflectionTestUtils.setField(service, "maxRetries", 1);
-        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        when(timeLimiter.execute(any(), any())).thenThrow(retryableFailure());
         when(fallbackExecutor.resolveFallback(primary)).thenReturn(null);
 
         assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(
@@ -513,7 +518,7 @@ class LlmForwardUsagePublicationTest {
     void fallbackFailureStagesExactlyOneEventForFallback() {
         LlmServiceDO fallback = llm(11L, "fallback", "openai");
         when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
-        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        when(timeLimiter.execute(any(), any())).thenThrow(retryableFailure());
 
         assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(
                 context, "{\"model\":\"alias\"}", "request-fallback-fail", Instant.now()));
@@ -626,7 +631,7 @@ class LlmForwardUsagePublicationTest {
 
     @Test
     void imageWithoutTokensRecordsCountAndDoesNotFabricateZeroTokens() {
-        when(timeLimiter.execute(any())).thenReturn("{\"data\":[{\"url\":\"a\"},{\"url\":\"b\"}]}");
+        when(timeLimiter.execute(any(), any())).thenReturn("{\"data\":[{\"url\":\"a\"},{\"url\":\"b\"}]}");
         service.jsonCompletion(context, ModelOperation.IMAGE_GENERATION,
                 "{\"model\":\"alias\",\"prompt\":\"cat\"}", "image-1", Instant.now());
         ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
@@ -644,7 +649,7 @@ class LlmForwardUsagePublicationTest {
         when(pricingResolver.resolve(anyLong(), anyLong(), any())).thenReturn(new PricingSnapshot(
                 99L, BillingMode.REQUEST, "CNY", PricePeriodType.BASE, null,
                 null, null, null, new BigDecimal("25"), Instant.EPOCH, null));
-        when(timeLimiter.execute(any())).thenReturn("{\"data\":[{\"url\":\"a\"}]}");
+        when(timeLimiter.execute(any(), any())).thenReturn("{\"data\":[{\"url\":\"a\"}]}");
         service.jsonCompletion(context, ModelOperation.IMAGE_GENERATION,
                 "{\"model\":\"alias\",\"prompt\":\"cat\"}", "image-priced", Instant.now());
         ArgumentCaptor<TokenUsageEvent> captor = ArgumentCaptor.forClass(TokenUsageEvent.class);
@@ -656,7 +661,7 @@ class LlmForwardUsagePublicationTest {
 
     @Test
     void responsesAuditUsesInputOutputTokensOnlyWhenEnabled() {
-        when(timeLimiter.execute(any())).thenReturn(
+        when(timeLimiter.execute(any(), any())).thenReturn(
                 "{\"id\":\"r1\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}");
         String body = "{\"model\":\"alias\",\"input\":\"hello\"}";
         service.jsonCompletion(context, ModelOperation.RESPONSES, body, "response-off", Instant.now());
@@ -676,7 +681,7 @@ class LlmForwardUsagePublicationTest {
     @Test
     void imageAuditRedactsBase64AndBoundsPreview() {
         tenant.setAuditEnabled(1);
-        when(timeLimiter.execute(any())).thenReturn(
+        when(timeLimiter.execute(any(), any())).thenReturn(
                 "{\"data\":[{\"b64_json\":\"secret-image-bytes\"}]}");
         service.jsonCompletion(context, ModelOperation.IMAGE_GENERATION,
                 "{\"model\":\"alias\",\"prompt\":\"cat\"}", "image-audit", Instant.now());
@@ -693,7 +698,7 @@ class LlmForwardUsagePublicationTest {
     void embeddingsFallbackKeepsOperationAndActualService() {
         LlmServiceDO fallback = llm(11L, "fallback", "custom-vendor");
         when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
-        when(timeLimiter.execute(any())).thenThrow(retryableFailure()).thenReturn(
+        when(timeLimiter.execute(any(), any())).thenThrow(retryableFailure()).thenReturn(
                 "{\"data\":[],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":0,\"total_tokens\":3}}");
         service.jsonCompletion(context, ModelOperation.EMBEDDINGS,
                 "{\"model\":\"alias\",\"input\":\"hi\"}", "embed-1", Instant.now());
@@ -710,19 +715,19 @@ class LlmForwardUsagePublicationTest {
         when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
         doThrow(new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED))
                 .when(modelResolver).requireBinding(fallback, ModelOperation.EMBEDDINGS);
-        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        when(timeLimiter.execute(any(), any())).thenThrow(retryableFailure());
         assertThrows(UpstreamFailureException.class, () -> service.jsonCompletion(context,
                 ModelOperation.EMBEDDINGS, "{\"model\":\"alias\",\"input\":\"hi\"}",
                 "embed-2", Instant.now()));
-        verify(timeLimiter, times(1)).execute(any());
+        verify(timeLimiter, times(1)).execute(any(), any());
 
         reset(timeLimiter, fallbackExecutor, usagePublisher);
         ReflectionTestUtils.setField(service, "maxRetries", 3);
-        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        when(timeLimiter.execute(any(), any())).thenThrow(retryableFailure());
         assertThrows(UpstreamFailureException.class, () -> service.jsonCompletion(context,
                 ModelOperation.IMAGE_GENERATION, "{\"model\":\"alias\",\"prompt\":\"cat\"}",
                 "image-2", Instant.now()));
-        verify(timeLimiter, times(1)).execute(any());
+        verify(timeLimiter, times(1)).execute(any(), any());
         verifyNoInteractions(fallbackExecutor);
     }
 
@@ -744,7 +749,7 @@ class LlmForwardUsagePublicationTest {
     @Test
     void chatApiDefaultsToItsLimitAndPreservesExplicitCompletionTokenAlias() {
         primary.setMaxOutputTokens(1024L);
-        when(timeLimiter.execute(any())).thenAnswer(i -> ((Callable<?>) i.getArgument(0)).call());
+        when(timeLimiter.execute(any(), any())).thenAnswer(i -> ((Callable<?>) i.getArgument(1)).call());
         when(providerAdapter.forward(any())).thenReturn("{}");
         service.chatCompletion(context, "{\"model\":\"alias\"}", "limit-default", Instant.now());
         service.chatCompletion(context, "{\"model\":\"alias\",\"max_completion_tokens\":1024}", "limit-explicit", Instant.now());
@@ -793,7 +798,7 @@ class LlmForwardUsagePublicationTest {
                 excessive, "responses-excess", Instant.now()));
         assertThrows(ClientException.class, () -> service.responsesStream(context,
                 excessive, "responses-stream-excess", Instant.now()));
-        when(timeLimiter.execute(any())).thenAnswer(i -> ((Callable<?>) i.getArgument(0)).call());
+        when(timeLimiter.execute(any(), any())).thenAnswer(i -> ((Callable<?>) i.getArgument(1)).call());
         when(providerAdapter.forward(any())).thenReturn("{}");
         when(providerAdapter.stream(any())).thenReturn(Flux.empty());
         service.jsonCompletion(context, ModelOperation.RESPONSES,
@@ -812,13 +817,14 @@ class LlmForwardUsagePublicationTest {
 
     @Test
     void fallbackRevalidatesItsOwnLimitAndStagesOneFailure() {
+        when(budgets.hasUpstream("fallback-limit")).thenReturn(true);
         primary.setMaxOutputTokens(8192L);
         LlmServiceDO fallback = llm(11L, "fallback", "openai"); fallback.setMaxOutputTokens(1024L);
         when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
-        when(timeLimiter.execute(any())).thenThrow(retryableFailure());
+        when(timeLimiter.execute(any(), any())).thenThrow(retryableFailure());
         assertThrows(ClientException.class, () -> service.chatCompletion(context,
                 "{\"model\":\"alias\",\"max_tokens\":4096}", "fallback-limit", Instant.now()));
-        verify(timeLimiter, times(1)).execute(any());
+        verify(timeLimiter, times(1)).execute(any(), any());
         ArgumentCaptor<TokenUsageEvent> usage = ArgumentCaptor.forClass(TokenUsageEvent.class);
         verify(usagePublisher).publish(usage.capture());
         assertEquals(11L, usage.getValue().getServiceId());
@@ -828,7 +834,7 @@ class LlmForwardUsagePublicationTest {
     @Test
     void outputLimitDoesNotInjectTokenFieldsIntoEmbeddings() {
         primary.setMaxOutputTokens(1024L);
-        when(timeLimiter.execute(any())).thenAnswer(i -> ((Callable<?>) i.getArgument(0)).call());
+        when(timeLimiter.execute(any(), any())).thenAnswer(i -> ((Callable<?>) i.getArgument(1)).call());
         when(providerAdapter.forward(any())).thenReturn("{}");
         String body = "{\"model\":\"alias\",\"input\":\"hi\"}";
         service.jsonCompletion(context, ModelOperation.EMBEDDINGS, body, "embedding-limit", Instant.now());
@@ -840,12 +846,12 @@ class LlmForwardUsagePublicationTest {
     @Test void unknownTimeoutNeverRetriesOrFallsBackAndDoesNotAssertFreeExecution() {
         ReflectionTestUtils.setField(service, "maxRetries", 1);
         var timeout = new UpstreamFailureException("timeout", LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, true);
-        when(timeLimiter.execute(any())).thenThrow(timeout);
+        when(timeLimiter.execute(any(), any())).thenThrow(timeout);
 
         assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(context,
                 "{\"model\":\"alias\"}", "uncertain", Instant.now()));
 
-        verify(timeLimiter, times(1)).execute(any());
+        verify(timeLimiter, times(1)).execute(any(), any());
         verifyNoInteractions(fallbackExecutor);
         var event = ArgumentCaptor.forClass(TokenUsageEvent.class);
         verify(budgets).settle(event.capture());
@@ -854,7 +860,7 @@ class LlmForwardUsagePublicationTest {
     }
 
     @Test void capacityRejectionAbandonsWithoutSendingChargingOrChangingHealth() {
-        when(timeLimiter.execute(any())).thenThrow(new UpstreamFailureException("capacity",
+        when(timeLimiter.execute(any(), any())).thenThrow(new UpstreamFailureException("capacity",
                 LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED, false, UpstreamExecutionOutcome.NOT_SENT));
         assertThrows(UpstreamFailureException.class, () -> service.chatCompletion(context,
                 "{\"model\":\"alias\"}", "capacity", Instant.now()));
@@ -866,11 +872,11 @@ class LlmForwardUsagePublicationTest {
 
     @Test void explicitRejectionCanRetryAndEachAttemptConsumesRateLimit() {
         ReflectionTestUtils.setField(service, "maxRetries", 1);
-        when(timeLimiter.execute(any())).thenAnswer(invocation -> ((Callable<?>) invocation.getArgument(0)).call());
+        when(timeLimiter.execute(any(), any())).thenAnswer(invocation -> ((Callable<?>) invocation.getArgument(1)).call());
         when(providerAdapter.forward(any())).thenThrow(UpstreamErrors.from(429, null))
                 .thenReturn("{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}}");
         service.chatCompletion(context, "{\"model\":\"alias\"}", "safe-retry", Instant.now());
-        verify(providerAdapter, times(2)).forward(any()); verify(budgets, times(2)).permit(context, 10L, "safe-retry");
+        verify(providerAdapter, times(2)).forward(any()); verify(budgets, times(2)).permit(eq(context), eq(10L), eq("safe-retry"), any());
         verify(rateLimiter, times(2)).check(any()); verify(budgets, times(1)).settle(any());
         verifyNoInteractions(fallbackExecutor);
     }
@@ -888,6 +894,104 @@ class LlmForwardUsagePublicationTest {
             var event = ArgumentCaptor.forClass(TokenUsageEvent.class); verify(budgets).settle(event.capture());
             assertEquals(CostStatus.NOT_CHARGEABLE, event.getValue().getCostResult().status());
         } finally { realLimiter.close(); }
+    }
+
+    @ParameterizedTest @ValueSource(strings={"unavailable","limited"})
+    void realLimiterPreservesBudgetRejectionBeforeAdapterWithoutUnknownFees(String reason) {
+        var limiter = new Resilience4jTimeLimiter(2000,1,0);
+        ReflectionTestUtils.setField(service,"timeLimiter",limiter);
+        RuntimeException refusal = reason.equals("unavailable") ? new com.yonagi.verse.service.budget.CostBudgetUnavailableException()
+                : new com.yonagi.verse.service.budget.CostLimitExceededException(new com.yonagi.verse.service.budget.CostBudgetDecision(
+                List.of(new com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO.Hit("TENANT","MONTH","2026-11-01T00:00+08:00")),false));
+        doThrow(refusal).when(budgets).permit(any(),anyLong(),anyString(),any());
+        try {
+            assertSame(refusal,assertThrows(RuntimeException.class,()->service.chatCompletion(context,
+                    "{\"model\":\"alias\"}","worker-budget",Instant.now())));
+            verify(budgets).abandon(context,"worker-budget"); verify(budgets,never()).settle(any());
+            verifyNoInteractions(providerAdapter,fallbackExecutor,usagePublisher);
+            verify(circuitBreaker,never()).recordFailure(anyString());
+            verify(budgets).noteFailure(eq("worker-budget"),eq("BUDGET_CHECK"),anyString());
+        } finally { limiter.close(); }
+    }
+
+    @Test void timeoutDuringBudgetWaitCannotSendWhenTheWorkerReturnsLate() throws Exception {
+        var limiter = new Resilience4jTimeLimiter(100,1,1000);
+        ReflectionTestUtils.setField(service,"timeLimiter",limiter);
+        var entered=new CountDownLatch(1); var release=new CountDownLatch(1); var finished=new CountDownLatch(1);
+        doAnswer(i -> {
+            entered.countDown();
+            try {
+                while (release.getCount()>0) { try { release.await(); } catch(InterruptedException ignored) { /* 慢依赖晚于取消返回。 */ } }
+                ((com.yonagi.verse.service.forward.UpstreamAttemptControl)i.getArgument(3)).startSending(); return null;
+            } finally { finished.countDown(); }
+        }).when(budgets).permit(any(),anyLong(),anyString(),any());
+        try (var callers=Executors.newSingleThreadExecutor()) {
+            var result=callers.submit(()->assertThrows(com.yonagi.verse.service.budget.CostBudgetUnavailableException.class,
+                    ()->service.chatCompletion(context,"{\"model\":\"alias\"}","slow-budget",Instant.now())));
+            assertTrue(entered.await(2,TimeUnit.SECONDS)); result.get(2,TimeUnit.SECONDS);
+            verify(budgets).abandon(context,"slow-budget"); verify(budgets,never()).settle(any());
+            release.countDown(); assertTrue(finished.await(2,TimeUnit.SECONDS));
+            verifyNoInteractions(providerAdapter,fallbackExecutor,usagePublisher); verify(circuitBreaker,never()).recordFailure(anyString());
+        } finally { release.countDown(); limiter.close(); }
+    }
+
+    @Test void ordinaryAdapterValidationIsRecordedAsDispatchFailure() {
+        var limiter=new Resilience4jTimeLimiter(1000,1,0); ReflectionTestUtils.setField(service,"timeLimiter",limiter);
+        var invalid=new ClientException(LlmForwardErrorCodeEnum.OUTPUT_TOKEN_LIMIT_INVALID);
+        when(providerAdapter.forward(any())).thenThrow(invalid);
+        when(budgets.hasUpstream("local-validation")).thenReturn(true);
+        when(budgets.outcome("local-validation")).thenReturn(UpstreamExecutionOutcome.UNKNOWN);
+        try {
+            assertSame(invalid,assertThrows(ClientException.class,()->service.chatCompletion(context,
+                    "{\"model\":\"alias\"}","local-validation",Instant.now())));
+            verify(budgets).noteFailure("local-validation","DISPATCH",invalid.getErrorCode());
+            assertEquals(UpstreamExecutionOutcome.UNKNOWN,terminalEvent().getExecutionOutcome());
+        } finally { limiter.close(); }
+    }
+
+    @ParameterizedTest @ValueSource(strings={"budget","runtime"})
+    void fallbackLocalFailurePreservesItsCauseAndDoesNotSendAnotherRequest(String reason) {
+        LlmServiceDO fallback=llm(11L,"fallback","openai");
+        when(fallbackExecutor.resolveFallback(primary)).thenReturn(fallback);
+        RuntimeException failure=reason.equals("budget") ? new com.yonagi.verse.service.budget.CostBudgetUnavailableException()
+                : new IllegalStateException("local dependency failed");
+        when(timeLimiter.execute(any(),any())).thenThrow(retryableFailure()).thenThrow(failure);
+        when(budgets.hasUpstream("fallback-local")).thenReturn(true);
+        assertSame(failure,assertThrows(RuntimeException.class,()->service.chatCompletion(context,
+                "{\"model\":\"alias\"}","fallback-local",Instant.now())));
+        verify(budgets).noteFailure(eq("fallback-local"),eq(reason.equals("budget")?"BUDGET_CHECK":"UPSTREAM"),anyString());
+        verify(timeLimiter,times(2)).execute(any(),any()); verifyNoInteractions(providerAdapter);
+        assertEquals(UpstreamExecutionOutcome.REJECTED,terminalEvent().getExecutionOutcome());
+    }
+
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void unexpectedLocalFailureRemainsConservativeOnlyIfAnAttemptMayHaveSent(boolean sent) {
+        var failure=new IllegalStateException("dispatch failed");
+        when(timeLimiter.execute(any(),any())).thenThrow(failure);
+        when(budgets.hasUpstream("unexpected-local")).thenReturn(sent);
+        when(budgets.outcome("unexpected-local")).thenReturn(UpstreamExecutionOutcome.UNKNOWN);
+        assertSame(failure,assertThrows(RuntimeException.class,()->service.chatCompletion(context,
+                "{\"model\":\"alias\"}","unexpected-local",Instant.now())));
+        verify(budgets).noteFailure(eq("unexpected-local"),eq(sent?"UPSTREAM":"DISPATCH"),anyString());
+        if(sent) assertEquals(UpstreamExecutionOutcome.UNKNOWN,terminalEvent().getExecutionOutcome());
+        else { verify(budgets).abandon(context,"unexpected-local"); verify(budgets,never()).settle(any()); }
+        verifyNoInteractions(providerAdapter,fallbackExecutor);
+    }
+
+    @ParameterizedTest @ValueSource(strings={"permit","adapter"})
+    void mediaFailureRetainsOriginalStageAndNeverFabricatesSuccess(String stage) {
+        var media=mock(ProviderAdapter.class,withSettings().extraInterfaces(MediaOperationAdapter.class));
+        ReflectionTestUtils.setField(service,"providerAdapter",media);
+        RuntimeException failure=stage.equals("permit") ? new com.yonagi.verse.service.budget.CostBudgetUnavailableException()
+                : new IllegalStateException("media conversion failed");
+        if(stage.equals("permit")) doThrow(failure).when(budgets).permit(context,10L,"media-local");
+        else when(((MediaOperationAdapter)media).invoke(any(),any())).thenThrow(failure);
+        assertSame(failure,assertThrows(RuntimeException.class,()->service.media(context,ModelOperation.SPEECH,"alias",
+                new AdapterExchange.JsonRequest(ModelOperation.SPEECH,new JSONObject()),"media-local",Instant.now())));
+        verify(budgets).noteFailure(eq("media-local"),eq(stage.equals("permit")?"BUDGET_CHECK":"UPSTREAM"),anyString());
+        if(stage.equals("permit")) {
+            verifyNoInteractions(media); verify(budgets).abandon(context,"media-local"); verify(budgets,never()).settle(any());
+        } else assertEquals(UpstreamExecutionOutcome.UNKNOWN,terminalEvent().getExecutionOutcome());
     }
 
     @Test void realHttpTimeoutLeavesOneExecutionAndOneUnknownFeeTerminal() throws Exception {
@@ -921,9 +1025,9 @@ class LlmForwardUsagePublicationTest {
             assertTrue(arrived.await(2, TimeUnit.SECONDS));
             assertEquals(UpstreamExecutionOutcome.UNKNOWN, result.get(2, TimeUnit.SECONDS).getExecutionOutcome());
             assertEquals(1, calls.get()); assertEquals(1L, completed.getCount());
-            var rejected = assertThrows(UpstreamFailureException.class, () -> realLimiter.execute(() -> "duplicate"));
+            var rejected = assertThrows(UpstreamFailureException.class, () -> realLimiter.execute(new com.yonagi.verse.service.budget.InvocationExecutionState(com.yonagi.verse.service.budget.BudgetInvocationMode.SYNC).attempt(), () -> "duplicate"));
             assertEquals(LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED.code(), rejected.getErrorCode());
-            verifyNoInteractions(fallbackExecutor); verify(budgets).permit(context, 10L, "http-unknown");
+            verifyNoInteractions(fallbackExecutor); verify(budgets).permit(eq(context), eq(10L), eq("http-unknown"), any());
             var event = ArgumentCaptor.forClass(TokenUsageEvent.class); verify(budgets).settle(event.capture());
             assertEquals(CostStatus.UNCALCULABLE, event.getValue().getCostResult().status());
             release.countDown(); assertTrue(completed.await(2, TimeUnit.SECONDS));

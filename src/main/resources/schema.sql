@@ -717,6 +717,8 @@ CREATE TABLE IF NOT EXISTS t_cost_budget_invocation (
     lease_until DATETIME(6) NULL COMMENT '执行租约',
     last_heartbeat_at DATETIME(6) NULL COMMENT '执行心跳',
     last_error_code VARCHAR(64) NULL COMMENT '恢复原因',
+    failure_stage VARCHAR(32) NULL COMMENT '首个真实终态失败阶段；恢复观察不写入',
+    failure_code VARCHAR(64) NULL COMMENT '首个真实终态错误码',
     update_time DATETIME(6) NOT NULL COMMENT '更新时间',
     PRIMARY KEY(id),
     UNIQUE KEY uk_budget_invocation_request(request_id),

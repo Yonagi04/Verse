@@ -11,6 +11,11 @@ import java.util.List;
 public interface CostBudgetSettlementMapper extends BaseMapper<CostBudgetSettlementDO> {
     @Select("SELECT * FROM t_cost_budget_settlement WHERE event_id=#{eventId} FOR UPDATE")
     CostBudgetSettlementDO lockEvent(@Param("eventId") String eventId);
+    // 覆盖快照契约的两个合法来源，利用 tenant/source/request 唯一索引，避免按租户扫描并锁住整段账本。
+    @Select("SELECT * FROM t_cost_budget_settlement FORCE INDEX (uk_budget_settlement_request) "
+            + "WHERE tenant_id=#{tenantId} AND source IN ('API_KEY','PLAYGROUND') "
+            + "AND request_id=#{requestId} LIMIT 1 FOR UPDATE")
+    CostBudgetSettlementDO lockRequest(@Param("tenantId") Long tenantId, @Param("requestId") String requestId);
     // 状态按字节匹配，与 Enum.valueOf 一致，不接受表排序规则容忍的大小写或尾空格。
     @Select("""
             SELECT COALESCE(SUM(CASE WHEN CAST(cost_status AS BINARY) = _binary'CALCULATED'

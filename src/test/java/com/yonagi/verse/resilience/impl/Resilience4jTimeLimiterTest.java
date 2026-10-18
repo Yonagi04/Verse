@@ -17,6 +17,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 
 class Resilience4jTimeLimiterTest {
+    private <T> T execute(Resilience4jTimeLimiter limiter, java.util.concurrent.Callable<T> action) {
+        var control = new com.yonagi.verse.service.budget.InvocationExecutionState(
+                com.yonagi.verse.service.budget.BudgetInvocationMode.SYNC).attempt();
+        return limiter.execute(control, () -> { control.startSending(); return action.call(); });
+    }
     private ExecutorService pool(Resilience4jTimeLimiter limiter) {
         return (ExecutorService) ReflectionTestUtils.getField(limiter, "workerPool");
     }
@@ -26,7 +31,7 @@ class Resilience4jTimeLimiterTest {
         try {
             var failure = new UpstreamFailureException("invalid input", LlmForwardErrorCodeEnum.UPSTREAM_ERROR, false);
             assertSame(failure, assertThrows(UpstreamFailureException.class,
-                    () -> limiter.execute(() -> { throw failure; })));
+                    () -> execute(limiter, () -> { throw failure; })));
         } finally { pool(limiter).shutdownNow(); }
     }
 
@@ -53,7 +58,7 @@ class Resilience4jTimeLimiterTest {
         var started = new CountDownLatch(1);
         var callers = Executors.newSingleThreadExecutor();
         try {
-            var result = callers.submit(() -> assertThrows(UpstreamFailureException.class, () -> limiter.execute(() -> {
+            var result = callers.submit(() -> assertThrows(UpstreamFailureException.class, () -> execute(limiter, () -> {
                 started.countDown();
                 while (release.getCount() != 0) {
                     try { release.await(); } catch (InterruptedException ignored) { /* 模拟不响应取消的 I/O。 */ }
@@ -66,7 +71,7 @@ class Resilience4jTimeLimiterTest {
             assertFalse(timeout.isRetryable());
             var secondStarted = new AtomicBoolean();
             var rejected = assertThrows(UpstreamFailureException.class,
-                    () -> limiter.execute(() -> { secondStarted.set(true); return "duplicate"; }));
+                    () -> execute(limiter, () -> { secondStarted.set(true); return "duplicate"; }));
             assertEquals(LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED.code(), rejected.getErrorCode());
             assertEquals(UpstreamExecutionOutcome.NOT_SENT, rejected.getExecutionOutcome());
             assertFalse(rejected.isUpstreamHealthFailure());
@@ -84,7 +89,7 @@ class Resilience4jTimeLimiterTest {
         var interrupted = new AtomicBoolean();
         var outcome = new java.util.concurrent.atomic.AtomicReference<UpstreamExecutionOutcome>();
         var caller = new Thread(() -> {
-            var failure = assertThrows(UpstreamFailureException.class, () -> limiter.execute(() -> {
+            var failure = assertThrows(UpstreamFailureException.class, () -> execute(limiter, () -> {
                 started.countDown();
                 try { new CountDownLatch(1).await(); return "never"; }
                 finally { workerStopped.countDown(); }
@@ -103,7 +108,7 @@ class Resilience4jTimeLimiterTest {
     @Test void closedPoolRejectsWithoutExecutingAndConfigurationIsValidated() {
         var limiter = new Resilience4jTimeLimiter(1000, 1, 0);
         limiter.close();
-        var failure = assertThrows(UpstreamFailureException.class, () -> limiter.execute(() -> fail("must not execute")));
+        var failure = assertThrows(UpstreamFailureException.class, () -> execute(limiter, () -> fail("must not execute")));
         assertEquals(UpstreamExecutionOutcome.NOT_SENT, failure.getExecutionOutcome());
         assertFalse(failure.isRetryable());
         assertThrows(IllegalArgumentException.class, () -> new Resilience4jTimeLimiter(0, 1, 0));
@@ -115,7 +120,7 @@ class Resilience4jTimeLimiterTest {
         var limiter = new Resilience4jTimeLimiter(1000, 1, 0);
         try {
             var failure = assertThrows(UpstreamFailureException.class,
-                    () -> limiter.execute(() -> { throw new InterruptedException("worker cancelled"); }));
+                    () -> execute(limiter, () -> { throw new InterruptedException("worker cancelled"); }));
             assertFalse(Thread.currentThread().isInterrupted());
             assertFalse(failure.isUpstreamHealthFailure());
             assertEquals(UpstreamExecutionOutcome.UNKNOWN, failure.getExecutionOutcome());

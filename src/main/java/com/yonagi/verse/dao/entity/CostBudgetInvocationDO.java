@@ -33,6 +33,10 @@ public class CostBudgetInvocationDO {
     private LocalDateTime lastHeartbeatAt;
     /** 恢复原因。 */
     private String lastErrorCode;
+    /** 首个真实终态失败阶段；恢复观察不占据此字段。 */
+    private String failureStage;
+    /** 首个真实终态错误码，后续恢复不得覆盖。 */
+    private String failureCode;
     /** 更新时间。 */
     private LocalDateTime updateTime;
 }

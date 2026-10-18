@@ -5,6 +5,7 @@ import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.async.event.TokenUsageEvent;
 import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
+import com.yonagi.verse.service.forward.UpstreamAttemptControl;
 import com.yonagi.verse.async.outbox.UsageOutboxStager;
 import com.yonagi.verse.common.config.UsageOutboxProperties;
 import com.yonagi.verse.common.convention.exception.ClientException;
@@ -149,7 +150,11 @@ public class CostBudgetService {
         }
     }
     public void begin(UserContext ctx, Long serviceId, String requestId, Instant started) {
-        registry.register(requestId);
+        begin(ctx, serviceId, requestId, started, BudgetInvocationMode.SYNC);
+    }
+    public void begin(UserContext ctx, Long serviceId, String requestId, Instant started, BudgetInvocationMode mode) {
+        String eventId = String.valueOf(SnowflakeIdUtil.nextId());
+        registry.register(requestId, ctx.getCurrentTenantId(), ctx.getApiKeyId(), eventId, mode);
         try {
             shortTransactionVoid(ignored -> {
                 var tenant = tenantBudgets.lock(ctx.getCurrentTenantId());
@@ -157,7 +162,7 @@ public class CostBudgetService {
                 var model = llmBudgets.lock(ctx.getCurrentTenantId(), serviceId); joint(tenant, key, model).enforce();
                 var row = new CostBudgetInvocationDO(); row.setId(SnowflakeIdUtil.nextId()); row.setTenantId(ctx.getCurrentTenantId());
                 row.setApiKeyId(ctx.getApiKeyId()); row.setSource(ctx.getApiKeyId() == null ? "PLAYGROUND" : "API_KEY");
-                row.setRequestId(requestId); row.setEventId(String.valueOf(SnowflakeIdUtil.nextId())); row.setRequestStartedAt(time.local(started));
+                row.setRequestId(requestId); row.setEventId(eventId); row.setRequestStartedAt(time.local(started));
                 row.setOwnerId(registry.owner()); row.setOwnerGeneration(registry.generation()); row.setState("RUNNING");
                 row.setUpdateTime(time.local(time.now())); row.setLastHeartbeatAt(row.getUpdateTime()); row.setLeaseUntil(row.getUpdateTime().plusSeconds(30));
                 try {
@@ -182,12 +187,18 @@ public class CostBudgetService {
     }
     /** 每次真正发送（含重试/备用）前，先锁全部参与模型再登记目标。 */
     public void permit(UserContext ctx, Long serviceId, String requestId) {
+        permit(ctx, serviceId, requestId, attempt(requestId));
+    }
+    public UpstreamAttemptControl attempt(String requestId) { return registry.attempt(requestId); }
+    public void permit(UserContext ctx, Long serviceId, String requestId, UpstreamAttemptControl attempt) {
+        attempt.checkActive();
         authorize(ctx, serviceId, requestId);
-        sent(requestId);
+        attempt.startSending();
     }
     /** SSE 返回响应前取得单次许可；订阅只消费许可，未订阅仍可证明没有上游执行。 */
     public void prepareStream(UserContext ctx, Long serviceId, String requestId) {
         authorize(ctx, serviceId, requestId);
+        registry.prepared(requestId, time.now());
     }
     private void authorize(UserContext ctx, Long serviceId, String requestId) {
         if (untrackedRequests.contains(requestId)) {
@@ -217,24 +228,57 @@ public class CostBudgetService {
     }
 
     public void sent(String requestId) { registry.sent(requestId); }
+    public void subscribe(String requestId) { registry.subscribe(requestId); registry.sent(requestId); }
     public void finalizing(String requestId) { registry.finalizing(requestId); }
     public boolean hasUpstream(String requestId) { return registry.executed(requestId); }
+    public UpstreamExecutionOutcome outcome(String requestId) {
+        var local = registry.local(requestId);
+        return local == null ? UpstreamExecutionOutcome.UNKNOWN : local.state().outcome();
+    }
+    public void noteFailure(String requestId, String stage, String code) { registry.fail(requestId, stage, code); }
 
     /** 无订阅或在发送前被韧性规则拒绝时，必须证明没有实际上游执行。 */
     public void abandon(UserContext ctx, String requestId) {
         if (!registry.noUpstream(requestId)) return;
+        var local = registry.local(requestId);
         try {
-            shortTransactionVoid(ignored -> {
+            boolean cleaned = shortTransaction(ignored -> {
                 tenantBudgets.lock(ctx.getCurrentTenantId());
                 if (ctx.getApiKeyId() != null) lockKey(ctx.getCurrentTenantId(), ctx.getApiKeyId());
                 var models = llmBudgets.lockForRequest(ctx.getCurrentTenantId(), requestId, null);
                 CostBudgetInvocationDO row = invocations.lockRequest(requestId);
                 llmBudgets.verifyParticipants(requestId, models);
-                if (row != null && "RUNNING".equals(row.getState())) {
-                    row.setState("NO_UPSTREAM"); row.setUpdateTime(time.local(time.now())); invocations.updateById(row);
-                }
+                if (local == null || !Objects.equals(local.tenantId(), ctx.getCurrentTenantId())
+                        || !Objects.equals(local.keyId(), ctx.getApiKeyId()) || pendingSnapshots.containsKey(requestId)) return false;
+                if (row == null) return untrackedRequests.contains(requestId);
+                if (!registry.owner().equals(row.getOwnerId()) || !registry.generation().equals(row.getOwnerGeneration())
+                        || !Objects.equals(local.eventId(), row.getEventId()) || !Objects.equals(local.tenantId(), row.getTenantId())
+                        || !Objects.equals(local.keyId(), row.getApiKeyId())) return false;
+                if ("NO_UPSTREAM".equals(row.getState())) return true;
+                if (!("RUNNING".equals(row.getState()) || "UNKNOWN".equals(row.getState())
+                        && "OWNER_UNCONFIRMED".equals(row.getLastErrorCode()) && row.getFailureCode() == null)) return false;
+                if (settlements.lockRequest(row.getTenantId(), requestId) != null) return false;
+                row.setState("NO_UPSTREAM"); copyFailure(row);
+                row.setUpdateTime(time.local(time.now())); invocations.updateById(row);
+                return true;
             });
-        } finally { registry.remove(requestId); untrackedRequests.remove(requestId); }
+            if (cleaned) { registry.remove(requestId); untrackedRequests.remove(requestId); }
+        } catch (RuntimeException failure) {
+            log.warn("[cost-budget] 未发送调用清理待重试: requestId={}", requestId, failure);
+        } finally { if (local != null) local.state().deferCleanup(time.now()); }
+    }
+
+    public void retryUnsentCleanup() {
+        for (var local : registry.pendingCleanup(time.now())) {
+            abandon(new UserContext().setCurrentTenantId(local.tenantId()).setApiKeyId(local.keyId()), local.requestId());
+        }
+    }
+
+    private void copyFailure(CostBudgetInvocationDO row) {
+        var failure = registry.failure(row.getRequestId());
+        if (row.getFailureCode() == null && failure != null) {
+            row.setFailureStage(failure.stage()); row.setFailureCode(failure.code());
+        }
     }
 
     private boolean complete(ApiKeyDO key, Instant now) {
@@ -336,6 +380,7 @@ public class CostBudgetService {
             if (!hash.equals(existing.getPayloadHash())) throw new CostBudgetSnapshot.ConflictException();
             return existing.getEventId();
         }
+        if (invocation != null && "NO_UPSTREAM".equals(invocation.getState())) throw new CostBudgetSnapshot.ConflictException();
         CostBudgetSettlementDO row = new CostBudgetSettlementDO(); row.setId(SnowflakeIdUtil.nextId());
         row.setEventId(event.getEventId()); row.setTenantId(event.getTenantId()); row.setUserId(event.getUserId());
         row.setApiKeyId(event.getApiKeyId()); row.setServiceId(event.getServiceId()); row.setSource(event.getSource());
@@ -345,6 +390,7 @@ public class CostBudgetService {
         row.setEventPayloadJson(payload); row.setPayloadHash(hash); row.setBudgetApplied(false); row.setOrigin("LIVE");
         row.setCreateTime(time.local(time.now())); settlements.insert(row);
         if (invocation != null) {
+            copyFailure(invocation);
             invocation.setState("FINALIZING"); invocation.setUpdateTime(row.getCreateTime()); invocations.updateById(invocation);
         }
         return row.getEventId();
@@ -363,6 +409,7 @@ public class CostBudgetService {
             llmBudgets.verifyParticipants(lookup.getRequestId(), models);
             CostBudgetSettlementDO row = settlements.lockEvent(eventId);
             if (Boolean.TRUE.equals(row.getBudgetApplied())) return;
+            if (invocation != null && "NO_UPSTREAM".equals(invocation.getState())) throw new CostBudgetSnapshot.ConflictException();
             Instant started = row.getRequestStartedAt().atZone(BudgetPeriodResolver.ZONE).toInstant();
             tenantBudgets.apply(tenant, row);
             if (key != null) for (BudgetPeriodResolver.Period period : time.resolve(started)) {
@@ -374,7 +421,8 @@ public class CostBudgetService {
                 // 已持久化未知费用不代表上游未收费；保留预算栅栏，禁止用零金额放行。
                 boolean unknownExecution = event.getExecutionOutcome() == UpstreamExecutionOutcome.UNKNOWN;
                 invocation.setState(unknownExecution ? "UNKNOWN" : "SETTLED");
-                if (unknownExecution) invocation.setLastErrorCode("UPSTREAM_RESULT_UNKNOWN");
+                if (unknownExecution && invocation.getLastErrorCode() == null) invocation.setLastErrorCode("UPSTREAM_RESULT_UNKNOWN");
+                copyFailure(invocation);
                 invocation.setUpdateTime(time.local(time.now())); invocations.updateById(invocation);
             }
             llmBudgets.apply(models.stream().filter(model -> row.getServiceId().equals(model.getServiceId())).findFirst().orElseThrow(), row);
@@ -398,6 +446,7 @@ public class CostBudgetService {
         }
     }
     public void markUnknown(Long tenantId, Long keyId, String requestId, String reason) {
+        registry.fail(requestId, "SETTLEMENT", reason);
         registry.finalizing(requestId);
         try {
             shortTransactionVoid(ignored -> {
@@ -407,7 +456,9 @@ public class CostBudgetService {
                 CostBudgetInvocationDO invocation = invocations.lockRequest(requestId);
                 llmBudgets.verifyParticipants(requestId, models);
                 if (invocation != null && !"SETTLED".equals(invocation.getState()) && !"NO_UPSTREAM".equals(invocation.getState())) {
-                    invocation.setState("UNKNOWN"); invocation.setLastErrorCode(reason);
+                    invocation.setState("UNKNOWN");
+                    if (invocation.getLastErrorCode() == null) invocation.setLastErrorCode(reason);
+                    copyFailure(invocation);
                     invocation.setUpdateTime(time.local(time.now())); invocations.updateById(invocation);
                 }
                 if ("SNAPSHOT_CONFLICT".equals(reason)) tenantBudgets.unavailable(tenant, reason);
@@ -449,8 +500,8 @@ public class CostBudgetService {
     }
 
     public void recoverInvocation(CostBudgetInvocationDO lookup) {
-        if (registry.owner().equals(lookup.getOwnerId()) && "RUNNING".equals(lookup.getState())
-                && lookup.getRequestStartedAt().isBefore(time.local(time.now()).minusSeconds(30))) {
+        if (registry.owner().equals(lookup.getOwnerId()) && registry.generation().equals(lookup.getOwnerGeneration())
+                && registry.expireWaiting(lookup.getRequestId(), time.now())) {
             abandon(new UserContext().setCurrentTenantId(lookup.getTenantId()).setApiKeyId(lookup.getApiKeyId()), lookup.getRequestId());
         }
         shortTransactionVoid(ignored -> {
@@ -465,7 +516,7 @@ public class CostBudgetService {
             row.setState(active ? "RUNNING" : "UNKNOWN");
             row.setUpdateTime(time.local(time.now()));
             if (active) { row.setLastHeartbeatAt(row.getUpdateTime()); row.setLeaseUntil(row.getUpdateTime().plusSeconds(30)); }
-            else row.setLastErrorCode("OWNER_UNCONFIRMED");
+            else if (row.getLastErrorCode() == null) row.setLastErrorCode("OWNER_UNCONFIRMED");
             invocations.updateById(row);
         });
     }

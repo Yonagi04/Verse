@@ -40,7 +40,7 @@ class BudgetExecutionRegistryIntegrationTest {
     }
     @Test void unconsumedPermitCanBeAbandonedButCannotLaterSend() {
         first.register("unsubscribed"); assertTrue(first.noUpstream("unsubscribed"));
-        assertThrows(IllegalStateException.class, () -> first.sent("unsubscribed"));
+        assertThrows(CostBudgetUnavailableException.class, () -> first.sent("unsubscribed"));
         first.register("streaming"); first.sent("streaming"); assertFalse(first.noUpstream("streaming"));
     }
 }

@@ -319,11 +319,13 @@ class LlmCostBudgetMySqlIntegrationTest {
     }
     @Test void fallbackUsesActualModelAndUnknownFencesAllParticipants() throws Exception {
         budget(10,"10",null); budget(11,"10",null);
-        service.begin(playground,10L,"fallback",now); service.permit(playground,10L,"fallback"); service.permit(playground,11L,"fallback");
+        service.begin(playground,10L,"fallback",now); var attemptfallback = service.attempt("fallback"); service.permit(playground,10L,"fallback",attemptfallback);
+        attemptfallback.complete(com.yonagi.verse.service.forward.UpstreamExecutionOutcome.REJECTED); service.permit(playground,11L,"fallback");
         service.settle(fact("fallback",11L,playground,"2"));
         assertEquals(0,BigDecimal.ZERO.compareTo(used("LLM",10))); assertEquals(0,new BigDecimal("2").compareTo(used("LLM",11)));
         assertEquals(2,count("t_cost_budget_invocation_model"));
-        service.begin(playground,10L,"uncertain",now); service.permit(playground,10L,"uncertain"); service.permit(playground,11L,"uncertain");
+        service.begin(playground,10L,"uncertain",now); var attemptuncertain = service.attempt("uncertain"); service.permit(playground,10L,"uncertain",attemptuncertain);
+        attemptuncertain.complete(com.yonagi.verse.service.forward.UpstreamExecutionOutcome.REJECTED); service.permit(playground,11L,"uncertain");
         var unknown = fact("uncertain",11L,playground,"0.1"); unknown.setExecutionOutcome(com.yonagi.verse.service.forward.UpstreamExecutionOutcome.UNKNOWN); service.settle(unknown);
         assertThrows(CostBudgetUnavailableException.class, () -> service.check(playground,10L)); assertThrows(CostBudgetUnavailableException.class, () -> service.check(playground,11L));
     }
@@ -421,7 +423,7 @@ class LlmCostBudgetMySqlIntegrationTest {
 
 
     @Test void preparingStreamDoesNotClaimAnUnsentUpstream() {
-        service.begin(playground,10L,"prepared-only",now);
+        service.begin(playground,10L,"prepared-only",now,BudgetInvocationMode.STREAM);
         service.prepareStream(playground,10L,"prepared-only");
         assertFalse(service.hasUpstream("prepared-only"));
         service.abandon(playground,"prepared-only");

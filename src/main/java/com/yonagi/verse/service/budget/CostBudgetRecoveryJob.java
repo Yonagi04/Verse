@@ -19,6 +19,7 @@ public class CostBudgetRecoveryJob {
     @Scheduled(fixedDelay = 10_000)
     public void recover() {
         try {
+            service.retryUnsentCleanup();
             service.retryLocalSnapshots();
             for (var row : settlements.pending()) {
                 try { service.apply(row.getEventId()); }

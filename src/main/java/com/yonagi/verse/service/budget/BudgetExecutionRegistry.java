@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.budget;
 
 import com.yonagi.verse.dao.entity.CostBudgetInvocationDO;
+import com.yonagi.verse.service.forward.UpstreamAttemptControl;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -8,6 +9,7 @@ import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Component;
 import java.util.*;
 import java.util.concurrent.*;
+import java.time.Instant;
 
 /** 每次检查采用新 nonce 确认执行，心跳仅供运维，不作为放行证据。 */
 @Component
@@ -16,7 +18,7 @@ public class BudgetExecutionRegistry {
     private final RedissonClient redis;
     private final String owner = UUID.randomUUID().toString();
     private final String generation = UUID.randomUUID().toString();
-    private final Map<String, Execution> executions = new ConcurrentHashMap<>();
+    private final Map<String, LocalInvocation> executions = new ConcurrentHashMap<>();
     private final Map<String, CompletableFuture<Boolean>> replies = new ConcurrentHashMap<>();
     private int requestListener;
     private int replyListener;
@@ -41,41 +43,63 @@ public class BudgetExecutionRegistry {
     }
     public String owner() { return owner; }
     public String generation() { return generation; }
-    public void register(String requestId) { executions.putIfAbsent(requestId, new Execution()); }
+    public void register(String requestId) { register(requestId, null, null, null, BudgetInvocationMode.SYNC); }
+    public void register(String requestId, Long tenantId, Long keyId, String eventId, BudgetInvocationMode mode) {
+        if (executions.putIfAbsent(requestId, new LocalInvocation(requestId, tenantId, keyId, eventId,
+                new InvocationExecutionState(mode))) != null) throw new CostBudgetUnavailableException();
+    }
+    public UpstreamAttemptControl attempt(String requestId) { return require(requestId).state().attempt(); }
+    public void prepared(String requestId, Instant now) { require(requestId).state().prepared(now); }
+    public void subscribe(String requestId) { require(requestId).state().subscribe(); }
+    public boolean expireWaiting(String requestId, Instant now) {
+        var execution = executions.get(requestId);
+        return execution != null && execution.state().expireWaiting(now);
+    }
     public void sent(String requestId) {
-        Execution execution = executions.get(requestId);
-        if (execution == null) throw new IllegalStateException("invocation permit expired");
-        synchronized (execution) {
-            if (!execution.running) throw new IllegalStateException("invocation permit no longer active");
-            execution.sent = true;
-        }
+        attempt(requestId).startSending();
     }
     public boolean executed(String requestId) {
-        Execution execution = executions.get(requestId);
+        var execution = executions.get(requestId);
         if (execution == null) return false;
-        synchronized (execution) { return execution.sent; }
+        return execution.state().sent();
     }
     /** 和确认共享同步边界；收到终态立即停止 ACTIVE，先于任何数据库写入。 */
     public void finalizing(String requestId) {
-        Execution execution = executions.get(requestId);
+        var execution = executions.get(requestId);
         if (execution == null) return;
-        synchronized (execution) { execution.running = false; }
+        execution.state().finalizing();
     }
-    public void remove(String requestId) { executions.remove(requestId); }
+    public void remove(String requestId) {
+        var execution = executions.remove(requestId);
+        if (execution != null) execution.state().close();
+    }
     public boolean noUpstream(String requestId) {
-        Execution execution = executions.get(requestId);
-        if (execution == null) return false;
-        synchronized (execution) {
-            if (execution.sent || !execution.running) return false;
-            execution.running = false;
-            return true;
-        }
+        var execution = executions.get(requestId);
+        return execution != null && execution.state().noUpstream();
     }
     private boolean active(String requestId) {
-        Execution execution = executions.get(requestId);
-        if (execution == null) return false;
-        synchronized (execution) { return execution.running; }
+        var execution = executions.get(requestId);
+        return execution != null && execution.state().active();
     }
+    private LocalInvocation require(String requestId) {
+        var execution = executions.get(requestId);
+        if (execution == null) throw new CostBudgetUnavailableException();
+        return execution;
+    }
+    public LocalInvocation local(String requestId) { return executions.get(requestId); }
+    public List<LocalInvocation> pendingCleanup(Instant now) {
+        return executions.values().stream().filter(row -> row.tenantId() != null && row.state().cleanupPending(now))
+                .sorted(Comparator.comparing(row -> row.state().cleanupDue())).limit(100).toList();
+    }
+    public void fail(String requestId, String stage, String code) {
+        var execution = executions.get(requestId);
+        if (execution != null) execution.state().fail(stage, code);
+    }
+    public InvocationExecutionState.Failure failure(String requestId) {
+        var execution = executions.get(requestId);
+        return execution == null ? null : execution.state().failure();
+    }
+    public record LocalInvocation(String requestId, Long tenantId, Long keyId, String eventId, InvocationExecutionState state) {}
     public boolean confirm(CostBudgetInvocationDO invocation) {
         return confirmed(List.of(invocation)).contains(invocation.getRequestId());
     }
@@ -107,9 +131,5 @@ public class BudgetExecutionRegistry {
         } finally { nonces.values().forEach(replies::remove); }
         pending.forEach((id, reply) -> { if (Boolean.TRUE.equals(reply.getNow(false))) confirmed.add(id); });
         return Set.copyOf(confirmed);
-    }
-    private static final class Execution {
-        private boolean running = true;
-        private boolean sent;
     }
 }

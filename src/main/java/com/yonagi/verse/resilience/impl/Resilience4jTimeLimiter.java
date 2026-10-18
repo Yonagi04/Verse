@@ -1,7 +1,8 @@
 package com.yonagi.verse.resilience.impl;
 
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
-import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.AbstractException;
+import com.yonagi.verse.service.forward.UpstreamAttemptControl;
 import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
 import com.yonagi.verse.service.forward.UpstreamFailureException;
 import com.yonagi.verse.service.forward.UpstreamErrors;
@@ -37,7 +38,7 @@ public class Resilience4jTimeLimiter {
         }
         this.shutdownGraceMs = shutdownGraceMs;
         timeLimiter = TimeLimiter.of(TimeLimiterConfig.custom()
-                .timeoutDuration(Duration.ofMillis(timeLimitMs)).cancelRunningFuture(true).build());
+                .timeoutDuration(Duration.ofMillis(timeLimitMs)).cancelRunningFuture(false).build());
         AtomicInteger threadIdx = new AtomicInteger();
         workerPool = new ThreadPoolExecutor(0, maxConcurrency, 60, TimeUnit.SECONDS,
                 new SynchronousQueue<>(), task -> {
@@ -47,32 +48,41 @@ public class Resilience4jTimeLimiter {
                 }, new ThreadPoolExecutor.AbortPolicy());
     }
 
-    public <T> T execute(Callable<T> callable) {
+    public <T> T execute(UpstreamAttemptControl control, Callable<T> callable) {
+        java.util.Objects.requireNonNull(control);
         if (Thread.currentThread().isInterrupted()) {
-            throw UpstreamErrors.cancelled(UpstreamExecutionOutcome.NOT_SENT);
+            throw UpstreamErrors.cancelled(control.cancel());
         }
-        Execution<T> execution = new Execution<>(callable);
         Future<T> future;
-        try { future = workerPool.submit(execution); }
+        try { future = workerPool.submit(() -> {
+            control.checkActive();
+            try { return callable.call(); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw UpstreamErrors.cancelled(control.cancel());
+            }
+        }); }
         catch (RejectedExecutionException rejected) {
             throw failure(LlmForwardErrorCodeEnum.UPSTREAM_CAPACITY_EXCEEDED, UpstreamExecutionOutcome.NOT_SENT);
         }
         try {
             return timeLimiter.executeFutureSupplier(() -> future);
         } catch (TimeoutException timeout) {
-            throw failure(LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, execution.cancel());
+            UpstreamExecutionOutcome outcome = control.cancel();
+            future.cancel(true);
+            throw failure(LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT, outcome);
         } catch (InterruptedException interrupted) {
-            UpstreamExecutionOutcome outcome = execution.cancel();
+            UpstreamExecutionOutcome outcome = control.cancel();
             future.cancel(true);
             Thread.currentThread().interrupt();
             throw UpstreamErrors.cancelled(outcome);
-        } catch (ClientException original) {
+        } catch (AbstractException original) {
             // Resilience4j 已展开 ExecutionException；保持业务错误和失败证据。
             throw original;
         } catch (RuntimeException unexpected) {
-            throw failure(LlmForwardErrorCodeEnum.FORWARD_FAILED, UpstreamExecutionOutcome.UNKNOWN);
+            throw failure(LlmForwardErrorCodeEnum.FORWARD_FAILED, control.cancel());
         } catch (Exception checked) {
-            throw failure(LlmForwardErrorCodeEnum.FORWARD_FAILED, UpstreamExecutionOutcome.UNKNOWN);
+            throw failure(LlmForwardErrorCodeEnum.FORWARD_FAILED, control.cancel());
         }
     }
 
@@ -94,30 +104,4 @@ public class Resilience4jTimeLimiter {
         }
     }
 
-    /** 开始执行与取消共享同步边界，避免超时后才启动发送标记或 HTTP 请求。 */
-    private static final class Execution<T> implements Callable<T> {
-        private final Callable<T> callable;
-        private boolean started;
-        private boolean cancelled;
-
-        private Execution(Callable<T> callable) { this.callable = java.util.Objects.requireNonNull(callable); }
-
-        @Override public T call() throws Exception {
-            synchronized (this) {
-                if (cancelled) throw new CancellationException("execution cancelled before start");
-                started = true;
-            }
-            try { return callable.call(); }
-            catch (InterruptedException interrupted) {
-                // 工作线程的中断由 Resilience4j 展开后不能冒充调用方线程被中断。
-                Thread.currentThread().interrupt();
-                throw UpstreamErrors.cancelled(UpstreamExecutionOutcome.UNKNOWN);
-            }
-        }
-
-        private synchronized UpstreamExecutionOutcome cancel() {
-            cancelled = true;
-            return started ? UpstreamExecutionOutcome.UNKNOWN : UpstreamExecutionOutcome.NOT_SENT;
-        }
-    }
 }

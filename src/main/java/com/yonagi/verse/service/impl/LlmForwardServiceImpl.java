@@ -200,27 +200,30 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                         LlmAuditEvent.STATUS_FAIL, e2.getErrorCode(), operation);
                 throw e2;
             } catch (ClientException e2) {
-                // 备用服务输出限额拒绝时也保留唯一失败终态，不再请求上游。
-                publishTokenUsage(ctx, tenant.getTenantId(), fallbackService, null,
-                        requestId, LlmAuditEvent.STATUS_FAIL, TokenUsageEvent.SOURCE_UNKNOWN, start, operation,
-                        InvocationSource.API_KEY, UpstreamExecutionOutcome.REJECTED);
+                costBudgetService.noteFailure(requestId, failureStage(e2), e2.getErrorCode());
+                settleRejectedAttempt(ctx, tenant, fallbackService, requestId, start, operation);
                 publishAudit(ctx, tenant, fallbackService, body, null, requestId, start,
                         LlmAuditEvent.STATUS_FAIL, e2.getErrorCode(), operation);
                 throw e2;
             } catch (com.yonagi.verse.service.budget.CostBudgetUnavailableException e2) {
+                costBudgetService.noteFailure(requestId, "BUDGET_CHECK", e2.getErrorCode());
                 settleRejectedAttempt(ctx, tenant, fallbackService, requestId, start, operation);
                 throw e2;
             } catch (RuntimeException e2) {
+                costBudgetService.noteFailure(requestId, costBudgetService.hasUpstream(requestId) ? "UPSTREAM" : "DISPATCH", errorCode(e2));
                 settleRejectedAttempt(ctx, tenant, fallbackService, requestId, start, operation);
                 throw e2;
             }
         } catch (com.yonagi.verse.service.budget.CostBudgetUnavailableException e) {
+            costBudgetService.noteFailure(requestId, failureStage(e), e.getErrorCode());
             settleRejectedAttempt(ctx, tenant, actualService, requestId, start, operation);
             throw e;
         } catch (ClientException e) {
+            costBudgetService.noteFailure(requestId, failureStage(e), e.getErrorCode());
             settleRejectedAttempt(ctx, tenant, actualService, requestId, start, operation);
             throw e;
         } catch (RuntimeException e) {
+            costBudgetService.noteFailure(requestId, costBudgetService.hasUpstream(requestId) ? "UPSTREAM" : "DISPATCH", errorCode(e));
             settleRejectedAttempt(ctx, tenant, actualService, requestId, start, operation);
             throw e;
         }
@@ -233,7 +236,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                                        String requestId, long start, ModelOperation operation) {
         if (costBudgetService.hasUpstream(requestId)) {
             publishTokenUsage(ctx, tenant.getTenantId(), service, null, requestId, LlmAuditEvent.STATUS_FAIL,
-                    TokenUsageEvent.SOURCE_UNKNOWN, start, operation, InvocationSource.API_KEY, UpstreamExecutionOutcome.REJECTED);
+                    TokenUsageEvent.SOURCE_UNKNOWN, start, operation, InvocationSource.API_KEY, costBudgetService.outcome(requestId));
         } else costBudgetService.abandon(ctx, requestId);
     }
 
@@ -342,14 +345,17 @@ public class LlmForwardServiceImpl implements LlmForwardService {
 
         boolean auditEnabled = Integer.valueOf(1).equals(tenant.getAuditEnabled());
 
-        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt);
+        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt, com.yonagi.verse.service.budget.BudgetInvocationMode.STREAM);
         try { costBudgetService.prepareStream(ctx, service.getServiceId(), requestId); }
-        catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); throw rejected; }
+        catch (RuntimeException rejected) {
+            costBudgetService.noteFailure(requestId, "BUDGET_CHECK", errorCode(rejected));
+            costBudgetService.abandon(ctx, requestId); throw rejected;
+        }
         AtomicBoolean subscribed = new AtomicBoolean();
         // API 许可只能消费一次，避免冷 Flux 二次订阅重复执行上游。
         return Flux.defer(() -> {
             if (!subscribed.compareAndSet(false, true)) return Flux.error(new IllegalStateException("stream already subscribed"));
-            try { costBudgetService.sent(requestId); }
+            try { costBudgetService.subscribe(requestId); }
             catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); return Flux.error(rejected); }
             long start = requestStartedAt.toEpochMilli();
             AtomicBoolean firstChunk = new AtomicBoolean(false);
@@ -413,13 +419,16 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 .operation(ModelOperation.RESPONSES).protocol(protocol)
                 .provider(service.getProvider()).providerSettings(service.getProviderSettings()).build();
 
-        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt);
+        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt, com.yonagi.verse.service.budget.BudgetInvocationMode.STREAM);
         try { costBudgetService.prepareStream(ctx, service.getServiceId(), requestId); }
-        catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); throw rejected; }
+        catch (RuntimeException rejected) {
+            costBudgetService.noteFailure(requestId, "BUDGET_CHECK", errorCode(rejected));
+            costBudgetService.abandon(ctx, requestId); throw rejected;
+        }
         AtomicBoolean subscribed = new AtomicBoolean();
         return Flux.defer(() -> {
             if (!subscribed.compareAndSet(false, true)) return Flux.error(new IllegalStateException("stream already subscribed"));
-            try { costBudgetService.sent(requestId); }
+            try { costBudgetService.subscribe(requestId); }
             catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); return Flux.error(rejected); }
             AtomicBoolean firstEvent = new AtomicBoolean();
             AtomicBoolean receivedEvent = new AtomicBoolean();
@@ -455,6 +464,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                     .doOnCancel(() -> finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
                             requestBody, requestId, start, terminal.get(), LlmAuditEvent.STATUS_ABORTED, UpstreamExecutionOutcome.UNKNOWN))
                     .doOnError(error -> {
+                        costBudgetService.noteFailure(requestId, "UPSTREAM", errorCode(error));
                         if (!firstEvent.get() && !finalized.get()) circuitBreaker.recordFailure(serviceId);
                         finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
                                 requestBody, requestId, start, terminal.get(), LlmAuditEvent.STATUS_FAIL,
@@ -490,9 +500,12 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         }
         String safeRequest = mediaPreview(request);
         long start = requestStartedAt.toEpochMilli();
-        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt);
+        costBudgetService.begin(ctx, service.getServiceId(), requestId, requestStartedAt, com.yonagi.verse.service.budget.BudgetInvocationMode.MEDIA);
         try { costBudgetService.permit(ctx, service.getServiceId(), requestId); }
-        catch (RuntimeException rejection) { costBudgetService.abandon(ctx, requestId); throw rejection; }
+        catch (RuntimeException rejection) {
+            costBudgetService.noteFailure(requestId, "BUDGET_CHECK", errorCode(rejection));
+            costBudgetService.abandon(ctx, requestId); throw rejection;
+        }
         try {
             AdapterExchange.Result result = mediaAdapter.invoke(context, request);
             costBudgetService.finalizing(requestId);
@@ -518,12 +531,14 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             throw e;
         } catch (ClientException e) {
             // 发送后失败由适配器携带执行证据；普通业务错误仅用于发送前校验。
+            costBudgetService.noteFailure(requestId, "DISPATCH", e.getErrorCode());
             publishTokenUsage(ctx, tenant.getTenantId(), service, null, requestId, LlmAuditEvent.STATUS_FAIL,
                     TokenUsageEvent.SOURCE_UNKNOWN, start, operation, InvocationSource.API_KEY, UpstreamExecutionOutcome.NOT_SENT);
             publishAudit(ctx, tenant, service, safeRequest, null, requestId, start,
                     LlmAuditEvent.STATUS_FAIL, e.getErrorCode(), operation);
             throw e;
         } catch (RuntimeException e) {
+            costBudgetService.noteFailure(requestId, "UPSTREAM", errorCode(e));
             publishTokenUsage(ctx, tenant.getTenantId(), service, null, requestId,
                     LlmAuditEvent.STATUS_FAIL, start, operation);
             publishAudit(ctx, tenant, service, safeRequest, null, requestId, start,
@@ -553,6 +568,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                                              String body, String requestId, long start,
                                              JSONObject response, String status, UpstreamExecutionOutcome outcome) {
         if (!finalized.compareAndSet(false, true)) return;
+        if (!LlmAuditEvent.STATUS_SUCCESS.equals(status)) {
+            costBudgetService.noteFailure(requestId, "UPSTREAM", LlmForwardErrorCodeEnum.FORWARD_FAILED.code());
+        }
         costBudgetService.finalizing(requestId);
         UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), response);
         settleRateLimitSafely(rateCtx, safeTokenCount(normalized.totalTokens()));
@@ -602,15 +620,24 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             costBudgetService.check(ctx, service.getServiceId());
             if (attempt > 1) rateLimiter.check(rateCtx);
+            var control = costBudgetService.attempt(requestId);
             try {
-                String response = timeLimiter.execute(() -> {
-                    costBudgetService.permit(ctx, service.getServiceId(), requestId);
-                    return providerAdapter.forward(forwardContext);
+                String response = timeLimiter.execute(control, () -> {
+                    costBudgetService.permit(ctx, service.getServiceId(), requestId, control);
+                    String result = providerAdapter.forward(forwardContext);
+                    control.complete(UpstreamExecutionOutcome.COMPLETED);
+                    return result;
                 });
                 costBudgetService.finalizing(requestId);
                 circuitBreaker.recordSuccess(serviceId);
                 return response;
             } catch (UpstreamFailureException e) {
+                control.complete(e.getExecutionOutcome());
+                if (e.getExecutionOutcome() == UpstreamExecutionOutcome.NOT_SENT
+                        && LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT.code().equals(e.getErrorCode())
+                        && !costBudgetService.hasUpstream(requestId)) {
+                    throw new com.yonagi.verse.service.budget.CostBudgetUnavailableException();
+                }
                 if (e.isUpstreamHealthFailure()) circuitBreaker.recordFailure(serviceId);
                 if (!UpstreamRetryPolicy.canRetry(operation, e) || attempt >= maxAttempts) {
                     throw e;
@@ -795,6 +822,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                                 RateLimitContext rateCtx, String body, String requestId,
                                 long start, StreamResponseAccumulator accumulator,
                                 String status, String errorCode, InvocationSource source, UpstreamExecutionOutcome outcome) {
+        if (!LlmAuditEvent.STATUS_SUCCESS.equals(status)) {
+            costBudgetService.noteFailure(requestId, "UPSTREAM", errorCode == null ? LlmForwardErrorCodeEnum.FORWARD_FAILED.code() : errorCode);
+        }
         var snapshot = accumulator.snapshot();
         JSONObject responseEnvelope = snapshot.envelope();
         JSONObject usage = snapshot.usage();
@@ -853,6 +883,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private void publishFailureUsage(UserContext ctx, TenantDO tenant, LlmServiceDO service,
                                      String requestId, long start, ModelOperation operation,
                                      UpstreamFailureException failure) {
+        costBudgetService.noteFailure(requestId, costBudgetService.hasUpstream(requestId) ? "UPSTREAM" : "DISPATCH", failure.getErrorCode());
         if (failure.getExecutionOutcome() == UpstreamExecutionOutcome.NOT_SENT
                 && !costBudgetService.hasUpstream(requestId)) {
             costBudgetService.abandon(ctx, requestId);
@@ -980,10 +1011,16 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     }
 
     private String errorCode(Throwable e) {
-        if (e instanceof UpstreamFailureException ufe) {
-            return ufe.getErrorCode();
+        if (e instanceof com.yonagi.verse.common.convention.exception.AbstractException original) {
+            return original.getErrorCode();
         }
         return LlmForwardErrorCodeEnum.FORWARD_FAILED.code();
+    }
+
+    private String failureStage(RuntimeException failure) {
+        if (failure instanceof com.yonagi.verse.service.budget.CostLimitExceededException
+                || failure instanceof com.yonagi.verse.service.budget.CostBudgetUnavailableException) return "BUDGET_CHECK";
+        return "DISPATCH";
     }
 
     private JSONObject parseResponseEnvelope(String response) {
