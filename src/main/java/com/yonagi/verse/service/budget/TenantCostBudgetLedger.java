@@ -87,10 +87,17 @@ public class TenantCostBudgetLedger {
     private CostBudgetPeriodDO aggregate(TenantCostBudgetDO config, BudgetPeriodResolver.Period period) {
         var row = new CostBudgetPeriodDO(); row.setId(SnowflakeIdUtil.nextId()); row.setTenantId(config.getTenantId());
         row.setScopeType("TENANT"); row.setScopeId(config.getTenantId()); row.setPeriodType(period.type());
-        row.setPeriodStart(period.start()); row.setPeriodEnd(period.end()); row.setUsedCostFen(BigDecimal.ZERO);
-        row.setCalculatedCount(0L); row.setUnpricedCount(0L); row.setUncalculableCount(0L); row.setNotChargeableCount(0L);
+        row.setPeriodStart(period.start()); row.setPeriodEnd(period.end());
         row.setRebuildVersion(0L); row.setUpdateTime(time.local(time.now()));
-        for (var fact : settlements.tenantHistory(config.getTenantId(), period.start(), period.end())) CostBudgetService.add(row, fact);
+        var totals = settlements.aggregateTenant(config.getTenantId(), period.start(), period.end());
+        if (totals.getInvalidCount().signum() != 0) throw new IllegalStateException("invalid budget settlement");
+        var used = totals.getUsedCostFen();
+        if (used.precision() - used.scale() > 47 || used.scale() > 18) throw new IllegalStateException("budget overflow");
+        row.setUsedCostFen(used);
+        row.setCalculatedCount(totals.getCalculatedCount().longValueExact());
+        row.setUnpricedCount(totals.getUnpricedCount().longValueExact());
+        row.setUncalculableCount(totals.getUncalculableCount().longValueExact());
+        row.setNotChargeableCount(totals.getNotChargeableCount().longValueExact());
         return row;
     }
     public void apply(TenantCostBudgetDO config, CostBudgetSettlementDO fact) {
