@@ -221,6 +221,7 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     KEY `idx_tenant_time` (`tenant_id`, `create_time`),
     KEY `idx_usage_tenant_cost_started` (`tenant_id`, `cost_status`, `request_started_at`),
     KEY `idx_usage_tenant_user_cost_started` (`tenant_id`, `user_id`, `cost_status`, `request_started_at`),
+    KEY `idx_usage_personal_started`(user_id,request_started_at,id),
     UNIQUE KEY `uk_token_usage_event_id` (`event_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Token消耗记录表';
 
@@ -449,7 +450,7 @@ ON DUPLICATE KEY UPDATE `display_name` = VALUES(`display_name`), `description` =
 CREATE TABLE IF NOT EXISTS `t_notification` (
     `id`              BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `notification_id` BIGINT       NOT NULL COMMENT '通知业务ID（雪花）',
-    `tenant_id`       BIGINT       NOT NULL COMMENT '产生通知的租户ID',
+    `tenant_id`       BIGINT NULL COMMENT '产生通知的租户ID；本人全局系统通知为NULL',
     `type`            VARCHAR(30)  NOT NULL COMMENT '通知类型：SYSTEM / ANNOUNCEMENT',
     `severity`        VARCHAR(10)  NOT NULL COMMENT '严重程度：INFO / WARNING / CRITICAL',
     `title`           VARCHAR(200) NOT NULL COMMENT '通知标题',
@@ -940,3 +941,85 @@ CREATE TABLE IF NOT EXISTS t_llm_cost_alert_delivery (
     UNIQUE KEY uk_cost_delivery_request(request_id),
     KEY idx_cost_delivery_pending(status,next_retry_at,id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='告警收件人快照与渠道结果';
+
+CREATE TABLE t_personal_cost_alert_config (
+    user_id BIGINT NOT NULL PRIMARY KEY COMMENT '费用预警设置所属用户业务ID',
+    daily_enabled BOOLEAN NOT NULL DEFAULT FALSE COMMENT '每日费用预警开关，与每周开关独立',
+    daily_threshold_fen DECIMAL(20,0) NULL COMMENT '每日预警金额，单位整数分；未设置时为NULL',
+    weekly_enabled BOOLEAN NOT NULL DEFAULT FALSE COMMENT '每周费用预警开关，与每日开关独立',
+    weekly_threshold_fen DECIMAL(20,0) NULL COMMENT '每周预警金额，单位整数分；未设置时为NULL',
+    channels_json JSON NOT NULL COMMENT '日周共用通知渠道数组：IN_APP、SMS、EMAIL',
+    config_version BIGINT NOT NULL COMMENT '配置乐观锁版本，用于拒绝并发覆盖',
+    create_time DATETIME(3) NOT NULL COMMENT '设置创建时间，北京时间',
+    update_time DATETIME(3) NOT NULL COMMENT '设置最近修改时间，北京时间'
+) ENGINE=InnoDB COMMENT='用户个人费用预警设置';
+
+CREATE TABLE t_personal_usage_projection (
+    user_id BIGINT NOT NULL COMMENT '原始用量事实所属用户业务ID',
+    usage_id BIGINT NOT NULL COMMENT '原始模型用量事实ID，对应t_token_usage.id',
+    source VARCHAR(24) NULL COMMENT '调用来源：API_KEY或PLAYGROUND；历史缺失时为NULL',
+    tenant_id BIGINT NULL COMMENT '调用所属租户业务ID，参与逻辑请求去重；历史缺失时为NULL',
+    request_id VARCHAR(128) NULL COMMENT '逻辑请求ID，参与来源和租户范围内去重；历史缺失时为NULL',
+    logical_key CHAR(64) NULL COMMENT '来源、租户和请求ID的SHA-256；重复候选或身份缺失时为NULL',
+    canonical_usage_id BIGINT NOT NULL COMMENT '同用户同逻辑调用的首条事实ID；首条指向自身',
+    status VARCHAR(24) NOT NULL COMMENT '投影状态：PENDING待处理、APPLIED已贡献、DUPLICATE重复、FAILED失败',
+    attempt_count INT NOT NULL DEFAULT 0 COMMENT '投影处理失败次数，用于重试退避和终止判断',
+    next_retry_at DATETIME(3) NOT NULL COMMENT '下次允许处理时间，北京时间',
+    last_error_code VARCHAR(64) NULL COMMENT '最近一次投影失败原因码，不存敏感错误详情',
+    projected_at DATETIME(3) NULL COMMENT '投影处理完成时间，北京时间；尚未完成时为NULL',
+    create_time DATETIME(3) NOT NULL COMMENT '原始事实进入投影工作队列的时间，北京时间',
+    PRIMARY KEY(user_id,usage_id),
+    UNIQUE KEY uk_personal_logical(user_id,logical_key),
+    KEY idx_personal_projection_due(status,next_retry_at,user_id,usage_id)
+) ENGINE=InnoDB COMMENT='用户模型用量投影工作项与逻辑调用去重记录';
+
+CREATE TABLE t_personal_usage_daily (
+    user_id BIGINT NOT NULL COMMENT '模型用量统计所属用户业务ID，汇总所有租户',
+    usage_date DATE NOT NULL COMMENT '逻辑请求开始日期，按北京时间归属',
+    success_count BIGINT NOT NULL COMMENT '当日去重后的成功逻辑调用次数',
+    known_cost_fen DECIMAL(38,18) NOT NULL COMMENT '当日已知预估费用累计，单位分，保留原始精度',
+    unknown_cost_count BIGINT NOT NULL COMMENT '当日费用尚不可确定的去重逻辑调用次数',
+    updated_at DATETIME(3) NOT NULL COMMENT '最近一次日汇总贡献时间，北京时间',
+    PRIMARY KEY(user_id,usage_date)
+) ENGINE=InnoDB COMMENT='用户模型用量与已知费用日汇总';
+
+CREATE TABLE t_personal_cost_alert_event (
+    event_id VARCHAR(32) NOT NULL PRIMARY KEY COMMENT '稳定的费用预警事件业务ID',
+    user_id BIGINT NOT NULL COMMENT '预警所属用户业务ID，也是唯一收件人',
+    period_type VARCHAR(8) NOT NULL COMMENT '预警周期类型：DAY每日、WEEK每周',
+    period_start DATETIME(3) NOT NULL COMMENT '预警周期开始时间，含；北京时间',
+    period_end DATETIME(3) NOT NULL COMMENT '预警周期结束时间，不含；北京时间',
+    triggered_at DATETIME(3) NOT NULL COMMENT '达到阈值并生成预警事实的时间，北京时间',
+    threshold_fen DECIMAL(20,0) NOT NULL COMMENT '触发时预警金额快照，单位整数分',
+    known_cost_fen DECIMAL(38,18) NOT NULL COMMENT '触发时已知预估费用快照，单位分，保留原始精度',
+    cost_complete BOOLEAN NOT NULL COMMENT '触发时费用统计是否完整的快照',
+    config_version BIGINT NOT NULL COMMENT '触发时费用预警设置版本快照',
+    channels_json JSON NOT NULL COMMENT '触发时所选通知渠道数组快照：IN_APP、SMS、EMAIL',
+    notification_id BIGINT NOT NULL COMMENT '固定的站内通知业务ID，用于重复派发幂等',
+    UNIQUE KEY uk_personal_alert_period(user_id,period_type,period_start)
+) ENGINE=InnoDB COMMENT='用户个人费用预警触发事实与配置快照';
+
+CREATE TABLE t_personal_cost_alert_delivery (
+    delivery_id BIGINT NOT NULL PRIMARY KEY COMMENT '费用预警渠道派发任务业务ID',
+    event_id VARCHAR(32) NOT NULL COMMENT '所属费用预警事件业务ID',
+    recipient_user_id BIGINT NOT NULL COMMENT '收件用户业务ID，仅允许预警所属本人',
+    channel VARCHAR(16) NOT NULL COMMENT '通知渠道：IN_APP站内信、SMS短信、EMAIL邮件',
+    request_id CHAR(64) NOT NULL COMMENT '事件、渠道和收件人的SHA-256请求ID；重试复用',
+    status VARCHAR(24) NOT NULL COMMENT '派发状态：PENDING/RETRY_WAIT/CLAIMED/QUEUED/ACCEPTED/REJECTED/UNKNOWN/EXPIRED/CANCELLED',
+    attempt_count INT NOT NULL COMMENT '本地消息入队尝试次数，不等同于供应商发送次数',
+    next_retry_at DATETIME(3) NOT NULL COMMENT '下次允许派发时间，北京时间',
+    execution_token VARCHAR(36) NULL COMMENT '本次派发认领令牌，防止过期执行者覆盖结果',
+    lease_until DATETIME(3) NULL COMMENT '本次派发认领租约截止时间，北京时间',
+    contact_hash VARCHAR(64) NULL COMMENT '入队时本人联系方式摘要，用于识别联系方式变更',
+    send_permitted_at DATETIME(3) NULL COMMENT '当前消息尝试的发送许可提交时间，北京时间',
+    permitted_send_token VARCHAR(36) NULL COMMENT '已获发送许可的消息执行令牌',
+    permitted_send_attempt INT NULL COMMENT '已获发送许可的消息尝试序号',
+    cancel_requested_at DATETIME(3) NULL COMMENT '取消意图记录时间，北京时间；阻止后续尝试复活',
+    reason_code VARCHAR(64) NULL COMMENT '派发取消、失败或恢复原因码，不存敏感详情',
+    create_time DATETIME(3) NOT NULL COMMENT '派发任务创建时间，北京时间',
+    update_time DATETIME(3) NOT NULL COMMENT '派发任务最近更新时间，北京时间',
+    UNIQUE KEY uk_personal_delivery_channel(event_id,channel),
+    UNIQUE KEY uk_personal_delivery_request(request_id),
+    KEY idx_personal_delivery_due(status,next_retry_at,delivery_id),
+    KEY idx_personal_delivery_owner(recipient_user_id,delivery_id)
+) ENGINE=InnoDB COMMENT='用户个人费用预警渠道派发与发送许可记录';

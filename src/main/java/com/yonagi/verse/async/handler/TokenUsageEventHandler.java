@@ -14,7 +14,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 
@@ -31,6 +30,7 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
     private final TokenUsageMapper tokenUsageMapper;
     private final TokenUsageCostMapper tokenUsageCostMapper;
     private final UserMapper users;
+    private final com.yonagi.verse.service.usage.user.UserModelUsageProjectionService userModelUsageProjection;
 
     @Override
     public String eventType() {
@@ -115,6 +115,7 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
             }
             Long usageId = tokenUsageMapper.selectIdByEventId(event.getEventId());
             if (usageId != null && tokenUsageCostMapper.countByUsageId(usageId) == 1) {
+                userModelUsageProjection.enqueue(event.getUserId(), usageId);
                 log.info("[token-usage] 重复事件已确认: eventId={}", event.getEventId());
                 return;
             }
@@ -123,6 +124,7 @@ public class TokenUsageEventHandler implements DomainEventHandler<TokenUsageEven
             }
             throw e;
         }
+        userModelUsageProjection.enqueue(event.getUserId(), tokenUsage.getId());
     }
 
     /** 从兼容期用量对象复制不可变费用快照。 */

@@ -361,6 +361,19 @@ public class CostBudgetService {
     /** 暂存失败但进程仍存活时重放原始终态；不重新生成费用。 */
     public void retryLocalSnapshots() { List.copyOf(pendingSnapshots.values()).forEach(this::settle); }
 
+    /** 只返回同一调用已分配的身份，不改变预算状态；独立活动采集复用该恢复契约。 */
+    public String usageEventId(TokenUsageEvent event) {
+        var invocation=invocations.selectOne(Wrappers.lambdaQuery(CostBudgetInvocationDO.class)
+                .eq(CostBudgetInvocationDO::getRequestId,event.getRequestId()));
+        if (invocation==null) return DigestUtil.sha256Hex(event.getSource()+":"+event.getTenantId()+":"+event.getRequestId());
+        if (!java.util.Objects.equals(invocation.getTenantId(),event.getTenantId())
+                || !java.util.Objects.equals(invocation.getApiKeyId(),event.getApiKeyId())
+                || !java.util.Objects.equals(invocation.getSource(),event.getSource())
+                || invocation.getRequestStartedAt()==null || invocation.getRequestStartedAt().atZone(BudgetPeriodResolver.ZONE).toInstant().toEpochMilli()!=event.getRequestStartedAt().toEpochMilli())
+            throw new IllegalStateException("USAGE_IDENTITY_CONFLICT");
+        return invocation.getEventId();
+    }
+
     private String stage(TokenUsageEvent event) {
         tenantBudgets.lock(event.getTenantId());
         ApiKeyDO key = event.getApiKeyId() == null ? null : lockKey(event.getTenantId(), event.getApiKeyId());

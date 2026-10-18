@@ -23,6 +23,8 @@ public class UserAccountCleanupService {
     private final TokenUsageHourlyAggMapper projection;
     private final ReliableDomainEventPublisher events;
     private final DomainEventOutboxMapper outbox;
+    private final com.yonagi.verse.service.usage.user.UserModelUsageCleanupService modelUsageCleanup;
+    private final com.yonagi.verse.service.user.costalert.UserCostAlertCleanupService costAlertCleanup;
 
     public static boolean isClosed(UserDO user) {
         return user != null && Integer.valueOf(2).equals(user.getStatus()) && Integer.valueOf(1).equals(user.getDelFlag());
@@ -45,7 +47,9 @@ public class UserAccountCleanupService {
             }
             int hourly = usage.deleteHourlyBatch(event.getUserId(), BATCH_SIZE);
             int pending = usage.deleteOutboxBatch(event.getUserId(), BATCH_SIZE);
-            if (ids.size() == BATCH_SIZE || hourly == BATCH_SIZE || pending == BATCH_SIZE) {
+            boolean modelUsagePending = modelUsageCleanup.cleanBatch(event.getUserId());
+            boolean costAlertPending = costAlertCleanup.cleanBatch(event.getUserId());
+            if (ids.size() == BATCH_SIZE || hourly == BATCH_SIZE || pending == BATCH_SIZE || modelUsagePending || costAlertPending) {
                 events.publish(UserClosedEvent.next(event.getUserId()), 0L);
             } else if (users.completeResourceCleanup(event.getUserId(), now) != 1) {
                 throw new IllegalStateException("注销清理完成状态更新失败");

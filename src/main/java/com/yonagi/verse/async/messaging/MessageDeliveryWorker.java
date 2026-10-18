@@ -51,7 +51,7 @@ public class MessageDeliveryWorker {
                 // Redis 预检也可能耗时，外发前再次确认任务仍在有效期内。
                 if (!reservation.row().getDeadlineAt().after(new Date())) result = MessageSubmissionRespDTO.expired("TASK_EXPIRED");
                 else {
-                    MessageSubmissionRespDTO denied = eligibilityResult(payload);
+                    MessageSubmissionRespDTO denied = eligibilityResult(payload, channel, reservation);
                     if (denied != null) result = denied;
                     else if (!reservation.row().getDeadlineAt().after(new Date())) result = MessageSubmissionRespDTO.expired("TASK_EXPIRED");
                     else {
@@ -98,11 +98,13 @@ public class MessageDeliveryWorker {
         }
     }
 
-    private MessageSubmissionRespDTO eligibilityResult(MessageDeliveryTaskDTO payload) {
+    private MessageSubmissionRespDTO eligibilityResult(MessageDeliveryTaskDTO payload, MessageChannel channel, SendRecordStore.ClaimedTask reservation) {
         String scene = payload.sms() != null ? payload.sms().scene() : payload.email().scene();
         String requestId = payload.sms() != null ? payload.sms().requestId() : payload.email().requestId();
         try {
-            for (var guard : eligibility) { var result = guard.verify(scene, requestId); if (result != null) return result; }
+            var row = reservation.row();
+            var attempt = new SendAttemptContext(channel,row.getId(),row.getExecutionToken(),row.getAttemptCount(),row.getRecipientHash());
+            for (var guard : eligibility) { var result = guard.verify(scene, requestId, attempt); if (result != null) return result; }
             return null;
         } catch (RuntimeException unavailable) { return MessageSubmissionRespDTO.retryable("ELIGIBILITY_UNAVAILABLE"); }
     }

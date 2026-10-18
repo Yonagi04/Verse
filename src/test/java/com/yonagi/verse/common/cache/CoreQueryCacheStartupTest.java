@@ -1,7 +1,6 @@
 package com.yonagi.verse.common.cache;
 
 import com.yonagi.verse.service.cache.HourlyCacheBehavior;
-
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.service.forward.*;
@@ -35,6 +34,7 @@ class CoreQueryCacheStartupTest {
             .withBean(com.yonagi.verse.service.budget.LlmCostBudgetLedger.class, () -> mock(com.yonagi.verse.service.budget.LlmCostBudgetLedger.class))
             .withBean(io.micrometer.core.instrument.MeterRegistry.class, () -> new io.micrometer.core.instrument.simple.SimpleMeterRegistry())
             .withBean(CostBudgetService.class, () -> mock(CostBudgetService.class))
+            .withBean(com.yonagi.verse.service.usage.user.UserModelUsageFactPublisher.class, () -> mock(com.yonagi.verse.service.usage.user.UserModelUsageFactPublisher.class))
             .withBean(RateLimiter.class, () -> mock(RateLimiter.class))
             .withBean(CircuitBreaker.class, () -> mock(CircuitBreaker.class))
             .withBean(FallbackExecutor.class, () -> mock(FallbackExecutor.class));

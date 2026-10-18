@@ -47,7 +47,6 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
-
 import java.time.Instant;
 import java.math.BigDecimal;
 import java.util.List;
@@ -60,12 +59,28 @@ import java.util.concurrent.atomic.AtomicInteger;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class LlmForwardUsagePublicationTest {
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"API_KEY,false","PLAYGROUND,false","API_KEY,true","PLAYGROUND,true"})
+    void costingOffStillCapturesOneSuccessWithoutWeakeningBudgetFenceOrChangingStream(String source,boolean unavailable) {
+        ReflectionTestUtils.setField(service,"costingEnabled",false);
+        var personal=(com.yonagi.verse.service.usage.user.UserModelUsageFactPublisher) ReflectionTestUtils.getField(service,"userModelUsagePublisher");
+        when(personal.enabled()).thenReturn(true);
+        if (unavailable) doThrow(new IllegalStateException("outbox unavailable")).when(personal).publish(any());
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(ServerSentEvent.builder("{\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}").build(),ServerSentEvent.builder("[DONE]").build()));
+        if (source.equals("PLAYGROUND")) {
+            context.setApiKeyId(null); when(serviceMapper.selectOne(any())).thenReturn(primary);
+            service.playgroundChatStream(context,10L,List.of(new ChatMessage("user","hello")),"costing-off",Instant.now()).blockLast();
+        } else service.chatCompletionStream(context,"{\"model\":\"alias\",\"stream\":true}","costing-off",Instant.now()).blockLast();
+        var fact=ArgumentCaptor.forClass(TokenUsageEvent.class); verify(personal,times(1)).publish(fact.capture());
+        assertEquals(source,fact.getValue().getSource()); assertEquals("SUCCESS",fact.getValue().getStatus()); assertEquals(CostStatus.UNCALCULABLE,fact.getValue().getCostResult().status());
+        verify(budgets).markUnknown(eq(2L),eq(context.getApiKeyId()),eq("costing-off"),eq("COSTING_DISABLED"));
+        verify(budgets,never()).settle(any()); verifyNoInteractions(pricingResolver);
+    }
     @ParameterizedTest @ValueSource(strings = {"partial-usage", "no-usage", "empty", "finish-reason-only"})
     void chatEofWithoutDoneFailsWithUnknownExecutionAndRetainsUsage(String payload) {
         tokenPricing();
@@ -400,7 +415,7 @@ class LlmForwardUsagePublicationTest {
                 new OpenAiCompatibleUsageNormalizer()));
         service = new LlmForwardServiceImpl(modelResolver, providerAdapter, aesUtil, eventPublisher,
                 tenantMapper, serviceMapper, rateLimiter, circuitBreaker, fallbackExecutor,
-                timeLimiter, registry, pricingResolver, new CostCalculator(), budgets);
+                timeLimiter, registry, pricingResolver, new CostCalculator(), budgets, mock(com.yonagi.verse.service.usage.user.UserModelUsageFactPublisher.class));
         ReflectionTestUtils.setField(service, "maxRetries", 0);
         ReflectionTestUtils.setField(service, "streamIdleTimeoutMs", 5000L);
         ReflectionTestUtils.setField(service, "costingEnabled", true);

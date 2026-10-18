@@ -12,11 +12,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.dao.DuplicateKeyException;
-
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDateTime;
-
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -27,6 +25,7 @@ class TokenUsageEventHandlerTest {
             context.registerBean(TokenUsageMapper.class, () -> mock(TokenUsageMapper.class));
             context.registerBean(TokenUsageCostMapper.class, () -> mock(TokenUsageCostMapper.class));
             context.registerBean(com.yonagi.verse.dao.mapper.UserMapper.class, TokenUsageEventHandlerTest::activeUsers);
+            context.registerBean(com.yonagi.verse.service.usage.user.UserModelUsageProjectionService.class, () -> mock(com.yonagi.verse.service.usage.user.UserModelUsageProjectionService.class));
             context.register(TokenUsageEventHandler.class);
 
             context.refresh();
@@ -147,7 +146,7 @@ class TokenUsageEventHandlerTest {
     }
 
     private TokenUsageEventHandler handler(TokenUsageMapper mapper, TokenUsageCostMapper costs) {
-        return new TokenUsageEventHandler(mapper, costs, activeUsers());
+        return new TokenUsageEventHandler(mapper, costs, activeUsers(), mock(com.yonagi.verse.service.usage.user.UserModelUsageProjectionService.class));
     }
 
     @Test
@@ -158,7 +157,7 @@ class TokenUsageEventHandlerTest {
         var usage = mock(TokenUsageMapper.class);
         var costs = mock(TokenUsageCostMapper.class);
         when(users.lockResourceOwner(1L)).thenReturn(closed).thenReturn(null);
-        var handler = new TokenUsageEventHandler(usage, costs, users);
+        var handler = new TokenUsageEventHandler(usage, costs, users, mock(com.yonagi.verse.service.usage.user.UserModelUsageProjectionService.class));
         handler.onEvent(validEvent());
         handler.onEvent(validEvent());
         verifyNoInteractions(usage, costs);

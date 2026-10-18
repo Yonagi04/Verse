@@ -50,6 +50,8 @@ class QueryCatalogueCoverageTest {
     private static final Set<String> EXCEPTIONS = Set.of(
             "/api/v1/users/hasUsername", "/api/v1/users/logout", "/api/v1/users/account/cancel/prepare",
             "/api/v1/users/me/devices", "/api/v1/users/me/external-accounts", "/api/v1/auth/external/providers",
+            // 本人高基数短查询和实时联系方式准备度，首版不缓存。
+            "/api/v1/users/me/cost-alert", "/api/v1/users/me/activity-calendar",
             "/api/v1/auth/external/callback/{provider}", "/api/v1/auth/external/flows/{id}",
             "/api/v1/tenants/{tenantId}/playground/status", "/api/v1/tenants/{tenantId}/playground/prompts",
             "/api/v1/tenants/{tenantId}/playground/sessions", "/api/v1/tenants/{tenantId}/playground/sessions/{sessionId}",

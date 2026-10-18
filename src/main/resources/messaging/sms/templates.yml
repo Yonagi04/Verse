@@ -12,3 +12,5 @@ templates:
     content: "${tenantName} 租户成本限额告警：已触发 ${period} 成本限额阈值，当前周期内的可用额度为 ${remainingYuan}。"
   "10006":
     content: "${tenantName} 租户成本限额告警：${period} 的调用成本已达限额，租户下所有新的模型调用已被限制。如需继续使用请调整限额或等待相关周期重置"
+  "10007":
+    content: "个人${period}费用预警：北京时间${start}至${end}（结束不含），所有租户的已知预估费用已达${amount}元，达到预警金额${threshold}元。仅用于提醒，不限制调用，具体用量详情可在个人中心查看。"

@@ -55,6 +55,8 @@ public class MessagingProperties {
         private String tenantCostWarningTemplateCode;
         /** 已审核的租户达限模板；通过环境配置。 */
         private String tenantCostLimitTemplateCode;
+        /** 已审核的本人跨租户费用提醒模板 */
+        private String personalCostWarningTemplateCode;
         /** 每手机号首次计数起 24 小时固定窗口内的发码尝试上限，包含明确拒绝。 */
         private int dailyLimit = 10;
         /** 模拟服务 API 地址。 */

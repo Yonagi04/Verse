@@ -203,5 +203,23 @@ public class SendRecordStore {
     }
 
     public record ClaimedTask(MessageSendRecordDO row) { }
+
+    /** 参与领域许可事务；消息锁在用户、配置和个人任务锁之后取得。 */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public boolean lockAttempt(String scene,String requestId,Long userId,SendAttemptContext attempt) {
+        if (!MessageSendAttemptPolicy.hasRecordIdentity(attempt)) return false;
+        MessageSendRecordDO row=attempt.channel()==MessageChannel.SMS
+                ? sms.selectOne(Wrappers.lambdaQuery(SmsSendRecordDO.class).eq(MessageSendRecordDO::getId,attempt.sendRecordId()).last("FOR UPDATE"))
+                : emails.selectOne(Wrappers.lambdaQuery(EmailSendRecordDO.class).eq(MessageSendRecordDO::getId,attempt.sendRecordId()).last("FOR UPDATE"));
+        return MessageSendAttemptPolicy.matches(row,scene,requestId,userId,attempt,new Date());
+    }
+    /** 保留 SUBMITTING 的处理中语义，业务镜像不能提前终结 UNKNOWN。 */
+    public Optional<SubmissionSnapshot> findSubmission(MessageChannel channel,String requestId) {
+        MessageSendRecordDO row=channel==MessageChannel.SMS
+                ? sms.selectOne(Wrappers.lambdaQuery(SmsSendRecordDO.class).eq(MessageSendRecordDO::getRequestId,requestId))
+                : emails.selectOne(Wrappers.lambdaQuery(EmailSendRecordDO.class).eq(MessageSendRecordDO::getRequestId,requestId));
+        return row==null ? Optional.empty() : Optional.of(new SubmissionSnapshot(row.getStatus(),row.getErrorCode(),row.getRecipientHash(),row.getExecutionToken()));
+    }
+    public record SubmissionSnapshot(String status,String errorCode,String recipientHash,String executionToken) { }
     @SuppressWarnings("unchecked") private static <T extends MessageSendRecordDO> Class<T> entityType(T row) { return (Class<T>) row.getClass(); }
 }

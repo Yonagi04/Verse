@@ -1,7 +1,6 @@
 package com.yonagi.verse.service.impl;
 
 import com.yonagi.verse.common.cache.NoQueryAccess;
-
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
@@ -47,7 +46,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
-
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
@@ -55,7 +53,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
-
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
 import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
@@ -88,6 +85,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private static final List<String> LOGIN_FAIL_REASON = List.of("密码错误", "被封禁用户尝试登录", "已注销用户尝试登录");
 
     private final PasswordEncoder passwordEncoder;
+    private final com.yonagi.verse.service.user.costalert.UserCostAlertCancellationService userCostAlertCancellation;
     private final AesUtil aesUtil;
     private final TenantService tenantService;
     private final UserTenantService userTenantService;
@@ -435,6 +433,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         }
 
         int update = baseMapper.update(null, updateWrapper);
+        userCostAlertCancellation.contactsChanged(userId, phoneChanged, emailChanged);
         if (update < 0) {
             log.error("Failed to update user profile for userId: {}, requestParam: {}", userId, requestParam);
             throw new ServerException(UserErrorCodeEnum.USER_UPDATE_ERROR);

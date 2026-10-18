@@ -1,7 +1,6 @@
 package com.yonagi.verse.service.impl;
 
 import com.yonagi.verse.common.cache.NoQueryAccess;
-
 import com.yonagi.verse.common.cache.QueryCached;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONArray;
@@ -54,13 +53,11 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
 import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
 
@@ -88,6 +85,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     private final PricingResolver pricingResolver;
     private final CostCalculator costCalculator;
     private final com.yonagi.verse.service.budget.CostBudgetService costBudgetService;
+    private final com.yonagi.verse.service.usage.user.UserModelUsageFactPublisher userModelUsagePublisher;
 
     /**
      * 同模型安全重试次数（不含首次调用），结果未知时不消费该次数。
@@ -900,10 +898,8 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                                    InvocationSource source, UpstreamExecutionOutcome outcome) {
         costBudgetService.finalizing(requestId);
         if (!costingEnabled) {
-            {
-                costBudgetService.markUnknown(tenantId, ctx.getApiKeyId(), requestId, "COSTING_DISABLED");
-            }
-            return;
+            costBudgetService.markUnknown(tenantId, ctx.getApiKeyId(), requestId, "COSTING_DISABLED");
+            if (!userModelUsagePublisher.enabled()) return;
         }
         TokenUsageEvent event = new TokenUsageEvent();
         event.setUserId(ctx.getUserId());
@@ -940,7 +936,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             event.setUsageDetailsJson(normalized.rawUsage() == null
                     ? null : JSON.toJSONString(normalized.rawUsage()));
             // 交付失败不抹掉已知消耗；部分用量的未知余量由 executionOutcome 保留预算栅栏。
-            if (LlmAuditEvent.STATUS_SUCCESS.equals(status)
+            if (!costingEnabled) {
+                event.setCostResult(CostResult.of(CostStatus.UNCALCULABLE));
+            } else if (LlmAuditEvent.STATUS_SUCCESS.equals(status)
                     || (normalized.valid() && (source == InvocationSource.PLAYGROUND
                     || outcome == UpstreamExecutionOutcome.UNKNOWN || outcome == UpstreamExecutionOutcome.COMPLETED))) {
                 PricingSnapshot pricing = pricingResolver.resolve(tenantId, service.getServiceId(), started);
@@ -959,7 +957,13 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             event.setCostResult(CostResult.of(CostStatus.UNCALCULABLE));
         }
         // Outbox 写入成功才代表计费用量事件已被可靠接管；失败必须显式向上传播。
-        costBudgetService.settle(event);
+        if (costingEnabled) costBudgetService.settle(event);
+        else {
+            try { userModelUsagePublisher.publish(event); }
+            catch (RuntimeException failure) {
+                log.error("[personal-usage] 活动事实未接管 requestId={}, failureType={}",requestId,failure.getClass().getSimpleName());
+            }
+        }
     }
 
     private void publishAuditStream(UserContext ctx, TenantDO tenant, LlmServiceDO service,

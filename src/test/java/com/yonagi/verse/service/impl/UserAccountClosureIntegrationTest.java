@@ -122,7 +122,7 @@ public class UserAccountClosureIntegrationTest {
         var api = transactional(bean(ApiKeyServiceImpl.class, keys));
         var llms = transactional(bean(LlmManageServiceImpl.class, models));
         cleanup = transactional(new UserAccountCleanupService(users, session.getMapper(UsageCleanupMapper.class),
-                session.getMapper(TokenUsageHourlyAggMapper.class), events, outbox));
+                session.getMapper(TokenUsageHourlyAggMapper.class), events, outbox, mock(com.yonagi.verse.service.usage.user.UserModelUsageCleanupService.class), mock(com.yonagi.verse.service.user.costalert.UserCostAlertCleanupService.class)));
         handler = new UserClosedEventHandler(users, api, memberships, tenants, llms, cleanup);
         seedResources();
     }
@@ -598,7 +598,7 @@ public class UserAccountClosureIntegrationTest {
         event.setUserId(1L); event.setTenantId(20L); event.setApiKeyId(102L); event.setServiceId(202L);
         event.setModel("shared"); event.setStatus("SUCCESS"); event.setUsageSource("EXACT");
         event.setRequestStartedAt(Instant.now()); event.setCostResult(CostResult.of(CostStatus.UNPRICED));
-        var consumer = transactional(new TokenUsageEventHandler(session.getMapper(TokenUsageMapper.class), session.getMapper(TokenUsageCostMapper.class), users));
+        var consumer = transactional(new TokenUsageEventHandler(session.getMapper(TokenUsageMapper.class), session.getMapper(TokenUsageCostMapper.class), users, mock(com.yonagi.verse.service.usage.user.UserModelUsageProjectionService.class)));
         consumer.onEvent(event);
         transactional(new DurableTokenUsageEventPublisher(session.getMapper(TokenUsageOutboxMapper.class), new UsageOutboxProperties(), mock(UsageOutboxMetrics.class), users)).publish(event);
         new TransactionTemplate(manager).executeWithoutResult(ignored -> new UsageOutboxStager(session.getMapper(TokenUsageOutboxMapper.class), new UsageOutboxProperties(), users).stage(event, JSON.toJSONString(event), LocalDateTime.now()));
