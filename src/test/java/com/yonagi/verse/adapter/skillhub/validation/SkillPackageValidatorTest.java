@@ -4,6 +4,7 @@ import com.yonagi.verse.adapter.skillhub.validation.exception.SkillPackageValida
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
 import org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 import com.yonagi.verse.service.skillhub.port.SkillValidationReport;
 import com.yonagi.verse.service.skillhub.port.SkillValidatedFile;
 import java.io.ByteArrayInputStream;
@@ -14,6 +15,7 @@ import java.nio.ByteOrder;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.TimeZone;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -23,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+@Isolated("跨时区归档验证会临时修改 JVM 默认时区")
 class SkillPackageValidatorTest {
     private static final String MARKDOWN = "---\nname: test-skill\ndescription: 测试包\n---\n# 测试\n";
     private final SkillPackageValidator validator = new SkillPackageValidator();
@@ -87,6 +90,25 @@ class SkillPackageValidatorTest {
         rejects("INVALID_RESOURCE_REFERENCE", files);
         files.put("README.md", utf8("[缺失](assets/不存在.txt)"));
         rejects("INVALID_RESOURCE_REFERENCE", files);
+    }
+
+    @Test
+    void normalizedArchiveBytesDoNotDependOnDefaultTimeZone() throws Exception {
+        byte[] archive = zip(Map.of("SKILL.md", utf8(MARKDOWN)));
+        TimeZone original = TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
+            SkillValidationReport baseline = validator.validate(archive);
+            for (String zone : new String[]{"UTC", "America/Los_Angeles"}) {
+                TimeZone.setDefault(TimeZone.getTimeZone(zone));
+                SkillValidationReport actual = validator.validate(archive);
+                assertArrayEquals(baseline.archive(), actual.archive(), zone);
+                assertEquals(baseline.archiveSha256(), actual.archiveSha256(), zone);
+                assertEquals(baseline.contentSha256(), actual.contentSha256(), zone);
+            }
+        } finally {
+            TimeZone.setDefault(original);
+        }
     }
 
     @Test

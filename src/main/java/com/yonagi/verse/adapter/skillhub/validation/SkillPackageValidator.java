@@ -8,10 +8,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
@@ -25,6 +27,10 @@ public class SkillPackageValidator {
     static final int MAX_ARCHIVE_BYTES = (int) SkillPackageLimitConstant.MAX_ARCHIVE_BYTES;
     private static final String SKILL_MARKDOWN = "SKILL.md";
     private static final LocalDateTime ZIP_TIMESTAMP = LocalDateTime.of(1980, 1, 1, 0, 0);
+    // 此 DOS 边界会触发 JDK 扩展时间戳；固定历史 +08:00 产物，避免默认时区改变归档摘要。
+    private static final byte[] ZIP_TIMESTAMP_EXTRA = ByteBuffer.allocate(9).order(ByteOrder.LITTLE_ENDIAN)
+            .putShort((short) 0x5455).putShort((short) 5).put((byte) 1)
+            .putInt(Math.toIntExact(ZIP_TIMESTAMP.toEpochSecond(ZoneOffset.ofHours(8)))).array();
     private static final int COMPRESSION_LEVEL = 6;
     private static final int BUFFER_BYTES = 8192;
     private static final int MAX_RELATIVE_PATH_LENGTH = 512;
@@ -122,9 +128,10 @@ public class SkillPackageValidator {
         try (ZipOutputStream output = new ZipOutputStream(limited, StandardCharsets.UTF_8)) {
             output.setLevel(COMPRESSION_LEVEL);
             for (Map.Entry<String, byte[]> file : files.entrySet()) {
-            control.check();
+                control.check();
                 ZipEntry entry = new ZipEntry(name + "/" + file.getKey());
                 entry.setTimeLocal(ZIP_TIMESTAMP);
+                entry.setExtra(ZIP_TIMESTAMP_EXTRA);
                 output.putNextEntry(entry);
                 byte[] content = file.getValue();
                 for (int offset = 0; offset < content.length; offset += BUFFER_BYTES) {
