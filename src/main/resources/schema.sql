@@ -1274,3 +1274,41 @@ INSERT IGNORE INTO t_skill_category(category_id,name,sort_order) VALUES
 ('development','开发工具',1),('productivity','效率提升',2),('research','研究分析',3),('writing','内容创作',4),('other','其他',5);
 INSERT IGNORE INTO t_skill_tag(tag_id,name,sort_order) VALUES
 ('coding','编程',1),('automation','自动化',2),('documentation','文档',3),('data','数据',4),('design','设计',5),('testing','测试',6);
+
+-- Skill评论：独立新增表，不回填或修改现有Skill数据。
+CREATE TABLE IF NOT EXISTS t_skill_comment (
+    comment_id BIGINT NOT NULL COMMENT '评论稳定标识',
+    skill_id BIGINT NOT NULL COMMENT '所属Skill稳定标识',
+    author_user_id BIGINT NOT NULL COMMENT '发送者账号',
+    root_id BIGINT NOT NULL COMMENT '父评论为0，回复为所属父评论',
+    reply_to_comment_id BIGINT NULL COMMENT '实际回复目标，父评论为空',
+    content VARCHAR(4000) NOT NULL COMMENT '纯文本正文，应用限制1000码点',
+    like_count BIGINT NOT NULL DEFAULT 0 COMMENT '反应事实派生的点赞数',
+    reply_count BIGINT NOT NULL DEFAULT 0 COMMENT '父评论下有效后代数',
+    del_flag TINYINT NOT NULL DEFAULT 0 COMMENT '0正常，1软删除',
+    thread_visible TINYINT GENERATED ALWAYS AS
+        (root_id=0 AND (del_flag=0 OR reply_count>0)) STORED COMMENT '根楼层可见性，仅派生索引用',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (comment_id),
+    KEY idx_skill_comment_hot (skill_id,thread_visible,like_count DESC,create_time DESC,comment_id DESC),
+    KEY idx_skill_comment_new (skill_id,thread_visible,create_time DESC,comment_id DESC),
+    KEY idx_skill_comment_reply (skill_id,root_id,del_flag,create_time,comment_id),
+    CONSTRAINT chk_skill_comment_counts CHECK (like_count>=0 AND reply_count>=0),
+    CONSTRAINT chk_skill_comment_deleted CHECK (del_flag IN (0,1)),
+    CONSTRAINT chk_skill_comment_shape CHECK
+        ((root_id=0 AND reply_to_comment_id IS NULL) OR
+         (root_id>0 AND reply_to_comment_id IS NOT NULL AND reply_count=0))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill评论及事务派生计数';
+
+CREATE TABLE IF NOT EXISTS t_skill_comment_reaction (
+    id BIGINT NOT NULL COMMENT '反应关系标识',
+    comment_id BIGINT NOT NULL COMMENT '目标评论',
+    user_id BIGINT NOT NULL COMMENT '执行反应的账号',
+    reaction VARCHAR(8) NOT NULL COMMENT 'LIKE或DISLIKE，取消删除关系',
+    create_time DATETIME(3) NOT NULL COMMENT '首次建立时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变化时间，UTC',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_skill_comment_reaction (comment_id,user_id),
+    CONSTRAINT chk_skill_comment_reaction CHECK (reaction IN ('LIKE','DISLIKE'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每用户每评论的当前反应';

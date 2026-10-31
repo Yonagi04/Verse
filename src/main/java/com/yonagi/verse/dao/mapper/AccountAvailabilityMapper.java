@@ -6,6 +6,24 @@ import org.apache.ibatis.annotations.Select;
 /** 账号领域允许的只读可用性契约；Skill公开分页采用同一ACTIVE/未删除谓词。 */
 public interface AccountAvailabilityMapper {
     /**
+     * @param ids 已去重且不超过100个的账号ID
+     * @return 只包含公开字段；不可用账号在SQL中遮蔽资料
+     */
+    @Select("""
+            <script>
+            SELECT user_id,
+                CASE WHEN del_flag=1 OR status=2 THEN '已注销用户'
+                     WHEN status!=1 THEN '用户暂不可用'
+                     ELSE COALESCE(NULLIF(TRIM(nickname),''),username) END AS display_name,
+                CASE WHEN status=1 AND del_flag=0 THEN avatar ELSE NULL END AS avatar
+            FROM t_user WHERE user_id IN
+            <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+            </script>
+            """)
+    java.util.List<com.yonagi.verse.dao.projection.UserPublicProfileProjection> selectPublicProfiles(
+            @Param("ids") java.util.List<Long> ids);
+
+    /**
      * @param userId 可信账号，不读取邮箱、手机号或其他隐私字段
      * @return 有效账号的现有昵称，空昵称退到用户名；账号不可用时null
      */

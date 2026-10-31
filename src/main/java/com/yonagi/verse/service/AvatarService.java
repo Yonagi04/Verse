@@ -87,7 +87,15 @@ public class AvatarService {
                         .eq(UserDO::getDelFlag, 0)
                         .set(UserDO::getAvatar, objectKey));
         // 6. 返回完整 URL
-        return baseUrl + "/" + bucket + "/" + objectKey;
+        return publicUrl(objectKey);
+    }
+
+    /**
+     * @param objectKey 已有账号记录中的头像对象键
+     * @return 既有公开分发地址；未设置头像时为空，不访问S3
+     */
+    public String publicUrl(String objectKey) {
+        return objectKey == null || objectKey.isBlank() ? null : baseUrl + "/" + bucket + "/" + objectKey;
     }
 
     private byte[] processImage(MultipartFile file) throws IOException {

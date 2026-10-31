@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yonagi.verse.dao.mapper.skillhub.SkillCommentAccessMapper">
+    <resultMap id="resource" type="com.yonagi.verse.dao.projection.SkillCommentResourceProjection">
+        <result column="skill_id" property="skillId"/>
+        <result column="publisher_id" property="publisherId"/>
+        <result column="owner_user_id" property="ownerUserId"/>
+        <result column="name" property="name"/>
+    </resultMap>
+    <select id="reference" resultMap="resource">
+        SELECT s.skill_id,s.publisher_id,p.user_id AS owner_user_id,r.name
+        FROM t_skill s JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id
+        LEFT JOIN t_skill_revision r ON r.revision_id=s.public_revision_id AND r.skill_id=s.skill_id
+        WHERE s.skill_id=#{skillId}
+    </select>
+    <select id="available" resultMap="resource">
+        SELECT s.skill_id,s.publisher_id,p.user_id AS owner_user_id,r.name
+        <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.availableJoins"/>
+        WHERE s.skill_id=#{skillId}
+        AND <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/>
+    </select>
+    <select id="lockPublisher" resultType="com.yonagi.verse.dao.entity.skillhub.SkillPublisherDO">
+        SELECT publisher_id,user_id,status FROM t_skill_publisher WHERE publisher_id=#{id} FOR SHARE
+    </select>
+    <select id="lockSkill" resultType="com.yonagi.verse.dao.entity.skillhub.SkillDO">
+        SELECT skill_id,publisher_id,status,current_version_id,public_revision_id FROM t_skill WHERE skill_id=#{id} FOR SHARE
+    </select>
+    <select id="lockVersion" resultType="com.yonagi.verse.dao.entity.skillhub.SkillVersionDO">
+        SELECT version_id,skill_id,artifact_id,status FROM t_skill_version WHERE version_id=#{id} FOR SHARE
+    </select>
+    <select id="lockArtifact" resultType="com.yonagi.verse.dao.entity.skillhub.SkillArtifactDO">
+        SELECT artifact_id,owner_user_id,status FROM t_skill_artifact WHERE artifact_id=#{id} FOR SHARE
+    </select>
+</mapper>

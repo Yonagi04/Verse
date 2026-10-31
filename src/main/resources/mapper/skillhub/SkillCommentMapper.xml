@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yonagi.verse.dao.mapper.skillhub.SkillCommentMapper">
+    <resultMap id="comment" type="com.yonagi.verse.dao.entity.skillhub.SkillCommentDO">
+        <result column="comment_id" property="commentId"/>
+        <result column="skill_id" property="skillId"/>
+        <result column="author_user_id" property="authorUserId"/>
+        <result column="root_id" property="rootId"/>
+        <result column="reply_to_comment_id" property="replyToCommentId"/>
+        <result column="content" property="content"/>
+        <result column="like_count" property="likeCount"/>
+        <result column="reply_count" property="replyCount"/>
+        <result column="del_flag" property="delFlag"/>
+        <result column="create_time" property="createTime"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+    <sql id="columns">comment_id,skill_id,author_user_id,root_id,reply_to_comment_id,content,
+        like_count,reply_count,del_flag,create_time,update_time</sql>
+    <select id="lock" resultMap="comment">
+        SELECT <include refid="columns"/> FROM t_skill_comment
+        WHERE skill_id=#{skillId} AND comment_id=#{commentId} FOR UPDATE
+    </select>
+    <select id="countRoots" resultType="long">
+        SELECT COUNT(*) FROM t_skill_comment WHERE skill_id=#{skillId} AND thread_visible=1
+    </select>
+    <select id="roots" resultMap="comment">
+        SELECT <include refid="columns"/> FROM t_skill_comment
+        WHERE skill_id=#{skillId} AND thread_visible=1
+        ORDER BY <if test="hot">like_count DESC,</if> create_time DESC,comment_id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="countReplies" resultType="long">
+        SELECT COUNT(*) FROM t_skill_comment WHERE skill_id=#{skillId} AND root_id=#{rootId} AND del_flag=0
+    </select>
+    <select id="replies" resultMap="comment">
+        SELECT <include refid="columns"/> FROM t_skill_comment
+        WHERE skill_id=#{skillId} AND root_id=#{rootId} AND del_flag=0
+        ORDER BY create_time,comment_id LIMIT #{size} OFFSET #{offset}
+    </select>
+    <select id="targets" resultMap="comment">
+        SELECT comment_id,author_user_id,del_flag FROM t_skill_comment
+        WHERE skill_id=#{skillId} AND comment_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+</mapper>

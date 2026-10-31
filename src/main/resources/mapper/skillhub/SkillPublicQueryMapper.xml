@@ -41,7 +41,7 @@
         JOIN t_skill_version v ON v.version_id=s.current_version_id AND v.skill_id=s.skill_id
     </sql>
     <sql id="availableJoins">
-        <include refid="publishedJoins"/>
+        <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.publishedJoins"/>
         JOIN t_skill_artifact a ON a.artifact_id=v.artifact_id
     </sql>
     <sql id="accountAvailable">
@@ -49,7 +49,7 @@
     </sql>
     <sql id="available">
         s.status='ACTIVE' AND v.status='AVAILABLE' AND a.status='READY'
-        AND <include refid="accountAvailable"/>
+        AND <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.accountAvailable"/>
     </sql>
     <sql id="filters">
         <if test="query.keyword != null">
