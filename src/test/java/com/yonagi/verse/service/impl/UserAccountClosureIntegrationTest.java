@@ -121,8 +121,10 @@ public class UserAccountClosureIntegrationTest {
                 .thenAnswer(invocation -> users.lockResourceOwner(invocation.getArgument(0)));
         var api = transactional(bean(ApiKeyServiceImpl.class, keys));
         var llms = transactional(bean(LlmManageServiceImpl.class, models));
+        var skillCleanup = mock(com.yonagi.verse.service.skillhub.SkillAccountCleanupService.class);
+        when(skillCleanup.isComplete(anyLong())).thenReturn(true);
         cleanup = transactional(new UserAccountCleanupService(users, session.getMapper(UsageCleanupMapper.class),
-                session.getMapper(TokenUsageHourlyAggMapper.class), events, outbox, mock(com.yonagi.verse.service.usage.user.UserModelUsageCleanupService.class), mock(com.yonagi.verse.service.user.costalert.UserCostAlertCleanupService.class)));
+                session.getMapper(TokenUsageHourlyAggMapper.class), events, outbox, mock(com.yonagi.verse.service.usage.user.UserModelUsageCleanupService.class), mock(com.yonagi.verse.service.user.costalert.UserCostAlertCleanupService.class), skillCleanup));
         handler = new UserClosedEventHandler(users, api, memberships, tenants, llms, cleanup);
         seedResources();
     }

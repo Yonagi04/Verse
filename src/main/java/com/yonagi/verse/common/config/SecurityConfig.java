@@ -56,6 +56,8 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // 广场读取及短效下载能力均不能绕过账号登录，优先于可配置白名单。
+                        .requestMatchers("/api/v1/skills", "/api/v1/skills/**").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/external/flows/*/attach-current-user").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/auth/external/providers", "/api/v1/auth/external/callback/google",
                                 "/api/v1/auth/external/callback/github", "/api/v1/auth/external/callback/gitlab",

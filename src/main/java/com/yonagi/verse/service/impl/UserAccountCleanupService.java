@@ -25,6 +25,7 @@ public class UserAccountCleanupService {
     private final DomainEventOutboxMapper outbox;
     private final com.yonagi.verse.service.usage.user.UserModelUsageCleanupService modelUsageCleanup;
     private final com.yonagi.verse.service.user.costalert.UserCostAlertCleanupService costAlertCleanup;
+    private final com.yonagi.verse.service.skillhub.SkillAccountCleanupService skillAccountCleanupService;
 
     public static boolean isClosed(UserDO user) {
         return user != null && Integer.valueOf(2).equals(user.getStatus()) && Integer.valueOf(1).equals(user.getDelFlag());
@@ -51,7 +52,8 @@ public class UserAccountCleanupService {
             boolean costAlertPending = costAlertCleanup.cleanBatch(event.getUserId());
             if (ids.size() == BATCH_SIZE || hourly == BATCH_SIZE || pending == BATCH_SIZE || modelUsagePending || costAlertPending) {
                 events.publish(UserClosedEvent.next(event.getUserId()), 0L);
-            } else if (users.completeResourceCleanup(event.getUserId(), now) != 1) {
+            } else if (skillAccountCleanupService.isComplete(event.getUserId())
+                    && users.completeResourceCleanup(event.getUserId(), now) != 1) {
                 throw new IllegalStateException("注销清理完成状态更新失败");
             }
         }
@@ -62,7 +64,8 @@ public class UserAccountCleanupService {
     public void enqueueHistorical(Long userId) {
         if (!isClosed(users.lockResourceOwner(userId))) return;
         UserDO user = users.selectCleanupState(userId);
-        if (user.getResourceCleanupAt() == null && outbox.countEvent(UserClosedEvent.initialId(userId)) == 0) {
+        if (user.getResourceCleanupAt() == null && !skillAccountCleanupService.isWaitingForRetentionPolicy(userId)
+                && outbox.countEvent(UserClosedEvent.initialId(userId)) == 0) {
             events.publish(UserClosedEvent.initial(userId), 0L);
         }
     }

@@ -2,6 +2,7 @@ package com.yonagi.verse.common.security;
 
 import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.service.CurrentTenantStateService;
+import com.yonagi.verse.service.user.AccountAvailabilityService;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.FilterChain;
@@ -100,7 +101,8 @@ class JwtAuthenticationFilterTest {
         ValueOperations<String, String> operations = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(operations);
         when(operations.get(anyString())).thenReturn("10");
-        return new Fixture(new JwtAuthenticationFilter(jwtUtil, redis, stateService));
+        return new Fixture(new JwtAuthenticationFilter(jwtUtil, redis, stateService,
+                mock(AccountAvailabilityService.class)));
     }
 
     private static CurrentTenantState state(Long tenantId, String role) {

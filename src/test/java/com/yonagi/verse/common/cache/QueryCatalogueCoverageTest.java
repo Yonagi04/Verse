@@ -52,6 +52,12 @@ class QueryCatalogueCoverageTest {
             "/api/v1/users/me/devices", "/api/v1/users/me/external-accounts", "/api/v1/auth/external/providers",
             // 本人高基数短查询和实时联系方式准备度，首版不缓存。
             "/api/v1/users/me/cost-alert", "/api/v1/users/me/activity-calendar",
+            // Skill公开状态/账号、私人任务及短效能力必须实时；词表低成本，不引入查询缓存。
+            "/api/v1/skills", "/api/v1/skills/options", "/api/v1/skills/lookup",
+            "/api/v1/skills/{skillId:[0-9]+}", "/api/v1/skills/downloads/{token:[a-f0-9]{64}}",
+            "/api/v1/skills/me/publications",
+            "/api/v1/skills/drafts/{draftId:[0-9]+}", "/api/v1/skills/imports/{jobId:[0-9]+}",
+            "/api/v1/skills/submissions/{submissionId:[0-9]+}",
             "/api/v1/auth/external/callback/{provider}", "/api/v1/auth/external/flows/{id}",
             "/api/v1/tenants/{tenantId}/playground/status", "/api/v1/tenants/{tenantId}/playground/prompts",
             "/api/v1/tenants/{tenantId}/playground/sessions", "/api/v1/tenants/{tenantId}/playground/sessions/{sessionId}",

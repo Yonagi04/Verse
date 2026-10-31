@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yonagi.verse.dao.mapper.skillhub.SkillOwnerQueryMapper">
+    <resultMap id="ownerView" type="com.yonagi.verse.dao.projection.SkillOwnerProjection">
+        <id column="skill_id" property="skillId"/>
+        <result column="draft_id" property="draftId"/>
+        <result column="name" property="name"/>
+        <result column="slug" property="slug"/>
+        <result column="status" property="status"/>
+        <result column="draft_status" property="draftStatus"/>
+        <result column="job_status" property="jobStatus"/>
+        <result column="version_label" property="versionLabel"/>
+        <result column="revision" property="revision"/>
+        <result column="update_time" property="updateTime"/>
+    </resultMap>
+    <select id="countOwned" resultType="long">
+        SELECT COUNT(*) FROM t_skill s JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id
+        WHERE p.user_id=#{userId} AND p.status='ACTIVE'
+    </select>
+    <select id="selectOwnedPage" resultMap="ownerView">
+        SELECT s.skill_id,d.draft_id,COALESCE(r.name,s.slug) AS name,s.slug,s.status,
+               d.status AS draft_status,j.status AS job_status,v.version_label,s.revision,s.update_time
+        FROM t_skill s JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id
+        LEFT JOIN t_skill_draft d ON d.skill_id=s.skill_id AND d.owner_user_id=#{userId}
+        LEFT JOIN t_skill_job j ON j.job_id=d.latest_job_id AND j.draft_id=d.draft_id
+        LEFT JOIN t_skill_revision r ON r.revision_id=s.public_revision_id AND r.skill_id=s.skill_id
+        LEFT JOIN t_skill_version v ON v.version_id=s.current_version_id AND v.skill_id=s.skill_id
+        WHERE p.user_id=#{userId} AND p.status='ACTIVE'
+        ORDER BY s.update_time DESC,s.skill_id DESC LIMIT #{size} OFFSET #{offset}
+    </select>
+</mapper>

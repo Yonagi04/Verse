@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yonagi.verse.dao.mapper.skillhub.SkillDownloadQueryMapper">
+    <resultMap id="download" type="com.yonagi.verse.dao.projection.SkillDownloadProjection">
+        <id column="version_id" property="versionId"/>
+        <result column="skill_id" property="skillId"/>
+        <result column="publisher_id" property="publisherId"/>
+        <result column="user_id" property="userId"/>
+        <result column="artifact_id" property="artifactId"/>
+        <result column="slug" property="slug"/>
+        <result column="version_label" property="versionLabel"/>
+        <result column="archive_key" property="archiveKey"/>
+        <result column="archive_sha256" property="archiveSha256"/>
+        <result column="archive_bytes" property="archiveBytes"/>
+    </resultMap>
+    <sql id="resource">
+        SELECT s.skill_id,s.publisher_id,p.user_id,v.version_id,v.artifact_id,s.slug,v.version_label,
+               a.archive_key,a.archive_sha256,a.archive_bytes
+        FROM t_skill_version v JOIN t_skill s ON s.skill_id=v.skill_id AND s.current_version_id=v.version_id
+        JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id
+        JOIN t_skill_artifact a ON a.artifact_id=v.artifact_id
+        WHERE v.version_id=#{versionId} AND s.status='ACTIVE' AND p.status='ACTIVE'
+              AND v.status='AVAILABLE' AND a.status='READY'
+    </sql>
+    <select id="selectAvailable" resultMap="download">
+        <include refid="resource"/> AND s.skill_id=#{skillId}
+        AND EXISTS (SELECT u.user_id FROM t_user u WHERE u.user_id=p.user_id AND u.status=1 AND u.del_flag=0)
+    </select>
+    <select id="selectOwnerId" resultType="long">
+        SELECT p.user_id FROM t_skill_version v JOIN t_skill s ON s.skill_id=v.skill_id
+        JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id WHERE v.version_id=#{versionId}
+    </select>
+</mapper>

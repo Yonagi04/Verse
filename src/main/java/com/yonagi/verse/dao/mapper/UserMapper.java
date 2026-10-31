@@ -29,11 +29,12 @@ public interface UserMapper extends BaseMapper<UserDO> {
     /** 有界补齐历史已注销用户的首次清理事件。 */
     @Select("""
             SELECT u.user_id FROM t_user u
-            WHERE u.status=2 AND u.del_flag=1 AND u.resource_cleanup_at IS NULL
-              AND NOT EXISTS (SELECT 1 FROM t_domain_event_outbox o WHERE o.event_id=CONCAT('user-closed-',u.user_id))
+            WHERE u.status=2 AND u.del_flag=1 AND u.resource_cleanup_at IS NULL AND u.user_id>#{afterUserId}
+              AND NOT EXISTS (SELECT o.event_id FROM t_domain_event_outbox o
+                              WHERE o.event_id=CONCAT('user-closed-',u.user_id))
             ORDER BY u.user_id LIMIT #{limit}
             """)
-    List<Long> selectUnscheduledClosedUsers(@Param("limit") int limit);
+    List<Long> selectUnscheduledClosedUsers(@Param("limit") int limit, @Param("afterUserId") Long afterUserId);
 
     @Update("UPDATE t_user SET resource_cleanup_at=#{now},last_active_tenant_id=NULL "
             + "WHERE user_id=#{userId} AND status=2 AND del_flag=1 AND resource_cleanup_at IS NULL")

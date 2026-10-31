@@ -10,6 +10,7 @@ import com.yonagi.verse.common.enums.PermissionEnum;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.service.CurrentTenantStateService;
+import com.yonagi.verse.service.user.AccountAvailabilityService;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
@@ -50,6 +51,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final JwtUtil jwtUtil;
     private final StringRedisTemplate stringRedisTemplate;
     private final CurrentTenantStateService currentTenantStateService;
+    private final AccountAvailabilityService accountAvailabilityService;
 
     @Override
     protected boolean shouldNotFilterAsyncDispatch() {
@@ -105,7 +107,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             }
 
             // 每次请求均以数据库状态服务为权威来源，切换租户后无需重新签发 JWT。
-            CurrentTenantState tenantState = currentTenantStateService.resolveCurrentTenant(userId);
+            boolean accountScoped = request.getServletPath().equals("/api/v1/skills")
+                    || request.getServletPath().startsWith("/api/v1/skills/");
+            if (accountScoped && !accountAvailabilityService.isAccountActive(userId)) {
+                writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
+                return;
+            }
+            CurrentTenantState tenantState = accountScoped ? new CurrentTenantState()
+                    : currentTenantStateService.resolveCurrentTenant(userId);
             Long activeTenantId = tenantState.getTenantId();
             RoleEnum role = parseRole(tenantState.getRole(), userId, activeTenantId);
             Set<PermissionEnum> permissions = role != null

@@ -108,6 +108,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
     private final com.yonagi.verse.async.api.ReliableDomainEventPublisher reliableEvents;
     private final com.yonagi.verse.common.security.UserSecurityLocks securityLocks;
     private final VerificationSmsService verificationSms;
+    private final com.yonagi.verse.service.skillhub.SkillAccountCleanupService skillAccountCleanupService;
     private final VerificationCodeStore verificationCodes;
     private final PasswordResetCredentialStore resetCredentials;
 
@@ -650,6 +651,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
         // 提交前关闭单人团队，免审批加入即使已通过入口校验，也会在租户行锁后被拒绝。
         tenantCrudService.deleteClosedUsersLockedTenants(userId, lockedTenantIds);
+
+        // 在用户锁之后同步冻结个人公开资源，不能等待异步消息才撤销分发。
+        skillAccountCleanupService.freeze(userId);
 
         // 清理任务与注销状态原子提交；Broker 故障由现有 Outbox Relay 重试。
         reliableEvents.publish(com.yonagi.verse.async.event.UserClosedEvent.initial(userId), 0L);

@@ -14,10 +14,17 @@ import org.springframework.stereotype.Component;
 public class UserClosedCleanupJob {
     private final UserMapper users;
     private final UserAccountCleanupService cleanup;
+    // fixedDelay串行推进游标；等待长期政策的账号不能让后续历史账号永久饥饿。
+    private long afterUserId;
 
     @Scheduled(fixedDelayString = "${verse.async.user-cleanup.backfill-delay-ms:60000}")
     public void backfill() {
-        for (Long userId : users.selectUnscheduledClosedUsers(100)) {
+        java.util.List<Long> candidates = users.selectUnscheduledClosedUsers(100, afterUserId);
+        if (candidates.isEmpty()) {
+            afterUserId = 0L;
+        }
+        for (Long userId : candidates) {
+            afterUserId = userId;
             try {
                 cleanup.enqueueHistorical(userId);
             } catch (RuntimeException error) {

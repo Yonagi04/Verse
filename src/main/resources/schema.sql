@@ -1023,3 +1023,254 @@ CREATE TABLE t_personal_cost_alert_delivery (
     KEY idx_personal_delivery_due(status,next_retry_at,delivery_id),
     KEY idx_personal_delivery_owner(recipient_user_id,delivery_id)
 ) ENGINE=InnoDB COMMENT='用户个人费用预警渠道派发与发送许可记录';
+
+
+-- Skill广场P1增量迁移；仅新增本域表，不重跑历史迁移。时间按UTC写入。
+
+-- 回滚关闭Skillhub入口并保留事实及私有对象；不DROP已发布版本。
+
+CREATE TABLE IF NOT EXISTS t_skill_publisher (
+    publisher_id BIGINT NOT NULL COMMENT '公开发布者标识',
+    user_id BIGINT NOT NULL COMMENT '所属个人账号',
+    handle VARCHAR(32) NOT NULL COMMENT '首次设置后固定的公开标识',
+    public_name VARCHAR(80) NOT NULL COMMENT '用户确认公开的作者名称',
+    status VARCHAR(24) NOT NULL COMMENT '发布资格：ACTIVE或CLOSED',
+    revision BIGINT NOT NULL COMMENT '并发修订号',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (publisher_id),
+    UNIQUE KEY uk_skill_publisher_user (user_id),
+    UNIQUE KEY uk_skill_publisher_handle (handle)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Publisher';
+
+CREATE TABLE IF NOT EXISTS t_skill (
+    skill_id BIGINT NOT NULL COMMENT 'Skill稳定标识',
+    publisher_id BIGINT NOT NULL COMMENT '个人发布者标识',
+    slug VARCHAR(64) NOT NULL COMMENT '同作者下唯一且发布后固定的标识',
+    status VARCHAR(24) NOT NULL COMMENT 'DRAFT、ACTIVE、OWNER_UNPUBLISHED或PLATFORM_DISABLED',
+    current_version_id BIGINT NULL COMMENT '当前已批准版本指针',
+    public_revision_id BIGINT NULL COMMENT '当前已批准展示修订',
+    latest_release_at DATETIME(3) NULL COMMENT '最近内容版本发布时间',
+    revision BIGINT NOT NULL COMMENT '生命周期并发修订号',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (skill_id),
+    UNIQUE KEY uk_skill_publisher_slug (publisher_id,slug),
+    KEY idx_skill_visible (status,latest_release_at,skill_id),
+    KEY idx_skill_publisher (publisher_id,status,skill_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Skill';
+
+CREATE TABLE IF NOT EXISTS t_skill_revision (
+    revision_id BIGINT NOT NULL COMMENT '不可变展示修订标识',
+    skill_id BIGINT NOT NULL COMMENT '所属Skill',
+    name VARCHAR(80) NOT NULL COMMENT '广场展示名称',
+    summary VARCHAR(300) NOT NULL COMMENT '广场简短介绍',
+    category_id VARCHAR(32) NOT NULL COMMENT '平台主分类标识',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (revision_id),
+    KEY idx_skill_revision_category (category_id,revision_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Revision';
+
+CREATE TABLE IF NOT EXISTS t_skill_draft (
+    draft_id BIGINT NOT NULL COMMENT '本人草稿标识',
+    skill_id BIGINT NOT NULL COMMENT '预留Skill聚合根',
+    owner_user_id BIGINT NOT NULL COMMENT '可信会话确定的所有者',
+    artifact_id BIGINT NULL COMMENT '已检查READY制品',
+    latest_job_id BIGINT NULL COMMENT '当前选定导入任务',
+    metadata_json TEXT NULL COMMENT '有界且已校验的发布表单快照',
+    version_label VARCHAR(64) NULL COMMENT '首版平台SemVer',
+    status VARCHAR(24) NOT NULL COMMENT 'EDITING、READY、SUBMITTED、CANCELLED或EXPIRED',
+    revision BIGINT NOT NULL COMMENT '防止并发编辑覆盖的修订号',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (draft_id),
+    UNIQUE KEY uk_skill_draft_skill (skill_id),
+    KEY idx_skill_draft_owner (owner_user_id,update_time,draft_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Draft';
+
+CREATE TABLE IF NOT EXISTS t_skill_job (
+    job_id BIGINT NOT NULL COMMENT '导入任务标识',
+    draft_id BIGINT NOT NULL COMMENT '关联本人草稿',
+    owner_user_id BIGINT NOT NULL COMMENT '任务所属账号',
+    source_key VARCHAR(512) NULL COMMENT '私有且不可覆盖的源包Key',
+    source_sha256 CHAR(64) NULL COMMENT '已绑定源ZIP字节摘要',
+    source_bytes BIGINT NULL COMMENT '源ZIP实际字节数',
+    upload_token VARCHAR(64) NULL COMMENT '上传领取代次，仅服务端使用',
+    upload_until DATETIME(3) NULL COMMENT '上传领取截止时间',
+    processing_deadline DATETIME(3) NULL COMMENT '上传完成后固定的处理截止时间，UTC',
+    execution_token VARCHAR(64) NULL COMMENT 'Worker执行代次',
+    lease_until DATETIME(3) NULL COMMENT '执行租约截止时间',
+    status VARCHAR(24) NOT NULL COMMENT 'WAITING_UPLOAD、UPLOADING、QUEUED、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED或CANCELLED',
+    attempt_count INT NOT NULL COMMENT '已领取执行次数',
+    next_retry_at DATETIME(3) NOT NULL COMMENT '下次允许执行时间',
+    error_code VARCHAR(64) NULL COMMENT '可机器识别的检查失败原因',
+    public_reason VARCHAR(300) NULL COMMENT '不含秘密的失败说明',
+    artifact_id BIGINT NULL COMMENT '成功产出的私有制品',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (job_id),
+    KEY idx_skill_job_ready (status,next_retry_at,job_id),
+    KEY idx_skill_job_lease (status,lease_until,job_id),
+    KEY idx_skill_job_owner (owner_user_id,create_time,job_id),
+    KEY idx_skill_job_draft (draft_id,job_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Job';
+
+CREATE TABLE IF NOT EXISTS t_skill_artifact (
+    artifact_id BIGINT NOT NULL COMMENT '不可变文件快照标识',
+    owner_user_id BIGINT NOT NULL COMMENT '快照所属账号',
+    archive_key VARCHAR(512) NOT NULL COMMENT '私有归档对象Key',
+    archive_sha256 CHAR(64) NOT NULL COMMENT '下载ZIP字节SHA256',
+    content_sha256 CHAR(64) NOT NULL COMMENT '规范化路径与文件摘要的内容摘要',
+    archive_bytes BIGINT NOT NULL COMMENT '下载包字节数',
+    unpacked_bytes BIGINT NOT NULL COMMENT '实际展开文件总字节数',
+    file_count INT NOT NULL COMMENT '实际文件数量',
+    skill_markdown MEDIUMTEXT NOT NULL COMMENT '同快照内的SKILL.md原文',
+    manifest_json MEDIUMTEXT NOT NULL COMMENT '有界不可变文件清单与检查摘要',
+    status VARCHAR(24) NOT NULL COMMENT 'READY、DELETE_PENDING或DELETED',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (artifact_id),
+    KEY idx_skill_artifact_cleanup (status,update_time,artifact_id),
+    KEY idx_skill_artifact_owner (owner_user_id,artifact_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Artifact';
+
+CREATE TABLE IF NOT EXISTS t_skill_file (
+    file_id BIGINT NOT NULL COMMENT '快照文件索引标识',
+    artifact_id BIGINT NOT NULL COMMENT '所属不可变快照',
+    relative_path VARCHAR(1024) NOT NULL COMMENT '快照内规范化相对路径',
+    path_hash CHAR(64) NOT NULL COMMENT '完整相对路径摘要',
+    sha256 CHAR(64) NOT NULL COMMENT '文件字节摘要',
+    size_bytes BIGINT NOT NULL COMMENT '文件字节数',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (file_id),
+    UNIQUE KEY uk_skill_file_path (artifact_id,path_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场File';
+
+CREATE TABLE IF NOT EXISTS t_skill_submission (
+    submission_id BIGINT NOT NULL COMMENT '提交冻结快照标识',
+    skill_id BIGINT NOT NULL COMMENT '所属Skill',
+    draft_id BIGINT NOT NULL COMMENT '来源草稿',
+    submitted_by BIGINT NOT NULL COMMENT '可信提交账号',
+    display_revision_id BIGINT NOT NULL COMMENT '冻结展示修订',
+    artifact_id BIGINT NOT NULL COMMENT '冻结制品',
+    version_label VARCHAR(64) NOT NULL COMMENT '冻结版本号',
+    version_id BIGINT NOT NULL COMMENT '发布版本标识',
+    status VARCHAR(24) NOT NULL COMMENT '已完成发布为APPROVED',
+    snapshot_hash CHAR(64) NOT NULL COMMENT '审批绑定的请求快照摘要',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (submission_id),
+    UNIQUE KEY uk_skill_submission_draft (draft_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Submission';
+
+CREATE TABLE IF NOT EXISTS t_skill_approval (
+    approval_id BIGINT NOT NULL COMMENT '审批单据标识',
+    submission_id BIGINT NOT NULL COMMENT '一对一冻结提交',
+    status VARCHAR(24) NOT NULL COMMENT '事务内PENDING后APPROVED',
+    decision_source VARCHAR(24) NOT NULL COMMENT '当前LOCAL_AUTO决定来源',
+    policy_version VARCHAR(32) NOT NULL COMMENT '自动决定策略版本',
+    actor_type VARCHAR(16) NOT NULL COMMENT '当前SYSTEM，不冒充人工审核',
+    request_snapshot_hash CHAR(64) NOT NULL COMMENT '批准所对应的快照摘要',
+    reason_code VARCHAR(64) NOT NULL COMMENT '系统自动通过原因',
+    decided_at DATETIME(3) NULL COMMENT '审批决定时间',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (approval_id),
+    UNIQUE KEY uk_skill_approval_submission (submission_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Approval';
+
+CREATE TABLE IF NOT EXISTS t_skill_version (
+    version_id BIGINT NOT NULL COMMENT '不可变已批准版本标识',
+    skill_id BIGINT NOT NULL COMMENT '所属Skill',
+    version_label VARCHAR(64) NOT NULL COMMENT '平台SemVer且不可覆盖',
+    artifact_id BIGINT NOT NULL COMMENT '不可变制品',
+    approved_submission_id BIGINT NOT NULL COMMENT '批准并完成发布的提交',
+    status VARCHAR(24) NOT NULL COMMENT 'AVAILABLE或BLOCKED',
+    release_notes VARCHAR(2000) NOT NULL COMMENT '首版更新说明',
+    declarations_json TEXT NOT NULL COMMENT '冻结的许可来源依赖声明',
+    published_at DATETIME(3) NOT NULL COMMENT '批准发布时间',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (version_id),
+    UNIQUE KEY uk_skill_version_label (skill_id,version_label),
+    UNIQUE KEY uk_skill_version_submission (approved_submission_id),
+    KEY idx_skill_version_artifact (artifact_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Version';
+
+CREATE TABLE IF NOT EXISTS t_skill_command (
+    command_id BIGINT NOT NULL COMMENT '幂等命令回执标识',
+    subject_scope VARCHAR(64) NOT NULL COMMENT '账号主体作用域',
+    command_type VARCHAR(32) NOT NULL COMMENT '用例命令类型',
+    idempotency_key VARCHAR(64) NOT NULL COMMENT '客户端UUID幂等键',
+    request_hash CHAR(64) NOT NULL COMMENT '规范化请求摘要',
+    resource_id BIGINT NOT NULL COMMENT '原操作结果资源',
+    response_json TEXT NOT NULL COMMENT '用于原样恢复结果的有界回执',
+    expires_at DATETIME(3) NOT NULL COMMENT '短期回执清理期限',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (command_id),
+    UNIQUE KEY uk_skill_command (subject_scope,command_type,idempotency_key),
+    KEY idx_skill_command_expiry (expires_at,command_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Command';
+
+CREATE TABLE IF NOT EXISTS t_skill_download_grant (
+    grant_id BIGINT NOT NULL COMMENT '短效授权记录标识',
+    token_hash CHAR(64) NOT NULL COMMENT '仅保存能力凭据散列',
+    version_id BIGINT NOT NULL COMMENT '授权的固定版本',
+    subject_hash CHAR(64) NOT NULL COMMENT '短效匿名主体散列，仅限流使用',
+    expires_at DATETIME(3) NOT NULL COMMENT '60秒授权截止时间',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (grant_id),
+    UNIQUE KEY uk_skill_grant_token (token_hash),
+    KEY idx_skill_grant_subject (subject_hash,expires_at),
+    KEY idx_skill_grant_expiry (expires_at,grant_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场DownloadGrant';
+
+CREATE TABLE IF NOT EXISTS t_skill_audit (
+    audit_id BIGINT NOT NULL COMMENT '审计事实标识',
+    action VARCHAR(32) NOT NULL COMMENT '发布或下架等领域操作',
+    actor_id BIGINT NOT NULL COMMENT '可信操作账号',
+    target_id BIGINT NOT NULL COMMENT 'Skill或提交标识',
+    details_json VARCHAR(2048) NOT NULL COMMENT '无秘密的结果及原因',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (audit_id),
+    KEY idx_skill_audit_target (target_id,create_time,audit_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Audit';
+
+CREATE TABLE IF NOT EXISTS t_skill_account_cleanup (
+    user_id BIGINT NOT NULL COMMENT '已注销资源所有者',
+    state VARCHAR(32) NOT NULL COMMENT 'RUNNABLE、WAITING_RETENTION_POLICY或COMPLETED',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
+    PRIMARY KEY (user_id),
+    KEY idx_skill_cleanup_state (state,update_time,user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场AccountCleanup';
+
+CREATE TABLE IF NOT EXISTS t_skill_category (
+    category_id VARCHAR(32) NOT NULL COMMENT '平台分类标识',
+    name VARCHAR(32) NOT NULL COMMENT '分类中文名称',
+    enabled TINYINT NOT NULL DEFAULT 1 COMMENT '允许新发布使用',
+    sort_order INT NOT NULL COMMENT '展示顺序',
+    PRIMARY KEY(category_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill主分类词表';
+CREATE TABLE IF NOT EXISTS t_skill_tag (
+    tag_id VARCHAR(32) NOT NULL COMMENT '平台标签标识',
+    name VARCHAR(32) NOT NULL COMMENT '标签展示名称',
+    enabled TINYINT NOT NULL DEFAULT 1 COMMENT '允许新发布使用',
+    sort_order INT NOT NULL COMMENT '展示顺序',
+    PRIMARY KEY(tag_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill标签词表';
+CREATE TABLE IF NOT EXISTS t_skill_revision_tag (
+    revision_id BIGINT NOT NULL COMMENT '不可变展示修订',
+    tag_id VARCHAR(32) NOT NULL COMMENT '平台标签',
+    PRIMARY KEY(revision_id,tag_id),
+    KEY idx_skill_tag_revision(tag_id,revision_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='展示修订标签关系';
+INSERT IGNORE INTO t_skill_category(category_id,name,sort_order) VALUES
+('development','开发工具',1),('productivity','效率提升',2),('research','研究分析',3),('writing','内容创作',4),('other','其他',5);
+INSERT IGNORE INTO t_skill_tag(tag_id,name,sort_order) VALUES
+('coding','编程',1),('automation','自动化',2),('documentation','文档',3),('data','数据',4),('design','设计',5),('testing','测试',6);
