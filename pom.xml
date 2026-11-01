@@ -20,6 +20,9 @@
 
     <properties>
         <java.version>21</java.version>
+        <!-- 单测默认不连接基础设施；integration-only 只控制 Surefire。 -->
+        <integration-only>false</integration-only>
+        <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
         <spring-boot.version>3.2.0</spring-boot.version>
         <lombok.version>1.18.42</lombok.version>
         <jjwt.version>0.12.7</jjwt.version>
@@ -269,6 +272,16 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${maven-surefire-plugin.version}</version>
+                <configuration>
+                    <excludedGroups>integration</excludedGroups>
+                    <skipTests>${integration-only}</skipTests>
+                    <failIfNoTests>true</failIfNoTests>
+                </configuration>
+            </plugin>
+            <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
@@ -305,4 +318,110 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <profile>
+            <id>integration</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-failsafe-plugin</artifactId>
+                        <version>${maven-surefire-plugin.version}</version>
+                        <configuration>
+                            <groups>integration</groups>
+                            <includes>
+                                <include>**/*Test.java</include>
+                            </includes>
+                            <failIfNoTests>true</failIfNoTests>
+                            <systemPropertyVariables>
+                                <query.cache.redis-it>true</query.cache.redis-it>
+                                <messaging.redis-it>true</messaging.redis-it>
+                            </systemPropertyVariables>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <goals>
+                                    <goal>integration-test</goal>
+                                    <goal>verify</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.jacoco</groupId>
+                        <artifactId>jacoco-maven-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>prepare-agent-integration</id>
+                                <goals>
+                                    <goal>prepare-agent-integration</goal>
+                                </goals>
+                            </execution>
+                            <execution>
+                                <id>report-integration</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>report-integration</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>quality</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-checkstyle-plugin</artifactId>
+                        <version>3.6.0</version>
+                        <dependencies>
+                            <dependency>
+                                <groupId>com.puppycrawl.tools</groupId>
+                                <artifactId>checkstyle</artifactId>
+                                <version>10.26.1</version>
+                            </dependency>
+                        </dependencies>
+                        <configuration>
+                            <configLocation>config/quality/checkstyle.xml</configLocation>
+                            <includeTestSourceDirectory>true</includeTestSourceDirectory>
+                            <includeResources>false</includeResources>
+                            <includeTestResources>false</includeTestResources>
+                            <linkXRef>false</linkXRef>
+                        </configuration>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-pmd-plugin</artifactId>
+                        <version>3.28.0</version>
+                        <dependencies>
+                            <dependency>
+                                <groupId>net.sourceforge.pmd</groupId>
+                                <artifactId>pmd-core</artifactId>
+                                <version>7.28.0</version>
+                            </dependency>
+                            <dependency>
+                                <groupId>net.sourceforge.pmd</groupId>
+                                <artifactId>pmd-java</artifactId>
+                                <version>7.28.0</version>
+                            </dependency>
+                        </dependencies>
+                        <configuration>
+                            <rulesets>
+                                <ruleset>config/quality/pmd.xml</ruleset>
+                            </rulesets>
+                            <targetJdk>21</targetJdk>
+                            <includeTests>true</includeTests>
+                            <analysisCache>false</analysisCache>
+                            <skipPmdError>false</skipPmdError>
+                            <linkXRef>false</linkXRef>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

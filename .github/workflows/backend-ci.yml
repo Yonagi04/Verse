@@ -1,0 +1,85 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Java Static Analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Validate test classification
+        run: python3 scripts/ci/check_test_reports.py inventory
+      - name: Verify CI guard failure modes
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+      - name: Checkstyle and PMD reports
+        run: mvn --batch-mode --no-transfer-progress -Pquality checkstyle:checkstyle pmd:pmd
+      - name: Summarize quality warnings and validate reports
+        run: python3 scripts/ci/check_quality.py
+      - name: Upload full quality reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: java-static-analysis
+          path: |
+            target/checkstyle-result.xml
+            target/pmd.xml
+          retention-days: 7
+
+  unit:
+    name: Backend Unit Tests and Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Compile
+        run: mvn --batch-mode --no-transfer-progress compile -q
+      - name: Unit tests, coverage and Maven build
+        run: mvn --batch-mode --no-transfer-progress clean verify
+      - name: Require complete unit reports
+        run: python3 scripts/ci/check_test_reports.py unit
+      - name: Upload unit and coverage reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: backend-unit-reports
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          retention-days: 7
+      - name: Upload unit coverage to Codecov
+        if: success() && github.event.pull_request.head.repo.fork != true
+        uses: codecov/codecov-action@04b047e8bb82a0c002c8312c1c880fbc6a999d45 # v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/site/jacoco/jacoco.xml
+          flags: unit
+          disable_search: true
+          fail_ci_if_error: false
