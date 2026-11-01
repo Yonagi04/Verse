@@ -36,6 +36,15 @@ final class SkillPackageContentPolicy {
 
     void check(Map<String, byte[]> files, SkillMarkdownPolicy markdownPolicy) {
         for (Map.Entry<String, byte[]> file : files.entrySet()) {
+            try {
+                checkFile(file, files, markdownPolicy);
+            } catch (SkillPackageValidationException exception) {
+                throw new SkillPackageValidationException(exception.getCode(), exception.getMessage(), file.getKey());
+            }
+        }
+    }
+
+    private void checkFile(Map.Entry<String, byte[]> file, Map<String, byte[]> files, SkillMarkdownPolicy markdownPolicy) {
             control.check();
             String lower = file.getKey().toLowerCase(Locale.ROOT);
             for (String segment : lower.split("/")) {
@@ -60,7 +69,6 @@ final class SkillPackageContentPolicy {
                     }
                 }
             }
-        }
     }
 
     private void scanSecrets(byte[] bytes) {

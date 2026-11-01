@@ -12,7 +12,7 @@ public interface SkillArtifactMapper extends BaseMapper<SkillArtifactDO> {
      * @return 持行锁的制品，不存在时null；新增绑定与清理共用此锁
      */
     @Select("""
-            SELECT artifact_id,owner_user_id,archive_key,archive_sha256,content_sha256,
+            SELECT artifact_id,owner_user_id,source_type,source_json,archive_key,archive_sha256,content_sha256,
                    archive_bytes,unpacked_bytes,file_count,skill_markdown,manifest_json,status,create_time,update_time
             FROM t_skill_artifact WHERE artifact_id=#{artifactId} FOR UPDATE
             """)

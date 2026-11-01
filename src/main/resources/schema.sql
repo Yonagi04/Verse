@@ -1093,6 +1093,10 @@ CREATE TABLE IF NOT EXISTS t_skill_job (
     job_id BIGINT NOT NULL COMMENT '导入任务标识',
     draft_id BIGINT NOT NULL COMMENT '关联本人草稿',
     owner_user_id BIGINT NOT NULL COMMENT '任务所属账号',
+    source_type VARCHAR(16) NOT NULL DEFAULT 'ZIP' COMMENT 'ZIP或GITHUB',
+    phase VARCHAR(16) NOT NULL DEFAULT 'VALIDATE' COMMENT 'RESOLVE/FETCH/SELECT/VALIDATE',
+    queue_deadline DATETIME(3) NULL COMMENT 'GitHub首次执行前排队截止UTC',
+    wait_until DATETIME(3) NULL COMMENT '来源或目录选择等待截止UTC',
     source_key VARCHAR(512) NULL COMMENT '私有且不可覆盖的源包Key',
     source_sha256 CHAR(64) NULL COMMENT '已绑定源ZIP字节摘要',
     source_bytes BIGINT NULL COMMENT '源ZIP实际字节数',
@@ -1113,12 +1117,15 @@ CREATE TABLE IF NOT EXISTS t_skill_job (
     KEY idx_skill_job_ready (status,next_retry_at,job_id),
     KEY idx_skill_job_lease (status,lease_until,job_id),
     KEY idx_skill_job_owner (owner_user_id,create_time,job_id),
-    KEY idx_skill_job_draft (draft_id,job_id)
+    KEY idx_skill_job_draft (draft_id,job_id),
+    KEY idx_skill_job_wait (status,wait_until,job_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Job';
 
 CREATE TABLE IF NOT EXISTS t_skill_artifact (
     artifact_id BIGINT NOT NULL COMMENT '不可变文件快照标识',
     owner_user_id BIGINT NOT NULL COMMENT '快照所属账号',
+    source_type VARCHAR(16) NOT NULL DEFAULT 'ZIP' COMMENT '服务端获取来源ZIP或GITHUB',
+    source_json JSON NULL COMMENT '不可变来源快照，旧ZIP为空',
     archive_key VARCHAR(512) NOT NULL COMMENT '私有归档对象Key',
     archive_sha256 CHAR(64) NOT NULL COMMENT '下载ZIP字节SHA256',
     content_sha256 CHAR(64) NOT NULL COMMENT '规范化路径与文件摘要的内容摘要',
@@ -1134,6 +1141,23 @@ CREATE TABLE IF NOT EXISTS t_skill_artifact (
     KEY idx_skill_artifact_cleanup (status,update_time,artifact_id),
     KEY idx_skill_artifact_owner (owner_user_id,artifact_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Artifact';
+
+CREATE TABLE IF NOT EXISTS t_skill_github_source (
+    job_id BIGINT NOT NULL COMMENT '所属导入任务，一对一',
+    request_json JSON NULL COMMENT '规范请求，最多8KiB',
+    source_options_json JSON NULL COMMENT '最多20个引用解析选项，32KiB',
+    confirmed_source_json JSON NULL COMMENT '用户确认的完整SHA和目录，8KiB',
+    tree_key VARCHAR(255) NULL COMMENT '私有tree快照对象Key',
+    tree_sha256 CHAR(64) NULL COMMENT 'tree实际字节SHA256',
+    scan_digest CHAR(64) NULL COMMENT '固定来源和扫描版本摘要',
+    candidates_json JSON NULL COMMENT '最多100个候选，256KiB',
+    selected_candidate_id VARCHAR(64) NULL COMMENT '当前所选候选标识',
+    validation_issues_json JSON NULL COMMENT '最多20项安全问题，64KiB',
+    create_time DATETIME(3) NOT NULL COMMENT '创建时间UTC',
+    update_time DATETIME(3) NOT NULL COMMENT '修改时间UTC',
+    PRIMARY KEY (job_id),
+    KEY idx_skill_github_tree_key (tree_key)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='GitHub导入私人阶段快照';
 
 CREATE TABLE IF NOT EXISTS t_skill_file (
     file_id BIGINT NOT NULL COMMENT '快照文件索引标识',

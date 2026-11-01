@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.skillhub.port;
 
+import java.nio.file.Path;
+
 /** 私有不可变对象边界；禁止返回公开URL或预签名绕过实时分发校验。 */
 public interface SkillArtifactStore {
     /**
@@ -25,4 +27,10 @@ public interface SkillArtifactStore {
      * @return 本域前缀内最多500个候选及下一游标
      */
     SkillObjectPage list(String cursor);
+
+    /** 流式写入不可覆盖的GitHub源ZIP或tree，不放宽最终制品20MiB限制。 */
+    void putSource(String key, Path path, String contentType, long maximumBytes, SkillImportBudget budget);
+
+    /** 在调用方控制的临时文件中读取源快照，整次传输受大小和执行截止约束。 */
+    void downloadSource(String key, Path target, long maximumBytes, SkillImportBudget budget);
 }

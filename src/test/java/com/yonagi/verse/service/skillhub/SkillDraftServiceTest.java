@@ -76,7 +76,18 @@ class SkillDraftServiceTest {
     }
 
     @Test
+    void editingCannotPreAuthorizeFutureArtifact() {
+        ClientException failure = assertThrows(ClientException.class,
+                () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(2L, SkillTestFixture.metadata())));
+        assertEquals(com.yonagi.verse.common.enums.SkillErrorCodeEnum.INVALID_INPUT.code(), failure.getErrorCode());
+        assertEquals(2L, draft.getRevision()); assertNull(draft.getMetadataJson());
+        verify(drafts, never()).update(any(), any());
+    }
+
+    @Test
     void savesExactMetadataOnMatchingRevisionAndCannotOverwriteConsumedDraft() {
+        draft.setStatus("READY");
+        draft.setArtifactId(40L);
         when(drafts.update(any(), any())).thenReturn(1);
         SkillDraftRespDTO result = service.save(1L, 30L, new SkillDraftSaveReqDTO(2L, SkillTestFixture.metadata()));
         assertEquals(3L, result.revision());
@@ -88,6 +99,8 @@ class SkillDraftServiceTest {
 
     @Test
     void staleRevisionAndLostCompareAndSetCannotReportSaved() {
+        draft.setStatus("READY");
+        draft.setArtifactId(40L);
         assertThrows(ClientException.class,
                 () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(1L, SkillTestFixture.metadata())));
         assertThrows(ClientException.class,

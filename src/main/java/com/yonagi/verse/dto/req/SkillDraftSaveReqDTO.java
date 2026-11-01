@@ -1,6 +1,6 @@
 package com.yonagi.verse.dto.req;
 
-import com.yonagi.verse.dto.SkillPublicationMetadataDTO;
+import com.yonagi.verse.dto.skillhub.SkillPublicationMetadataDTO;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;

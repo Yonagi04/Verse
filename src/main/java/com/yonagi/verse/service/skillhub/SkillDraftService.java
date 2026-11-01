@@ -112,6 +112,11 @@ public class SkillDraftService {
         SkillOwnedDraft owned = accessPolicy.lockDraft(userId, draftId);
         SkillDraftDO draft = owned.draft();
         requireEditable(draft, input.revision());
+        if ((Boolean.TRUE.equals(input.metadata().distributionAuthorized())
+                || Boolean.TRUE.equals(input.metadata().declarationsConfirmed()))
+                && (!SkillDraftStatusEnum.READY.name().equals(draft.getStatus()) || draft.getArtifactId() == null)) {
+            throw new ClientException("请在检查完成后确认当前内容的声明", SkillErrorCodeEnum.INVALID_INPUT);
+        }
         String json = snapshotCodec.encode(input.metadata());
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         int changed = draftMapper.update(null, Wrappers.lambdaUpdate(SkillDraftDO.class)
@@ -184,6 +189,9 @@ public class SkillDraftService {
                 manifest == null ? null : manifest.path("packageDescription").textValue(),
                 artifact == null ? null : artifact.getSkillMarkdown(),
                 artifact == null ? null : artifact.getArchiveBytes(),
-                artifact == null ? null : artifact.getFileCount(), draft.getUpdateTime().atOffset(ZoneOffset.UTC));
+                artifact == null ? null : artifact.getFileCount(), draft.getUpdateTime().atOffset(ZoneOffset.UTC),
+                artifact == null ? null : artifact.getArtifactId().toString(),
+                artifact == null ? null : artifact.getContentSha256(), artifact == null ? null
+                        : new SkillGithubSnapshotCodec(objectMapper).source(artifact.getSourceType(), artifact.getSourceJson()));
     }
 }

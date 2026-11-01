@@ -2,6 +2,7 @@ package com.yonagi.verse.adapter.skillhub.validation;
 
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.SkillErrorCodeEnum;
+import com.yonagi.verse.dto.skillhub.SkillValidationIssueDTO;
 import com.yonagi.verse.service.skillhub.port.SkillPackageInspector;
 import com.yonagi.verse.service.skillhub.port.SkillValidationReport;
 import com.yonagi.verse.adapter.skillhub.validation.exception.SkillPackageValidationException;
@@ -41,15 +42,17 @@ public class SkillInProcessInspector implements SkillPackageInspector {
         try {
             return validator.validate(archive, control);
         } catch (SkillPackageValidationException exception) {
-            return rejected(archive, exception.getCode(), control);
+            return rejected(archive, exception.getCode(), exception.getRelativePath(), control);
         } catch (IOException exception) {
-            return rejected(archive, "INVALID_ARCHIVE", control);
+            return rejected(archive, "INVALID_ARCHIVE", null, control);
         }
     }
 
-    private SkillValidationReport rejected(byte[] archive, String code, SkillValidationControl control) {
+    private SkillValidationReport rejected(byte[] archive, String code, String path, SkillValidationControl control) {
         control.check();
         return new SkillValidationReport(SkillPackageValidator.hash(archive == null ? new byte[0] : archive, control),
-                false, code, null, null, null, null, null, null, null, 0L, List.of());
+                false, code, null, null, null, null, null, null, null, 0L, List.of(), path == null ? List.of()
+                : List.of(new SkillValidationIssueDTO(code, path, null,
+                        "此文件未通过静态检查，请核对声明和本地资源引用")));
     }
 }

@@ -1,4 +1,4 @@
-package com.yonagi.verse.dto;
+package com.yonagi.verse.dto.skillhub;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

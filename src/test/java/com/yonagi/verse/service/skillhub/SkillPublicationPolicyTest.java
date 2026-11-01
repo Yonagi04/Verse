@@ -3,7 +3,7 @@ package com.yonagi.verse.service.skillhub;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper;
 import com.yonagi.verse.dao.projection.SkillOptionProjection;
-import com.yonagi.verse.dto.SkillPublicationMetadataDTO;
+import com.yonagi.verse.dto.skillhub.SkillPublicationMetadataDTO;
 import jakarta.validation.Validation;
 import jakarta.validation.ValidatorFactory;
 import org.junit.jupiter.api.AfterAll;

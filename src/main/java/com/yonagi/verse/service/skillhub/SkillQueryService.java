@@ -86,7 +86,8 @@ public class SkillQueryService {
         return new SkillDetailRespDTO(card(row, readTags(List.of(row))), "AVAILABLE", row.getSkillMarkdown(),
                 declarations.path("license").textValue(), declarations.path("originalAuthor").textValue(),
                 declarations.path("sourceUrl").textValue(), declarations.path("compatibility").textValue(),
-                declarations.path("dependencies").textValue(), row.getArchiveBytes(), row.getArchiveSha256());
+                declarations.path("dependencies").textValue(), row.getArchiveBytes(), row.getArchiveSha256(),
+                new SkillGithubSnapshotCodec(objectMapper).source(row.getSourceType(), row.getSourceJson()));
     }
 
     /**
@@ -114,7 +115,12 @@ public class SkillQueryService {
         List<SkillOptionRespDTO> tags = publicQueryMapper.selectTags().stream()
                 .map(item -> new SkillOptionRespDTO(item.getId(), item.getName())).toList();
         return new SkillOptionsRespDTO(categories, tags, SkillPackageLimitConstant.MAX_ARCHIVE_BYTES,
-                SkillPackageLimitConstant.MAX_UNPACKED_BYTES, SkillPackageLimitConstant.MAX_FILE_COUNT);
+                SkillPackageLimitConstant.MAX_UNPACKED_BYTES, SkillPackageLimitConstant.MAX_FILE_COUNT,
+                new com.yonagi.verse.dto.resp.SkillGithubLimitsRespDTO(
+                        com.yonagi.verse.common.constant.SkillGithubLimitConstant.MAX_ARCHIVE_BYTES,
+                        com.yonagi.verse.common.constant.SkillGithubLimitConstant.MAX_UNPACKED_BYTES,
+                        com.yonagi.verse.common.constant.SkillGithubLimitConstant.MAX_ENTRIES,
+                        com.yonagi.verse.common.constant.SkillGithubLimitConstant.MAX_CANDIDATES));
     }
 
     private SkillSearchCondition normalize(SkillSearchReqDTO input) {
@@ -131,7 +137,7 @@ public class SkillQueryService {
                 || (category != null && category.length() > MAX_FILTER_LENGTH)
                 || (input.getTags() != null && input.getTags().size() > MAX_TAGS)
                 || (sort != null && !SORTS.contains(sort))
-                || (source != null && !ZIP_SOURCE.equals(source))
+                || (source != null && !Set.of(ZIP_SOURCE, "GITHUB").contains(source))
                 || (input.getPublisherId() != null && input.getPublisherId() < 1)) {
             throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
         }
@@ -139,7 +145,7 @@ public class SkillQueryService {
                 .replace("_", "!_");
         return new SkillSearchCondition(keyword, keyword, escaped == null ? null : escaped + "%",
                 escaped == null ? null : "%" + escaped + "%", category, tags, input.getPublisherId(),
-                "relevance".equals(sort) || (sort == null && keyword != null), page, size, (page - 1) * size);
+                "relevance".equals(sort) || (sort == null && keyword != null), page, size, (page - 1) * size, source);
     }
 
     private Map<Long, List<String>> readTags(List<SkillPublicProjection> rows) {
@@ -159,7 +165,8 @@ public class SkillQueryService {
                 row.getHandle(), row.getPublicName());
         return new SkillCardRespDTO(row.getSkillId().toString(), publisher, row.getSlug(), row.getName(),
                 row.getSummary(), row.getCategoryId(), List.copyOf(tags.getOrDefault(row.getRevisionId(), List.of())),
-                row.getVersionLabel(), row.getVersionId().toString(), row.getPublishedAt().atOffset(ZoneOffset.UTC));
+                row.getVersionLabel(), row.getVersionId().toString(), row.getPublishedAt().atOffset(ZoneOffset.UTC),
+                row.getSourceType() == null ? "ZIP" : row.getSourceType());
     }
 
     private String blankToNull(String value) {

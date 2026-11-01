@@ -18,13 +18,16 @@ public class SkillImportWorker {
     private final SkillImportTaskMapper taskMapper;
     private final SkillImportProcessingService processingService;
     private final ThreadPoolTaskExecutor executor;
+    private final SkillGithubImportProcessingService githubProcessing;
 
     /** 持久化候选不搬入无界内存队列，执行器关闭时停止分派。 */
     public SkillImportWorker(SkillImportTaskMapper taskMapper, SkillImportProcessingService processingService,
-                              @Qualifier("skillImportExecutor") ThreadPoolTaskExecutor executor) {
+                              @Qualifier("skillImportExecutor") ThreadPoolTaskExecutor executor,
+                              SkillGithubImportProcessingService githubProcessing) {
         this.taskMapper = taskMapper;
         this.processingService = processingService;
         this.executor = executor;
+        this.githubProcessing = githubProcessing;
     }
 
     /** 最多查询两个候选，拒绝执行时保留DB任务等待下次调度。 */
@@ -33,7 +36,14 @@ public class SkillImportWorker {
         try {
             for (Long jobId : taskMapper.selectEligibleIds(LocalDateTime.now(ZoneOffset.UTC))) {
                 try {
-                    executor.execute(() -> processingService.process(jobId));
+                    executor.execute(() -> {
+                        com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO reference = taskMapper.selectById(jobId);
+                        if (reference != null && "GITHUB".equals(reference.getSourceType())) {
+                            githubProcessing.process(jobId);
+                        } else {
+                            processingService.process(jobId);
+                        }
+                    });
                 } catch (RejectedExecutionException exception) {
                     return;
                 }

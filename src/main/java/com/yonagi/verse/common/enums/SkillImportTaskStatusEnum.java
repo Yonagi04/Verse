@@ -12,6 +12,10 @@ public enum SkillImportTaskStatusEnum {
     RUNNING,
     /** 暂时故障等待重试。 */
     RETRY_WAIT,
+    /** 解析完成，等待本人确认固定提交与目录。 */
+    WAITING_CONFIRMATION,
+    /** 已获取快照，等待本人选一个Skill。 */
+    WAITING_SELECTION,
     /** 检查成功。 */
     SUCCEEDED,
     /** 检查失败。 */

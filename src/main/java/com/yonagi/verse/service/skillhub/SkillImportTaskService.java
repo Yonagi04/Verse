@@ -36,6 +36,8 @@ public class SkillImportTaskService {
     private final SkillImportTaskMapper taskMapper;
     private final SkillDraftMapper draftMapper;
     private final SkillIdempotencyService idempotencyService;
+    private final SkillPublicationSnapshotCodec snapshotCodec;
+    private final SkillImportTaskViews taskViews;
 
     /**
      * @param userId 可信账号
@@ -49,14 +51,27 @@ public class SkillImportTaskService {
         if (input == null || input.revision() == null || input.revision() < 0) {
             throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
         }
-        SkillOwnedDraft owned = accessPolicy.lockDraft(userId, draftId);
         List<Long> request = List.of(draftId, input.revision());
-        Long replay = idempotencyService.replay(userId, CREATE_COMMAND, key, request, Long.class);
+        SkillImportTaskDO task = allocate(userId, draftId, input.revision(), key, CREATE_COMMAND, request, "ZIP", "VALIDATE");
+        return view(task, accessPolicy.readDraft(userId, draftId).draft());
+    }
+
+    /** 分配GitHub任务；外层事务还需写入来源请求，不能在提交前开始网络获取。 */
+    @Transactional(rollbackFor = Exception.class)
+    public Long createGithub(Long userId, Long draftId, Long revision, String key, SkillGithubSourceRequest normalizedRequest) {
+        return allocate(userId, draftId, revision, key, "CREATE_GITHUB_IMPORT",
+                List.of(draftId, revision, normalizedRequest), "GITHUB", "RESOLVE").getJobId();
+    }
+
+    private SkillImportTaskDO allocate(Long userId, Long draftId, Long revision, String key, String command, Object request,
+                           String sourceType, String phase) {
+        SkillOwnedDraft owned = accessPolicy.lockDraft(userId, draftId);
+        Long replay = idempotencyService.replay(userId, command, key, request, Long.class);
         if (replay != null) {
-            return view(requireOwnedTask(userId, replay), owned.draft());
+            return requireOwnedTask(userId, replay);
         }
         requireEditable(owned.draft());
-        if (!input.revision().equals(owned.draft().getRevision())) {
+        if (revision == null || !revision.equals(owned.draft().getRevision())) {
             throw new ClientException(SkillErrorCodeEnum.CONFLICT);
         }
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
@@ -73,7 +88,12 @@ public class SkillImportTaskService {
         task.setJobId(SnowflakeIdUtil.nextId());
         task.setDraftId(draftId);
         task.setOwnerUserId(userId);
-        task.setStatus(SkillImportTaskStatusEnum.WAITING_UPLOAD.name());
+        task.setSourceType(sourceType);
+        task.setPhase(phase);
+        task.setStatus("GITHUB".equals(sourceType) ? "QUEUED" : "WAITING_UPLOAD");
+        if ("GITHUB".equals(sourceType)) {
+            task.setQueueDeadline(now.plusMinutes(10));
+        }
         task.setAttemptCount(0);
         task.setNextRetryAt(now);
         task.setCreateTime(now);
@@ -82,15 +102,17 @@ public class SkillImportTaskService {
         SkillDraftDO draft = owned.draft();
         draft.setLatestJobId(task.getJobId());
         draft.setArtifactId(null);
+        draft.setMetadataJson(snapshotCodec.clearConfirmations(draft.getMetadataJson()));
         draft.setStatus(SkillDraftStatusEnum.EDITING.name());
         draft.setRevision(draft.getRevision() + 1);
         draft.setUpdateTime(now);
         draftMapper.update(null, Wrappers.lambdaUpdate(SkillDraftDO.class).eq(SkillDraftDO::getDraftId, draftId)
                 .set(SkillDraftDO::getLatestJobId, task.getJobId()).set(SkillDraftDO::getArtifactId, null)
+                .set(SkillDraftDO::getMetadataJson, draft.getMetadataJson())
                 .set(SkillDraftDO::getStatus, draft.getStatus()).set(SkillDraftDO::getRevision, draft.getRevision())
                 .set(SkillDraftDO::getUpdateTime, now));
-        idempotencyService.record(userId, CREATE_COMMAND, key, request, task.getJobId(), task.getJobId());
-        return view(task, draft);
+        idempotencyService.record(userId, command, key, request, task.getJobId(), task.getJobId());
+        return task;
     }
 
     /**
@@ -213,8 +235,6 @@ public class SkillImportTaskService {
     }
 
     private SkillImportTaskRespDTO view(SkillImportTaskDO task, SkillDraftDO draft) {
-        return new SkillImportTaskRespDTO(task.getJobId().toString(), task.getDraftId().toString(), task.getStatus(),
-                draft.getRevision(), task.getErrorCode(), task.getPublicReason(), task.getAttemptCount(),
-                task.getUpdateTime().atOffset(ZoneOffset.UTC));
+        return taskViews.view(task, draft);
     }
 }

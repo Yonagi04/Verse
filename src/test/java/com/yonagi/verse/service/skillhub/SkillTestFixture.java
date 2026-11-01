@@ -8,7 +8,7 @@ import com.yonagi.verse.dao.entity.skillhub.SkillDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillDraftDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillPublisherDO;
-import com.yonagi.verse.dto.SkillPublicationMetadataDTO;
+import com.yonagi.verse.dto.skillhub.SkillPublicationMetadataDTO;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;

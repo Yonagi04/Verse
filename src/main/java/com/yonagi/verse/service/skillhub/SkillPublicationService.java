@@ -14,7 +14,7 @@ import com.yonagi.verse.dao.entity.skillhub.SkillSubmissionDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillApprovalDO;
 import com.yonagi.verse.dao.mapper.skillhub.SkillSubmissionMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillApprovalMapper;
-import com.yonagi.verse.dto.SkillPublicationMetadataDTO;
+import com.yonagi.verse.dto.skillhub.SkillPublicationMetadataDTO;
 import com.yonagi.verse.dto.req.SkillDraftSubmitReqDTO;
 import com.yonagi.verse.dto.resp.SkillPublicationRespDTO;
 import lombok.RequiredArgsConstructor;

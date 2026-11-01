@@ -17,6 +17,10 @@ public class SkillArtifactDO {
     private Long artifactId;
     /** 快照所属账号。 */
     private Long ownerUserId;
+    /** ZIP或GITHUB，权威来源不取作者自填URL。 */
+    private String sourceType;
+    /** 不可变获取来源，GitHub包含仓库、目录和完整SHA。 */
+    private String sourceJson;
     /** 私有归档对象Key。 */
     private String archiveKey;
     /** 下载ZIP字节SHA256。 */

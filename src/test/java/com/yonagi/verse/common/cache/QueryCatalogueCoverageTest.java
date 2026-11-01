@@ -60,6 +60,9 @@ class QueryCatalogueCoverageTest {
             "/api/v1/skills/{skillId:[0-9]+}/comments/{rootId}/replies",
             "/api/v1/skills/me/publications",
             "/api/v1/skills/drafts/{draftId:[0-9]+}", "/api/v1/skills/imports/{jobId:[0-9]+}",
+            // 私人快照清单按账号/当前制品实时校验，有界分页不缓存。
+            "/api/v1/skills/drafts/{draftId:[0-9]+}/files",
+            "/api/v1/skills/imports/{jobId:[0-9]+}/candidates",
             "/api/v1/skills/submissions/{submissionId:[0-9]+}",
             "/api/v1/auth/external/callback/{provider}", "/api/v1/auth/external/flows/{id}",
             "/api/v1/tenants/{tenantId}/playground/status", "/api/v1/tenants/{tenantId}/playground/prompts",

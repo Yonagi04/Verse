@@ -22,6 +22,13 @@ import software.amazon.awssdk.services.s3.model.S3Exception;
 import java.time.Duration;
 import java.util.List;
 import java.util.regex.Pattern;
+import java.nio.file.Path;
+import java.nio.file.Files;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import com.yonagi.verse.common.constant.SkillGithubLimitConstant;
+import com.yonagi.verse.service.skillhub.port.SkillImportBudget;
 
 /** Skill文件的有界S3读写；前缀私有策略由部署维护，不依赖桶管理权限。 */
 @Component
@@ -120,6 +127,125 @@ public class SkillS3ArtifactStore implements SkillArtifactStore {
             return new SkillObjectPage(objects, page.nextContinuationToken());
         } catch (SdkException exception) {
             throw storageFailure("ListObjectsV2", "Skill文件列举失败，请检查对象存储状态", exception);
+        }
+    }
+
+    @Override
+    public void putSource(String key, Path path, String contentType, long maximumBytes, SkillImportBudget budget) {
+        validateSource(key, maximumBytes);
+        budget.check();
+        try {
+            long length = Files.size(path);
+            if (length <= 0 || length > maximumBytes || !("application/zip".equals(contentType)
+                    || "application/json".equals(contentType))) {
+                throw unavailable("Skill源对象超过限制");
+            }
+            Duration remaining = budget.remaining();
+            AwsRequestOverrideConfiguration timeout = AwsRequestOverrideConfiguration.builder()
+                    .apiCallTimeout(remaining).apiCallAttemptTimeout(remaining).build();
+            // SDK签名和重试可能多次打开请求体，不能复用不可reset的单个流。
+            try (SourceContentProvider provider = new SourceContentProvider(path, budget)) {
+                client.putObject(PutObjectRequest.builder().bucket(bucket).key(key).contentType(contentType)
+                        .cacheControl("no-store").ifNoneMatch("*").overrideConfiguration(timeout).build(),
+                        RequestBody.fromContentProvider(provider, length, contentType));
+            }
+            budget.check();
+        } catch (IOException exception) {
+            throw unavailable("Skill源对象临时文件不可用");
+        } catch (SdkException exception) {
+            throw storageFailure("PutSource", "Skill源对象保存失败", exception);
+        }
+    }
+
+    @Override
+    public void downloadSource(String key, Path target, long maximumBytes, SkillImportBudget budget) {
+        validateSource(key, maximumBytes);
+        budget.check();
+        Duration remaining = budget.remaining();
+        AwsRequestOverrideConfiguration timeout = AwsRequestOverrideConfiguration.builder()
+                .apiCallTimeout(remaining).apiCallAttemptTimeout(remaining).build();
+        try {
+            client.getObject(GetObjectRequest.builder().bucket(bucket).key(key).overrideConfiguration(timeout).build(),
+                    (response, input) -> {
+                        if (response.contentLength() == null || response.contentLength() <= 0
+                                || response.contentLength() > maximumBytes) {
+                            input.abort();
+                            throw unavailable("Skill源对象大小不符合限制");
+                        }
+                        long total = 0;
+                        try (OutputStream output = Files.newOutputStream(target)) {
+                            byte[] buffer = new byte[READ_BUFFER_BYTES];
+                            int count;
+                            while ((count = input.read(buffer)) != -1) {
+                                budget.check();
+                                total += count;
+                                if (total > maximumBytes) {
+                                    input.abort();
+                                    throw unavailable("Skill源对象读取超过限制");
+                                }
+                                output.write(buffer, 0, count);
+                            }
+                        }
+                        budget.check();
+                        if (total != response.contentLength()) {
+                            input.abort();
+                            throw unavailable("Skill源对象读取不完整");
+                        }
+                        return null;
+                    });
+        } catch (SdkException exception) {
+            throw storageFailure("DownloadSource", "Skill源对象读取失败", exception);
+        }
+    }
+
+    private void validateSource(String key, long maximumBytes) {
+        validateKey(key);
+        if (!key.startsWith("skillhub/v1/source/") || maximumBytes <= 0
+                || maximumBytes > SkillGithubLimitConstant.MAX_ARCHIVE_BYTES) {
+            throw unavailable("Skill源对象边界不合法");
+        }
+    }
+
+    private final class SourceContentProvider implements software.amazon.awssdk.http.ContentStreamProvider, AutoCloseable {
+        private final Path path;
+        private final SkillImportBudget budget;
+        private InputStream current;
+
+        private SourceContentProvider(Path path, SkillImportBudget budget) {
+            this.path = path;
+            this.budget = budget;
+        }
+
+        @Override
+        public InputStream newStream() {
+            budget.check();
+            try {
+                close();
+                current = new java.io.FilterInputStream(Files.newInputStream(path)) {
+                    @Override
+                    public int read(byte[] data, int offset, int size) throws IOException {
+                        budget.check();
+                        return super.read(data, offset, size);
+                    }
+
+                    @Override
+                    public int read() throws IOException {
+                        budget.check();
+                        return super.read();
+                    }
+                };
+                return current;
+            } catch (IOException exception) {
+                throw unavailable("Skill源对象临时文件不可读取");
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (current != null) {
+                current.close();
+                current = null;
+            }
         }
     }
 

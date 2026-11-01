@@ -76,8 +76,13 @@ public class SkillPackageValidator {
             relative.put(relativePath, file.getValue());
         }
         SkillMarkdownPolicy markdownPolicy = new SkillMarkdownPolicy(control);
-        SkillPackageDeclaration declaration = markdownPolicy.parse(relative.get(SKILL_MARKDOWN),
-                prefix.isEmpty() ? null : prefix.substring(0, prefix.length() - 1));
+        SkillPackageDeclaration declaration;
+        try {
+            declaration = markdownPolicy.parse(relative.get(SKILL_MARKDOWN),
+                    prefix.isEmpty() ? null : prefix.substring(0, prefix.length() - 1));
+        } catch (SkillPackageValidationException exception) {
+            throw new SkillPackageValidationException(exception.getCode(), exception.getMessage(), SKILL_MARKDOWN);
+        }
         new SkillPackageContentPolicy(control).check(relative, markdownPolicy);
         List<SkillValidatedFile> manifest = new ArrayList<>(relative.size());
         MessageDigest digest = sha256();

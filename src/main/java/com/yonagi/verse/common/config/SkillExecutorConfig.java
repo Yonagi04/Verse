@@ -32,6 +32,12 @@ public class SkillExecutorConfig {
         return executor(2, 0, "skill-import-");
     }
 
+    /** @return 单独限制GitHub远程获取，不能占满ZIP检查工作线程 */
+    @Bean("skillGithubExecutor")
+    public ThreadPoolTaskExecutor skillGithubExecutor() {
+        return executor(1, 0, "skill-github-");
+    }
+
     private ThreadPoolTaskExecutor executor(int threads, int queue, String prefix) {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
         executor.setCorePoolSize(threads);

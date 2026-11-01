@@ -1,6 +1,5 @@
 package com.yonagi.verse.service.skillhub;
 
-import cn.hutool.crypto.digest.DigestUtil;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -24,7 +23,7 @@ import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillSubmissionMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillVersionMapper;
-import com.yonagi.verse.dto.SkillPublicationMetadataDTO;
+import com.yonagi.verse.dto.skillhub.SkillPublicationMetadataDTO;
 import com.yonagi.verse.dto.resp.SkillPublicationRespDTO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -47,6 +46,7 @@ public class SkillPublicationWriter {
     private final SkillMapper skillMapper;
     private final SkillDraftMapper draftMapper;
     private final SkillAuditRecordMapper auditMapper;
+    private final SkillPublicationSnapshotCodec snapshotCodec;
 
     /**
      * @param owned 已验证归属且持统一锁序的草稿
@@ -73,7 +73,8 @@ public class SkillPublicationWriter {
             revisionMapper.insertTag(display.getRevisionId(), tag);
         }
 
-        String snapshotHash = DigestUtil.sha256Hex(draft.getMetadataJson() + "\n" + artifact.getContentSha256());
+        String snapshotHash = snapshotCodec.publicationHash(metadata, artifact.getContentSha256(),
+                artifact.getSourceType(), artifact.getSourceJson());
         SkillSubmissionDO submission = new SkillSubmissionDO();
         submission.setSubmissionId(SnowflakeIdUtil.nextId());
         submission.setSkillId(skill.getSkillId());

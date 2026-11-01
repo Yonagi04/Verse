@@ -39,7 +39,7 @@ public interface SkillCleanupMapper {
      * @return 最多100个超期或已注销账号源包任务
      */
     @Select("""
-            SELECT j.job_id FROM t_skill_job j WHERE j.source_key IS NOT NULL
+            SELECT j.job_id FROM t_skill_job j WHERE j.source_type='ZIP' AND j.source_key IS NOT NULL
               AND j.status IN ('SUCCEEDED','FAILED','CANCELLED','WAITING_UPLOAD')
               AND (j.update_time<=#{sourceExpiry} OR EXISTS (SELECT c.user_id FROM t_skill_account_cleanup c
                    WHERE c.user_id=j.owner_user_id AND c.state='RUNNABLE'))
@@ -54,8 +54,11 @@ public interface SkillCleanupMapper {
     @Select("""
             SELECT (EXISTS (SELECT a.artifact_id FROM t_skill_artifact a WHERE a.archive_key=#{key})
               OR EXISTS (SELECT j.job_id FROM t_skill_job j WHERE j.source_key=#{key})
+              OR EXISTS (SELECT g.job_id FROM t_skill_github_source g WHERE g.tree_key=#{key})
               OR EXISTS (SELECT j.job_id FROM t_skill_job j WHERE j.status='RUNNING'
-                 AND CONCAT('skillhub/v1/artifact/',j.job_id,'/',j.execution_token,'.zip')=#{key}))
+                 AND (CONCAT('skillhub/v1/artifact/',j.job_id,'/',j.execution_token,'.zip')=#{key}
+                   OR CONCAT('skillhub/v1/source/',j.job_id,'/',j.execution_token,'.zip')=#{key}
+                   OR CONCAT('skillhub/v1/source/',j.job_id,'/',j.execution_token,'.json')=#{key})))
             """)
     boolean selectObjectReferenced(@Param("key") String key);
 
@@ -83,6 +86,8 @@ public interface SkillCleanupMapper {
                 AND (d.metadata_json IS NOT NULL OR d.artifact_id IS NOT NULL OR d.version_label IS NOT NULL))
               OR EXISTS (SELECT j.job_id FROM t_skill_job j WHERE j.owner_user_id=#{userId}
                             AND j.source_key IS NOT NULL)
+              OR EXISTS (SELECT g.job_id FROM t_skill_github_source g JOIN t_skill_job j ON j.job_id=g.job_id
+                         WHERE j.owner_user_id=#{userId})
               OR EXISTS (SELECT a.artifact_id FROM t_skill_artifact a WHERE a.owner_user_id=#{userId}
                  AND a.status<>'DELETED' AND NOT EXISTS (SELECT v.version_id FROM t_skill_version v
                                                         WHERE v.artifact_id=a.artifact_id)))

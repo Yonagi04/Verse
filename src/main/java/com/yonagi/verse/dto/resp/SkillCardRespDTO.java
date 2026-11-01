@@ -14,5 +14,12 @@ public record SkillCardRespDTO(
         /** 平台标签标识。 */ List<String> tags,
         /** 当前内容版本号。 */ String version,
         /** 当前固定版本标识。 */ String versionId,
-        /** 当前版本批准时间。 */ OffsetDateTime publishedAt) {
+        /** 当前版本批准时间。 */ OffsetDateTime publishedAt,
+        /** 当前版本真实获取来源。 */ String sourceType) {
+    /** 历史ZIP调用方保持兼容。 */
+    public SkillCardRespDTO(String skillId, SkillPublisherRespDTO publisher, String slug, String name, String summary,
+                            String categoryId, List<String> tags, String version, String versionId,
+                            OffsetDateTime publishedAt) {
+        this(skillId, publisher, slug, name, summary, categoryId, tags, version, versionId, publishedAt, "ZIP");
+    }
 }

@@ -18,6 +18,8 @@
         <result column="declarations_json" property="declarationsJson"/>
         <result column="archive_bytes" property="archiveBytes"/>
         <result column="archive_sha256" property="archiveSha256"/>
+        <result column="source_type" property="sourceType"/>
+        <result column="source_json" property="sourceJson"/>
     </resultMap>
     <resultMap id="revisionTag" type="com.yonagi.verse.dao.projection.SkillRevisionTagProjection">
         <result column="revision_id" property="revisionId"/>
@@ -58,6 +60,7 @@
                  OR u.username LIKE #{query.contains} ESCAPE '!')
         </if>
         <if test="query.category != null">AND r.category_id=#{query.category}</if>
+        <if test="query.source != null">AND a.source_type=#{query.source}</if>
         <if test="query.publisherId != null">AND p.publisher_id=#{query.publisherId}</if>
         <if test="query.tags != null and !query.tags.isEmpty()">
             AND EXISTS (SELECT rt.revision_id FROM t_skill_revision_tag rt
@@ -72,7 +75,7 @@
         WHERE <include refid="available"/> <include refid="filters"/>
     </select>
     <select id="selectAvailablePage" resultMap="publicView">
-        SELECT <include refid="cardColumns"/> <include refid="availableJoins"/>
+        SELECT <include refid="cardColumns"/>,a.source_type <include refid="availableJoins"/>
         WHERE <include refid="available"/> <include refid="filters"/>
         ORDER BY
         <if test="query.relevance and query.keyword != null">
@@ -85,7 +88,8 @@
         s.latest_release_at DESC,s.skill_id DESC LIMIT #{query.size} OFFSET #{query.offset}
     </select>
     <select id="selectAvailableDetail" resultMap="publicView">
-        SELECT <include refid="cardColumns"/>,a.skill_markdown,v.declarations_json,a.archive_bytes,a.archive_sha256
+        SELECT <include refid="cardColumns"/>,a.skill_markdown,v.declarations_json,a.archive_bytes,a.archive_sha256,
+               a.source_type,a.source_json
         <include refid="availableJoins"/>
         WHERE s.skill_id=#{skillId} AND <include refid="available"/>
     </select>

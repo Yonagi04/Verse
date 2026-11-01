@@ -94,6 +94,17 @@ class SkillQueryServiceTest {
     }
 
     @Test
+    void githubAndZipSourcesRemainExplicitSqlConditions() {
+        SkillSearchReqDTO query = new SkillSearchReqDTO(); query.setSource("GITHUB");
+        service.search(query);
+        query.setSource("ZIP"); service.search(query);
+        ArgumentCaptor<SkillSearchCondition> captured = ArgumentCaptor.forClass(SkillSearchCondition.class);
+        verify(mapper, org.mockito.Mockito.times(2)).countAvailable(captured.capture());
+        assertEquals("GITHUB", captured.getAllValues().getFirst().source());
+        assertEquals("ZIP", captured.getAllValues().getLast().source());
+    }
+
+    @Test
     void rejectsUnsupportedPageSizeSortAndSourceRatherThanPretendingEmpty() {
         SkillSearchReqDTO query = new SkillSearchReqDTO();
         query.setSize(100);
@@ -102,7 +113,7 @@ class SkillQueryServiceTest {
         query.setSort("downloads");
         assertThrows(ClientException.class, () -> service.search(query));
         query.setSort("updated");
-        query.setSource("GITHUB");
+        query.setSource("GITLAB");
         assertThrows(ClientException.class, () -> service.search(query));
         query.setSource("ZIP");
         query.setTags(List.of("a", "b", "c", "d", "e", "f"));

@@ -10,6 +10,10 @@ import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactFileMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
+import com.yonagi.verse.dto.skillhub.SkillGithubCandidateDTO;
+import com.yonagi.verse.dto.skillhub.SkillGithubSourceOptionDTO;
+import com.yonagi.verse.dto.skillhub.SkillSourceDTO;
+import com.yonagi.verse.dto.skillhub.SkillValidationIssueDTO;
 import com.yonagi.verse.service.skillhub.port.SkillValidatedFile;
 import com.yonagi.verse.service.skillhub.port.SkillValidationReport;
 import com.yonagi.verse.service.user.AccountAvailabilityService;
@@ -38,14 +42,19 @@ class SkillImportExecutionServiceTest {
     private final SkillDraftMapper drafts = mock(SkillDraftMapper.class);
     private final SkillArtifactMapper artifacts = mock(SkillArtifactMapper.class);
     private final SkillArtifactFileMapper files = mock(SkillArtifactFileMapper.class);
+    private final com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper githubSources =
+            mock(com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper.class);
     private final SkillImportExecutionService service = new SkillImportExecutionService(access, accounts, tasks,
-            drafts, artifacts, files, new ObjectMapper());
+            drafts, artifacts, files, new ObjectMapper(),
+            githubSources,
+            new SkillGithubSnapshotCodec(new ObjectMapper()), new SkillPublicationSnapshotCodec(new ObjectMapper()));
     private final SkillDraftDO draft = SkillTestFixture.draft();
     private final SkillImportTaskDO task = SkillTestFixture.task();
 
     @BeforeEach
     void queued() {
-        SkillTestFixture.initializeMapping(SkillDraftDO.class, SkillImportTaskDO.class);
+        SkillTestFixture.initializeMapping(SkillDraftDO.class, SkillImportTaskDO.class,
+                com.yonagi.verse.dao.entity.skillhub.SkillGithubSourceDO.class);
         draft.setLatestJobId(50L);
         task.setStatus("QUEUED");
         task.setSourceKey("skillhub/v1/source/50/source.zip");
@@ -57,6 +66,136 @@ class SkillImportExecutionServiceTest {
         when(access.lockDraft(1L, 30L)).thenReturn(new SkillOwnedDraft(SkillTestFixture.publisher(),
                 SkillTestFixture.skill(), draft));
         when(accounts.isAccountActive(1L)).thenReturn(true);
+        task.setSourceType("ZIP"); task.setPhase("VALIDATE");
+    }
+
+    @Test
+    void resolvedSourceWaitsForHumanConfirmationAndCannotBeReplayedByLateLease() {
+        task.setSourceType("GITHUB"); task.setPhase("RESOLVE");
+        task.setQueueDeadline(SkillTestFixture.now().plusMinutes(10));
+        var source = new com.yonagi.verse.dao.entity.skillhub.SkillGithubSourceDO(); source.setJobId(50L);
+        when(githubSources.selectById(50L)).thenReturn(source);
+        var origin = new SkillSourceDTO(1,"GITHUB","https://github.com/a/b","99","main","BRANCH","a".repeat(40),"");
+        var choices = List.of(new SkillGithubSourceOptionDTO("option",origin,"b".repeat(40)));
+        var claim = service.claim(50L);
+        assertThrows(ClientException.class, () -> service.resolved(claim,List.of()));
+        task.setErrorCode("SOURCE_UNAVAILABLE"); task.setPublicReason("旧错误");
+        service.resolved(claim,choices);
+        assertEquals("WAITING_CONFIRMATION",task.getStatus()); assertNull(task.getLeaseUntil());
+        assertTrue(task.getWaitUntil().isAfter(SkillTestFixture.now().plusDays(6)));
+        var saved = new SkillGithubSnapshotCodec(new ObjectMapper()).list(source.getSourceOptionsJson(),
+                new com.fasterxml.jackson.core.type.TypeReference<List<SkillGithubSourceOptionDTO>>() { });
+        assertEquals("a".repeat(40),saved.getFirst().source().commitSha());
+        assertNull(task.getErrorCode()); assertNull(task.getPublicReason()); assertNull(draft.getArtifactId());
+        assertThrows(ClientException.class, () -> service.resolved(claim,choices));
+    }
+
+    @Test
+    void multipleCandidatesPauseWithNewDraftRevisionAndNoArtifactBinding() {
+        var source = githubFetchSource(); var claim = service.claim(50L);
+        var candidate = githubCandidate("one",true);
+        assertFalse(service.fetched(claim,"archive","a".repeat(64),10L,"tree","b".repeat(64),"c".repeat(64),
+                List.of(candidate,githubCandidate("two",true))));
+        assertEquals("WAITING_SELECTION",task.getStatus()); assertEquals("SELECT",task.getPhase());
+        assertEquals(3L,draft.getRevision()); assertNull(source.getSelectedCandidateId());
+        assertEquals("tree",source.getTreeKey()); assertEquals("archive",task.getSourceKey());
+        assertNull(draft.getArtifactId());
+        assertThrows(ClientException.class, () -> service.fetched(claim,"late","a",1L,"late-tree","b","c",List.of(candidate)));
+        assertEquals("archive",task.getSourceKey());
+    }
+
+    @Test
+    void uniqueValidCandidateRetainsFetchBudgetWhileInvalidCandidateFailsWithRelativeIssue() {
+        var source = githubFetchSource(); var claim = service.claim(50L);
+        var deadline = task.getProcessingDeadline(); var token = task.getExecutionToken();
+        assertTrue(service.fetched(claim,"archive","a".repeat(64),10L,"tree","b","c",List.of(githubCandidate("one",true))));
+        assertEquals("RUNNING",task.getStatus()); assertEquals("FETCH",task.getPhase());
+        assertEquals("one",source.getSelectedCandidateId()); assertEquals(deadline,task.getProcessingDeadline());
+        assertEquals(token,task.getExecutionToken()); assertNull(task.getWaitUntil());
+        assertFalse(service.fetched(claim,"archive","a".repeat(64),10L,"tree","b","c",List.of(githubCandidate("one",false))));
+        assertEquals("FAILED",task.getStatus()); assertEquals("INVALID_SKILL_MARKDOWN",task.getErrorCode());
+        assertTrue(source.getValidationIssuesJson().contains("one/SKILL.md")); assertNull(draft.getArtifactId());
+    }
+
+    @Test
+    void cancelledOrReplacedGithubClaimCannotWriteSourceSnapshotsOrFailure() {
+        var source = githubFetchSource(); var claim = service.claim(50L);
+        task.setExecutionToken("replacement");
+        assertThrows(ClientException.class, () -> service.fetched(claim,"late","a",1L,"tree","b","c",List.of(githubCandidate("one",true))));
+        service.githubFailed(claim,new com.yonagi.verse.service.skillhub.port.SkillGithubSourceException("SOURCE_UNAVAILABLE","暂不可用",true,null));
+        assertEquals("RUNNING",task.getStatus()); assertNull(source.getCandidatesJson());
+        assertNull(source.getTreeKey()); assertNull(draft.getArtifactId());
+    }
+
+    private com.yonagi.verse.dao.entity.skillhub.SkillGithubSourceDO githubFetchSource() {
+        task.setSourceType("GITHUB"); task.setPhase("FETCH");
+        task.setQueueDeadline(SkillTestFixture.now().plusMinutes(10));
+        var source = new com.yonagi.verse.dao.entity.skillhub.SkillGithubSourceDO(); source.setJobId(50L);
+        when(githubSources.selectById(50L)).thenReturn(source); return source;
+    }
+
+    private SkillGithubCandidateDTO githubCandidate(String name, boolean valid) {
+        return new SkillGithubCandidateDTO(name,name,name,"说明",1,10L,valid,
+                valid ? List.of() : List.of(new SkillValidationIssueDTO("INVALID_SKILL_MARKDOWN",name+"/SKILL.md",null,"声明错误")));
+    }
+
+    @Test
+    void githubQueueWaitingDoesNotConsumeExecutionDeadlineAndResolveLeaseIsShort() {
+        task.setSourceType("GITHUB"); task.setPhase("RESOLVE");
+        task.setSourceKey(null); task.setSourceSha256(null); task.setSourceBytes(null);
+        task.setCreateTime(SkillTestFixture.now().minusMinutes(5));
+        task.setQueueDeadline(SkillTestFixture.now().plusMinutes(5));
+        LocalDateTime before = SkillTestFixture.now();
+        SkillExecutionClaim claim = service.claim(50L);
+        assertNotNull(claim); assertEquals("RESOLVE", claim.phase());
+        assertTrue(task.getProcessingDeadline().isAfter(before.plusSeconds(19)));
+        assertTrue(task.getLeaseUntil().isBefore(before.plusSeconds(6)));
+        LocalDateTime fixed = task.getProcessingDeadline();
+        service.githubFailed(claim, new com.yonagi.verse.service.skillhub.port.SkillGithubSourceException(
+                "SOURCE_UNAVAILABLE", "稍后重试", true, null));
+        task.setNextRetryAt(SkillTestFixture.now().minusSeconds(1));
+        assertNotNull(service.claim(50L)); assertEquals(fixed, task.getProcessingDeadline());
+    }
+
+    @Test
+    void githubExpiredQueueAndRateLimitBeyondBudgetBecomeVisibleFailures() {
+        task.setSourceType("GITHUB"); task.setPhase("RESOLVE");
+        task.setQueueDeadline(SkillTestFixture.now().minusSeconds(1));
+        assertNull(service.claim(50L)); assertEquals("QUEUE_TIMEOUT", task.getErrorCode());
+        task.setStatus("QUEUED"); task.setQueueDeadline(SkillTestFixture.now().plusMinutes(10));
+        SkillExecutionClaim claim = service.claim(50L);
+        service.githubFailed(claim, new com.yonagi.verse.service.skillhub.port.SkillGithubSourceException(
+                "GITHUB_RATE_LIMITED", "GitHub限流", true, java.time.Instant.now().plusSeconds(3600)));
+        assertEquals("FAILED", task.getStatus()); assertEquals("GITHUB_RATE_LIMITED", task.getErrorCode());
+        assertTrue(task.getNextRetryAt().isAfter(SkillTestFixture.now().plusMinutes(59)));
+    }
+
+    @Test
+    void githubCompletionBindsSelectedImmutableSourceAndClearsAllPriorAuthorizationsAndErrors() {
+        task.setSourceType("GITHUB"); task.setPhase("FETCH");
+        task.setQueueDeadline(SkillTestFixture.now().plusMinutes(10));
+        task.setErrorCode("SOURCE_UNAVAILABLE"); task.setPublicReason("旧错误");
+        SkillGithubSnapshotCodec codec = new SkillGithubSnapshotCodec(new ObjectMapper());
+        var source = new com.yonagi.verse.dao.entity.skillhub.SkillGithubSourceDO();
+        source.setJobId(50L); source.setSelectedCandidateId("one");
+        var fixed = new SkillSourceDTO(1, "GITHUB", "https://github.com/a/b", "99",
+                "main", "BRANCH", "a".repeat(40), "skills");
+        source.setConfirmedSourceJson(codec.encode(new SkillGithubSourceOptionDTO("option", fixed,
+                "b".repeat(40)), 8192));
+        source.setCandidatesJson(codec.encode(List.of(new SkillGithubCandidateDTO("one",
+                "skills/one", "one", "说明", 1, 10L, true, List.of())), 256 * 1024));
+        when(githubSources.selectById(50L)).thenReturn(source);
+        SkillPublicationSnapshotCodec metadata = new SkillPublicationSnapshotCodec(new ObjectMapper());
+        draft.setMetadataJson(metadata.encode(SkillTestFixture.metadata()));
+        service.complete(service.claim(50L), report(), "skillhub/v1/artifact/50/result.zip");
+        ArgumentCaptor<SkillArtifactDO> artifact = ArgumentCaptor.forClass(SkillArtifactDO.class);
+        verify(artifacts).insert(artifact.capture());
+        var origin = codec.source(artifact.getValue().getSourceType(), artifact.getValue().getSourceJson());
+        assertEquals("skills/one", origin.directory()); assertEquals("a".repeat(40), origin.commitSha());
+        assertFalse(metadata.decode(draft.getMetadataJson()).distributionAuthorized());
+        assertFalse(metadata.decode(draft.getMetadataJson()).declarationsConfirmed());
+        assertEquals("READY", draft.getStatus()); assertEquals("SUCCEEDED", task.getStatus());
+        assertNull(task.getErrorCode()); assertNull(task.getPublicReason());
     }
 
     @Test

@@ -7,20 +7,29 @@ import java.util.regex.Pattern;
 
 /** 路径不落盘；提前拒绝跨平台别名、控制字符、设备名与目录越界。 */
 final class SkillArchivePathPolicy {
-    private static final int MAX_PATH_LENGTH = 577;
+    private final int maxPathLength;
     private static final int MAX_SEGMENT_LENGTH = 128;
-    private static final int MAX_DEPTH = 11;
+    private final int maxDepth;
     private static final Pattern DEVICE = Pattern.compile("(?i)(CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\\..*)?");
 
+    SkillArchivePathPolicy() {
+        this(577, 11);
+    }
+
+    SkillArchivePathPolicy(int maxPathLength, int maxDepth) {
+        this.maxPathLength = maxPathLength;
+        this.maxDepth = maxDepth;
+    }
+
     String validate(String raw, boolean directory) {
-        if (raw == null || raw.isEmpty() || raw.length() > MAX_PATH_LENGTH || raw.startsWith("/")
+        if (raw == null || raw.isEmpty() || raw.length() > maxPathLength || raw.startsWith("/")
                 || raw.indexOf('\\') >= 0 || raw.indexOf(':') >= 0
                 || !Normalizer.isNormalized(raw, Normalizer.Form.NFC)) {
             throw invalid();
         }
         String path = directory && raw.endsWith("/") ? raw.substring(0, raw.length() - 1) : raw;
         String[] segments = path.split("/", -1);
-        if (segments.length > MAX_DEPTH) {
+        if (segments.length > maxDepth) {
             throw invalid();
         }
         for (String segment : segments) {

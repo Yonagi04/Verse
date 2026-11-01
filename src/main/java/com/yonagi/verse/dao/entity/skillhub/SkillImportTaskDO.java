@@ -19,6 +19,14 @@ public class SkillImportTaskDO {
     private Long draftId;
     /** 任务所属账号。 */
     private Long ownerUserId;
+    /** ZIP或GITHUB，旧任务保持ZIP。 */
+    private String sourceType;
+    /** RESOLVE、FETCH、SELECT或VALIDATE。 */
+    private String phase;
+    /** GitHub阶段首次执行前的排队截止，UTC。 */
+    private LocalDateTime queueDeadline;
+    /** 来源确认或目录选择的等待截止，UTC。 */
+    private LocalDateTime waitUntil;
     /** 私有且不可覆盖的源包Key。 */
     private String sourceKey;
     /** 已绑定源ZIP字节摘要。 */
@@ -35,7 +43,7 @@ public class SkillImportTaskDO {
     private String executionToken;
     /** 执行租约截止时间。 */
     private LocalDateTime leaseUntil;
-    /** WAITING_UPLOAD、UPLOADING、QUEUED、RUNNING、RETRY_WAIT、SUCCEEDED、FAILED或CANCELLED。 */
+    /** 上传、阶段执行、来源确认、目录选择或终态。 */
     private String status;
     /** 已领取执行次数。 */
     private Integer attemptCount;

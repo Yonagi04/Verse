@@ -30,7 +30,10 @@ class SkillImportTaskServiceTest {
     private final SkillImportTaskMapper tasks = mock(SkillImportTaskMapper.class);
     private final SkillDraftMapper drafts = mock(SkillDraftMapper.class);
     private final SkillIdempotencyService commands = mock(SkillIdempotencyService.class);
-    private final SkillImportTaskService service = new SkillImportTaskService(access, tasks, drafts, commands);
+    private final SkillImportTaskService service = new SkillImportTaskService(access, tasks, drafts, commands,
+            new SkillPublicationSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper()),
+            new SkillImportTaskViews(mock(com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper.class),
+                    new SkillGithubSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper())));
     private final SkillDraftDO draft = SkillTestFixture.draft();
     private final SkillImportTaskDO task = SkillTestFixture.task();
 

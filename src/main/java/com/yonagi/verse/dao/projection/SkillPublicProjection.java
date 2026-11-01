@@ -24,4 +24,6 @@ public class SkillPublicProjection {
     private String declarationsJson;
     private Long archiveBytes;
     private String archiveSha256;
+    private String sourceType;
+    private String sourceJson;
 }

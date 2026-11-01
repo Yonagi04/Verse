@@ -1,5 +1,7 @@
 package com.yonagi.verse.dto.resp;
 
+import com.yonagi.verse.dto.skillhub.SkillSourceDTO;
+
 /** 当前公开版本的详情；不可用占位不返回正文和作者声明。 */
 public record SkillDetailRespDTO(
         /** 已批准的公开卡片。 */ SkillCardRespDTO skill,
@@ -11,7 +13,15 @@ public record SkillDetailRespDTO(
         /** 作者声明的客户端兼容性。 */ String compatibility,
         /** 作者声明的依赖及环境变量名称。 */ String dependencies,
         /** 固定ZIP字节数。 */ Long archiveBytes,
-        /** 固定ZIP摘要。 */ String sha256) {
+        /** 固定ZIP摘要。 */ String sha256,
+        /** 版本制品的真实获取来源。 */ SkillSourceDTO source) {
+    /** 不可用占位及旧调用不补造来源事实。 */
+    public SkillDetailRespDTO(SkillCardRespDTO skill, String availability, String skillMarkdown, String license,
+                              String originalAuthor, String sourceUrl, String compatibility, String dependencies,
+                              Long archiveBytes, String sha256) {
+        this(skill, availability, skillMarkdown, license, originalAuthor, sourceUrl, compatibility, dependencies,
+                archiveBytes, sha256, null);
+    }
     @Override
     public String toString() {
         return "SkillDetailRespDTO[skillId=" + skill.skillId() + ",availability=" + availability + "]";
