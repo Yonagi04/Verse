@@ -1,5 +1,7 @@
 package com.yonagi.verse.async.mq;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.alibaba.fastjson2.JSON;
 import com.yonagi.verse.async.EventTag;
@@ -43,6 +45,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+@Tag("integration")
 class RocketMQEventPublisherTest {
     // 使用真实注销处理器、租户和通知服务，还原生产循环；仅隔离外部依赖和其他领域服务。
     private final ApplicationContextRunner context = new ApplicationContextRunner()

@@ -1,5 +1,7 @@
 package com.yonagi.verse.dao.mapper;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.dao.entity.TenantActivityLogDO;
 import org.apache.ibatis.session.SqlSession;
@@ -17,6 +19,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+@Tag("integration")
 class TenantActivityLogMapperIntegrationTest {
 
     private MySqlTestDatabase database;

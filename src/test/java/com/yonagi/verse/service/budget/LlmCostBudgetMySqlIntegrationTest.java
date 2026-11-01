@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.budget;
 
+import org.junit.jupiter.api.Tag;
+
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
@@ -38,6 +40,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /** 真实 InnoDB 验证联合记账、配置事务、告警快照和发送资格。 */
+@Tag("integration")
 class LlmCostBudgetMySqlIntegrationTest {
     private MySqlTestDatabase database;
     private JdbcTemplate jdbc;

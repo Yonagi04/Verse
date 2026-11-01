@@ -55,6 +55,9 @@ class QueryCatalogueCoverageTest {
             // Skill公开状态/账号、私人任务及短效能力必须实时；词表低成本，不引入查询缓存。
             "/api/v1/skills", "/api/v1/skills/options", "/api/v1/skills/lookup",
             "/api/v1/skills/{skillId:[0-9]+}", "/api/v1/skills/downloads/{token:[a-f0-9]{64}}",
+            // 文件清单和正文复用实时版本授权，内容有界且不跨请求缓存。
+            "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/files",
+            "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/files/content",
             // 评论读取实时权限与本人反应状态；有界分页结果不缓存。
             "/api/v1/skills/{skillId:[0-9]+}/comments",
             "/api/v1/skills/{skillId:[0-9]+}/comments/{rootId}/replies",

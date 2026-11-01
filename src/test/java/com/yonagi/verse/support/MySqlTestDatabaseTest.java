@@ -1,10 +1,13 @@
 package com.yonagi.verse.support;
 
+import org.junit.jupiter.api.Tag;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@Tag("integration")
 class MySqlTestDatabaseTest {
     @Test void rejectsMissingConfigurationAndExistingBusinessDatabaseUrls() {
         for (String url : new String[]{null, "", "jdbc:h2:mem:test", "jdbc:mysql://localhost:3306/verse",

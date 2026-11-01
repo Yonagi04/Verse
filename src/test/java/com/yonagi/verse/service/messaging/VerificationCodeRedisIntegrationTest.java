@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.messaging;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.MessageSendException;
@@ -18,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** 只使用随机独立键；显式连接隔离的测试 Redis，不 flush 共享数据库。 */
 @EnabledIfSystemProperty(named = "messaging.redis-it", matches = "true")
+@Tag("integration")
 class VerificationCodeRedisIntegrationTest {
     private static RedissonClient client;
     private static RedissonConnectionFactory factory;

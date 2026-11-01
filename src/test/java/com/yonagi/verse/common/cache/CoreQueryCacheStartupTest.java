@@ -1,5 +1,7 @@
 package com.yonagi.verse.common.cache;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.service.cache.HourlyCacheBehavior;
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.dao.mapper.*;
@@ -24,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /** 使用真实适配器注册与强制 CGLIB 的容器启动，防止缓存代理破坏依赖装配。 */
+@Tag("integration")
 class CoreQueryCacheStartupTest {
     private final ApplicationContextRunner dependencies = new ApplicationContextRunner()
             .withUserConfiguration(StartupConfiguration.class)

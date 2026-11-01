@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 
 import com.yonagi.verse.support.MySqlTestDatabase;
@@ -42,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /** 使用真实 Mapper 验证租户隔离 SQL，外部通知、动态、Redis 和成员服务使用替身。 */
+@Tag("integration")
 class TenantApprovalServiceImplTest {
 
     private MySqlTestDatabase database;

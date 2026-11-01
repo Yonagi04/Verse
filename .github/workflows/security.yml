@@ -1,0 +1,123 @@
+name: Security
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  schedule:
+    # 周一 10:23（Asia/Shanghai），避开整点。
+    - cron: '23 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Verify security guard failure modes
+        run: python3 -m unittest discover -s scripts/ci -p 'test_security_*.py'
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@793b778da9c9275a0f276522b27cb5fc14bba279 # v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          queries: security-extended
+      - name: Compile for CodeQL
+        run: mvn --batch-mode --no-transfer-progress clean compile -DskipTests
+      - name: Analyze
+        uses: github/codeql-action/analyze@793b778da9c9275a0f276522b27cb5fc14bba279 # v4
+        with:
+          output: codeql-results
+          category: /language:java-kotlin
+
+      - name: Enforce CodeQL high severity gate
+        run: python3 scripts/ci/check_sarif.py codeql-results
+      - name: Preserve CodeQL evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: codeql-reports
+          path: codeql-results/
+          retention-days: 14
+
+  dependencies:
+    name: Dependency Vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TRIVY_INCLUDE_DEV_DEPS: 'true'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Resolve Maven dependency inventory including test scope
+        run: >-
+          mvn --batch-mode --no-transfer-progress
+          org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
+          -DincludeTestScope=true -DoutputFormat=json
+      - name: Scan dependencies including development dependencies
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          version: v0.76.1
+          scan-type: sbom
+          scan-ref: target/bom.json
+          scanners: vuln
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: '0'
+          format: json
+          output: dependency-vulnerabilities.json
+          list-all-pkgs: true
+          timeout: 15m
+      - name: Validate inventory and block high or critical vulnerabilities
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path("dependency-vulnerabilities.json").read_text())
+          results = report.get("Results", [])
+          packages = sum(len(result.get("Packages", [])) for result in results)
+          if not packages:
+              raise SystemExit("No packages scanned; dependency scan is incomplete")
+          vulnerabilities = [item for result in results for item in result.get("Vulnerabilities", [])]
+          blocking = sum(item.get("Severity") in ("HIGH", "CRITICAL") for item in vulnerabilities)
+          print(f"Scanned packages: {packages}; vulnerabilities: {len(vulnerabilities)}; blocking: {blocking}")
+          if blocking:
+              raise SystemExit("High or critical dependency vulnerabilities found; see uploaded report")
+          if vulnerabilities:
+              print("::warning::Lower-severity dependency vulnerabilities found; see uploaded report")
+          PY
+      - name: Upload dependency inventory and vulnerability report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: dependency-security-reports
+          path: |
+            dependency-vulnerabilities.json
+            target/bom.json
+          retention-days: 14

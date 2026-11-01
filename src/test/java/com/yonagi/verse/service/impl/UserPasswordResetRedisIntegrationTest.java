@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -49,6 +51,7 @@ import static org.mockito.Mockito.*;
 
 /** 真实 Redis 凭证和用户锁配合 MySQL 事务；仅清理本测试的随机凭证和用户键。 */
 @EnabledIfSystemProperty(named = "messaging.redis-it", matches = "true")
+@Tag("integration")
 class UserPasswordResetRedisIntegrationTest {
     private static RedissonClient client;
     private static RedissonConnectionFactory factory;

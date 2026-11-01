@@ -1,5 +1,7 @@
 package com.yonagi.verse.dao.mapper;
 
+import org.junit.jupiter.api.Tag;
+
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
@@ -18,6 +20,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+@Tag("integration")
 class ListPaginationMapperIntegrationTest {
     private MySqlTestDatabase database;
     private SqlSession session;

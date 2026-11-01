@@ -15,6 +15,7 @@ import com.yonagi.verse.service.skillhub.SkillImportTaskService;
 import com.yonagi.verse.service.skillhub.SkillLifecycleService;
 import com.yonagi.verse.service.skillhub.SkillPublicationService;
 import com.yonagi.verse.service.skillhub.SkillQueryService;
+import com.yonagi.verse.service.skillhub.SkillFileQueryService;
 import com.yonagi.verse.service.skillhub.port.SkillPublicQueryRateLimiter;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
@@ -178,10 +179,14 @@ class SkillControllerContractTest {
     @Configuration(proxyBeanMethods = false)
     @EnableWebMvc
     @Import({SecurityConfig.class, SkillQueryController.class, SkillDraftController.class, SkillDownloadController.class,
+            SkillFileController.class,
             SkillExceptionAdvice.class, SkillRequestBodyAdvice.class, SkillOriginGuard.class,
             SkillDownloadSubjectResolver.class})
     static class Wiring {
         @Bean SkillQueryService queries() { return mock(SkillQueryService.class); }
+        @Bean SkillFileQueryService fileQueries() {
+            return mock(SkillFileQueryService.class);
+        }
         @Bean SkillPublicQueryRateLimiter queryLimiter() { return mock(SkillPublicQueryRateLimiter.class); }
         @Bean SkillDraftService drafts() { return mock(SkillDraftService.class); }
         @Bean SkillPublicationService publications() { return mock(SkillPublicationService.class); }
