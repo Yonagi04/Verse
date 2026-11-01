@@ -1,5 +1,7 @@
 package com.yonagi.verse.common.messaging;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.common.enums.MessageSubmissionStatus;
 
 import com.yonagi.verse.common.config.*;
@@ -15,6 +17,7 @@ import java.util.Map;
 import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.*;
 
+@Tag("integration")
 class LocalMessageSimulatorIntegrationTest {
     @Test @EnabledIfSystemProperty(named = "messaging.sms-dev-it", matches = "true")
     void sendsAndReadsSmsDevMessage() throws Exception {

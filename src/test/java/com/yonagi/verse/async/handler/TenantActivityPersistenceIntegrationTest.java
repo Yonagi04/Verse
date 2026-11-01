@@ -1,5 +1,7 @@
 package com.yonagi.verse.async.handler;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.async.event.TenantActivityEvent;
 import com.yonagi.verse.async.outbox.DomainOutboxMetrics;
@@ -24,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+@Tag("integration")
 class TenantActivityPersistenceIntegrationTest {
 
     private MySqlTestDatabase database;

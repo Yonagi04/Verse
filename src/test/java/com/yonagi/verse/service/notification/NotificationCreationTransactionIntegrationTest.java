@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.notification;
 
+import org.junit.jupiter.api.Tag;
+
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.toolkit.GlobalConfigUtils;
 import com.baomidou.mybatisplus.extension.spring.MybatisSqlSessionFactoryBean;
@@ -60,6 +62,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /** 使用生产 Mapper、Spring 事务代理和隔离 MySQL 库验证实际提交与回滚。 */
+@Tag("integration")
 class NotificationCreationTransactionIntegrationTest {
     private MySqlTestDatabase database;
     private JdbcTemplate jdbc;

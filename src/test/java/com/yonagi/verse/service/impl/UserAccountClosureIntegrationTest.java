@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -52,6 +54,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /** 使用隔离 MySQL 临时库验证事务、并发锁和清理契约。 */
+@Tag("integration")
 public class UserAccountClosureIntegrationTest {
     private MySqlTestDatabase database;
     private JdbcTemplate jdbc;

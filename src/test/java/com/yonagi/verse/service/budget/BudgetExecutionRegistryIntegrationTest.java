@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.budget;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.dao.entity.CostBudgetInvocationDO;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
@@ -10,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** 两个独立客户端使用真实 Redis 验证 nonce、终态同步边界和启动代次。 */
 @EnabledIfEnvironmentVariable(named = "VERSE_BUDGET_TEST_REDIS", matches = ".+")
+@Tag("integration")
 class BudgetExecutionRegistryIntegrationTest {
     private RedissonClient firstClient;
     private RedissonClient secondClient;

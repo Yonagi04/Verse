@@ -1,5 +1,7 @@
 package com.yonagi.verse.async.outbox;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.async.api.ReliableDomainEventPublisher;
 import com.yonagi.verse.async.event.TenantActivityEvent;
@@ -25,6 +27,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+@Tag("integration")
 class ReliableDomainEventTransactionIntegrationTest {
 
     private MySqlTestDatabase database;

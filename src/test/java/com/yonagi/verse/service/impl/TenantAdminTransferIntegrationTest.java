@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.impl;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.yonagi.verse.async.activity.TenantActivityRecorder;
 import com.yonagi.verse.async.event.TenantActivityDraft;
@@ -28,6 +30,7 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /** 使用真实 Mapper 和 Spring 事务代理，验证交换、回滚及竞争，使用隔离 MySQL 测试库。 */
+@Tag("integration")
 class TenantAdminTransferIntegrationTest {
     private MySqlTestDatabase database;
     private JdbcTemplate jdbc;

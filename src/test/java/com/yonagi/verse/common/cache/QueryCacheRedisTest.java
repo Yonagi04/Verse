@@ -1,5 +1,7 @@
 package com.yonagi.verse.common.cache;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 import com.yonagi.verse.service.tenant.TenantQueryAccess;
 
@@ -40,6 +42,7 @@ import static org.mockito.ArgumentMatchers.*;
 
 /** 真实 Redis/Lua/Redisson 测试，仅操作带独立随机测试后缀的键。 */
 @EnabledIfSystemProperty(named="query.cache.redis-it", matches="true")
+@Tag("integration")
 class QueryCacheRedisTest {
     private static RedissonConnectionFactory factory;
     private static StringRedisTemplate redis;

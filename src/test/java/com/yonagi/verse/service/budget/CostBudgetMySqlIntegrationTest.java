@@ -1,5 +1,7 @@
 package com.yonagi.verse.service.budget;
 
+import org.junit.jupiter.api.Tag;
+
 import com.yonagi.verse.support.MySqlTestDatabase;
 import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
@@ -35,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 /** 显式指定测试服务后，按当前 schema 创建随机临时库；从不迁移或清理现有业务库。 */
+@Tag("integration")
 class CostBudgetMySqlIntegrationTest {
     private MySqlTestDatabase database;
     private JdbcTemplate jdbc;
