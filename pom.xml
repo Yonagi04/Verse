@@ -33,7 +33,7 @@
         <redisson.version>3.21.3</redisson.version>
         <guava.version>30.0-jre</guava.version>
         <geoip2.version>4.2.0</geoip2.version>
-        <s3.version>2.49.3</s3.version>
+        <s3.version>2.57.6</s3.version>
         <!-- AWS SDK 2.49.3 的 Apache 5 HTTP 客户端需要这些版本，覆盖 Spring Boot 3.2.0 的旧版依赖管理。 -->
         <httpclient5.version>5.6.2</httpclient5.version>
         <httpcore5.version>5.4.3</httpcore5.version>
