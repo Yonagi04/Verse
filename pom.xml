@@ -40,7 +40,7 @@
         <thumbnailator.version>0.4.20</thumbnailator.version>
         <webp-imageio.version>0.1.6</webp-imageio.version>
         <rocketmq-spring-boot.version>2.3.6</rocketmq-spring-boot.version>
-        <resilience4j.version>2.2.0</resilience4j.version>
+        <resilience4j.version>2.4.0</resilience4j.version>
         <easyexcel.version>4.0.3</easyexcel.version>
         <commons-io.version>2.20.0</commons-io.version>
         <commons-compress.version>1.28.0</commons-compress.version>
