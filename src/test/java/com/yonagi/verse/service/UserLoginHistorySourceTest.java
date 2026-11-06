@@ -10,6 +10,7 @@ import com.yonagi.verse.common.util.GeoIpUtil;
 import com.yonagi.verse.dao.entity.LoginHistoryDO;
 import com.yonagi.verse.dao.entity.UserDO;
 import com.yonagi.verse.dao.mapper.LoginHistoryMapper;
+import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dao.projection.CurrentTenantState;
 import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.Test;
@@ -46,9 +47,13 @@ class UserLoginHistorySourceTest {
         when(claims.getExpiration()).thenReturn(new Date(System.currentTimeMillis() + 60_000));
         when(claims.getId()).thenReturn("session-id");
         when(locks.withUser(eq(10L), any())).thenAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get());
-        var sessions = new UserLoginSessionService(jwt, redis, mock(CurrentTenantStateService.class), geoIp, events, locks);
+        var users = mock(UserMapper.class);
+        var sessions = new UserLoginSessionService(jwt, redis, mock(CurrentTenantStateService.class),
+                geoIp, events, locks, users);
         var user = new UserDO();
         user.setUserId(10L); user.setUsername("alice"); user.setStatus(1);
+        user.setDelFlag(0); user.setPassword("verified-hash");
+        when(users.selectActiveUserForShare(10L)).thenReturn(user);
         var request = new MockHttpServletRequest();
         request.addHeader("User-Agent", "Mozilla/5.0");
 

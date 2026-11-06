@@ -467,24 +467,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
 
     @Override
     public Boolean logout(Long userId, HttpServletRequest request) {
-        String currentDeviceId = DeviceUtil.generateDeviceId(
-                request.getHeader("User-Agent"), DeviceUtil.getClientIp(request));
-
-        // 从 Redis Hash 中取出当前设备的会话
-        String hashKey = RedisKeyConstant.USER_DEVICES_KEY + userId;
-        Object sessionJson = stringRedisTemplate.opsForHash().get(hashKey, currentDeviceId);
-        if (sessionJson != null) {
-            LoginSessionVO session = JSON.parseObject(sessionJson.toString(), LoginSessionVO.class);
-            // 删除 Token 反向索引
-            String tokenHash = DigestUtil.md5Hex(session.getToken());
-            stringRedisTemplate.delete(RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash);
-        }
-        // 从 Redis Hash 中删除当前设备
-        stringRedisTemplate.opsForHash().delete(hashKey, currentDeviceId);
-
-        // 更新 MySQL 设备状态为离线
-        loginDeviceService.logoutDevice(userId, currentDeviceId);
-
+        loginSessions.revokeCurrent(userId).ifPresent(deviceId -> loginDeviceService.logoutDevice(userId, deviceId));
         return true;
     }
 
