@@ -31,15 +31,14 @@ class TenantContextMockMvcTest {
     }
 
     @Test
-    void sixTenantBusinessControllerFamiliesAreRejectedBeforeBusinessMethod() throws Exception {
+    void fiveTenantBusinessControllerFamiliesAreRejectedBeforeBusinessMethod() throws Exception {
         UserContextHolder.set(new UserContext().setUserId(10L).setCurrentTenantId(20L));
         List<String> paths = List.of(
                 "/api/v1/tenants/99/info",
                 "/api/v1/api-keys/99/list",
                 "/api/v1/llm-service/99/list",
                 "/api/v1/audit/99/list",
-                "/api/v1/usage/99/dashboard",
-                "/api/v1/usage-events/99/reconciliation");
+                "/api/v1/usage/99/dashboard");
 
         for (String path : paths) {
             mockMvc.perform(get(path))
@@ -88,8 +87,7 @@ class TenantContextMockMvcTest {
                 "/api/v1/api-keys/{tenantId}/list",
                 "/api/v1/llm-service/{tenantId}/list",
                 "/api/v1/audit/{tenantId}/list",
-                "/api/v1/usage/{tenantId}/dashboard",
-                "/api/v1/usage-events/{tenantId}/reconciliation"
+                "/api/v1/usage/{tenantId}/dashboard"
         })
         Result<Boolean> business(@PathVariable Long tenantId) {
             invocations.incrementAndGet();

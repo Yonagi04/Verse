@@ -69,16 +69,6 @@ public interface TokenUsageOutboxMapper extends BaseMapper<TokenUsageOutboxDO> {
 
     @Update("""
             UPDATE t_token_usage_outbox
-            SET status='RETRY', attempt_count=0, next_retry_at=#{now}, claim_owner=NULL,
-                claim_expires_at=NULL, last_error=NULL, update_time=#{now}
-            WHERE event_id=#{eventId} AND tenant_id=#{tenantId} AND status IN ('FAILED','PUBLISHED')
-              AND NOT EXISTS (SELECT 1 FROM t_token_usage u WHERE u.event_id=#{eventId})
-            """)
-    int resetForReplay(@Param("tenantId") Long tenantId, @Param("eventId") String eventId,
-                       @Param("now") LocalDateTime now);
-
-    @Update("""
-            UPDATE t_token_usage_outbox
             SET status='FAILED', last_error=#{error}, claim_owner=NULL, claim_expires_at=NULL,
                 update_time=#{now}
             WHERE event_id=#{eventId}
@@ -89,22 +79,12 @@ public interface TokenUsageOutboxMapper extends BaseMapper<TokenUsageOutboxDO> {
     @Select("SELECT COUNT(*) FROM t_token_usage_outbox WHERE status=#{status}")
     long countStatus(@Param("status") String status);
 
-    @Select("SELECT COUNT(*) FROM t_token_usage_outbox WHERE tenant_id=#{tenantId} AND status=#{status}")
-    long countTenantStatus(@Param("tenantId") Long tenantId, @Param("status") String status);
-
     @Select("""
             SELECT COUNT(*) FROM t_token_usage_outbox o
             LEFT JOIN t_token_usage u ON u.event_id=o.event_id
             WHERE o.status='PUBLISHED' AND u.event_id IS NULL
             """)
     long countPublishedMissingFacts();
-
-    @Select("""
-            SELECT COUNT(*) FROM t_token_usage_outbox o
-            LEFT JOIN t_token_usage u ON u.event_id=o.event_id
-            WHERE o.tenant_id=#{tenantId} AND o.status='PUBLISHED' AND u.event_id IS NULL
-            """)
-    long countTenantPublishedMissingFacts(@Param("tenantId") Long tenantId);
 
     @Select("""
             SELECT MIN(create_time) FROM t_token_usage_outbox
