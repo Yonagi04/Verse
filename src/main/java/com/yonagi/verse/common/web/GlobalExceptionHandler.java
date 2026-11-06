@@ -135,6 +135,7 @@ public class GlobalExceptionHandler {
      */
     @ExceptionHandler(value = {Throwable.class})
     public Result throwableException(HttpServletRequest request, Throwable throwable) {
+        FatalErrors.rethrowIfFatal(throwable);
         log.error("[{}] {} ", request.getMethod(), getUrl(request), throwable);
         return Results.failure();
     }
