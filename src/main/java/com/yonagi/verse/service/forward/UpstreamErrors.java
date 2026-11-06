@@ -1,24 +1,15 @@
 package com.yonagi.verse.service.forward;
 
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 
-/** 上游错误映射仅提取有限消息，避免记录请求正文或媒体内容。 */
+/** 上游错误只公开本地安全文案，任意 Provider 正文均不能成为错误响应或日志。 */
 public final class UpstreamErrors {
     private UpstreamErrors() {}
 
+    /** 根据 HTTP 状态保留执行证据和重试分类；response 仅为兼容旧调用签名，不解析或保留。 */
     public static UpstreamFailureException from(int status, String response) {
-        String message = LlmForwardErrorCodeEnum.UPSTREAM_ERROR.message();
-        try {
-            JSONObject object = JSON.parseObject(response);
-            JSONObject error = object == null ? null : object.getJSONObject("error");
-            String value = error == null ? null : error.getString("message");
-            if (value != null && !value.isBlank()) message = value.substring(0, Math.min(value.length(), 512));
-        } catch (RuntimeException ignored) {
-            // 不将未知错误体原样回传，避免泄露媒体或凭据。
-        }
-        return new UpstreamFailureException(message, LlmForwardErrorCodeEnum.UPSTREAM_ERROR,
+        return new UpstreamFailureException(LlmForwardErrorCodeEnum.UPSTREAM_ERROR.message(),
+                LlmForwardErrorCodeEnum.UPSTREAM_ERROR,
                 status == 429 || status >= 500,
                 status >= 500 || status == 408 || status == 409
                         ? UpstreamExecutionOutcome.UNKNOWN : UpstreamExecutionOutcome.REJECTED);

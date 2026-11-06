@@ -126,7 +126,7 @@ public class OpenAiCompatibleAdapter implements ProviderAdapter, AdapterRegistra
     }
 
     /**
-     * 将上游非 2xx 响应映射为 UpstreamFailureException，尽量保留上游错误 message。
+     * 将上游非 2xx 响应归一化，不将任意上游正文写入日志或公开错误。
      */
     private UpstreamFailureException toUpstreamFailure(int status, String rawBody) {
         UpstreamFailureException failure = UpstreamErrors.from(status, rawBody);
