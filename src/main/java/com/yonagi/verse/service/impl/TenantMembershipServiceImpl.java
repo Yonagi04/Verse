@@ -157,12 +157,16 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_NOT_JOINED);
         }
         String operatorRole = userTenantService.getRoleByUserIdAndTenantId(userId, tenantId);
+        RoleEnum operator = RoleEnum.valueOf(operatorRole);
+        if (!operator.isAdmin()) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
+        }
         String memberRole = userTenantService.getRoleByUserIdAndTenantId(memberId, tenantId);
-        if (RoleEnum.valueOf(memberRole).isNotLowerThan(RoleEnum.valueOf(operatorRole))) {
+        if (RoleEnum.valueOf(memberRole).isNotLowerThan(operator)) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
         }
         String targetRole = requestParam.getNewRole();
-        if (RoleEnum.valueOf(targetRole).isNotLowerThan(RoleEnum.valueOf(operatorRole))) {
+        if (RoleEnum.valueOf(targetRole).isNotLowerThan(operator)) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_UPDATE);
         }
         userTenantService.updateUserRole(memberId, tenantId, memberRole, targetRole);
@@ -194,8 +198,12 @@ public class TenantMembershipServiceImpl implements TenantMembershipService {
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_NOT_JOINED);
         }
         String operatorRole = userTenantService.getRoleByUserIdAndTenantId(userId, tenantId);
+        RoleEnum operator = RoleEnum.valueOf(operatorRole);
+        if (!operator.isAdmin()) {
+            throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
+        }
         String memberRole = userTenantService.getRoleByUserIdAndTenantId(memberId, tenantId);
-        if (RoleEnum.valueOf(memberRole).isNotLowerThan(RoleEnum.valueOf(operatorRole))) {
+        if (RoleEnum.valueOf(memberRole).isNotLowerThan(operator)) {
             throw new ClientException(TenantErrorCodeEnum.TENANT_MEMBER_CAN_NOT_REMOVE);
         }
         currentTenantStateService.removeMembershipAndFallback(memberId, tenantId);

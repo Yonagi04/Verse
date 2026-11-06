@@ -82,18 +82,20 @@ public enum RoleEnum {
     }
 
     /**
-     * 权限比较, 超级管理员>管理员>成员
-     * @param other 目标角色
-     * @return true 当前角色权限高于目标角色, false 否则
+     * 判断当前角色是否不低于目标角色，同级比较也返回true。
+     *
+     * @param other 目标角色，null表示不可比较
+     * @return 当前角色高于或等于目标角色时为true；目标缺失时为false
      */
     public boolean isNotLowerThan(RoleEnum other) {
-        if (this == SUPER_ADMIN) {
-            return true;
-        } else if (this == ADMIN) {
-            return other != SUPER_ADMIN;
-        } else {
+        if (other == null) {
             return false;
         }
+        return switch (this) {
+            case SUPER_ADMIN -> true;
+            case ADMIN -> other != SUPER_ADMIN;
+            case MEMBER -> other == MEMBER;
+        };
     }
 
     /**
