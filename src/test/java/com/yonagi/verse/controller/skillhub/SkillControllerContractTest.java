@@ -9,6 +9,7 @@ import com.yonagi.verse.common.security.UserContextHolder;
 import com.yonagi.verse.dto.resp.SkillDownloadGrantRespDTO;
 import com.yonagi.verse.dto.resp.SkillOptionsRespDTO;
 import com.yonagi.verse.dto.resp.SkillDraftRespDTO;
+import com.yonagi.verse.service.skillhub.SkillDownloadPayload;
 import com.yonagi.verse.service.skillhub.SkillDownloadService;
 import com.yonagi.verse.service.skillhub.SkillDraftService;
 import com.yonagi.verse.service.skillhub.SkillImportTaskService;
@@ -29,6 +30,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockServletContext;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -40,6 +43,8 @@ import org.springframework.web.context.support.AnnotationConfigWebApplicationCon
 import org.springframework.web.servlet.config.annotation.EnableWebMvc;
 import java.time.OffsetDateTime;
 import java.util.List;
+import java.util.function.Consumer;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -52,6 +57,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -170,10 +176,33 @@ class SkillControllerContractTest {
                 "/api/v1/skills/downloads/" + "a".repeat(64), OffsetDateTime.now().plusSeconds(60), "b".repeat(64), 3L));
         mvc.perform(post(path).header("X-Test-Identity", "JWT-user")
                 .contentType(MediaType.APPLICATION_JSON).header("Origin", "http://localhost:3000")
-                .content("{}")).andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
-                .andExpect(header().string("Referrer-Policy", "no-referrer"))
+                .content("{}")).andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-cache, no-store, max-age=0, must-revalidate"))
+                .andExpect(header().doesNotExist("Referrer-Policy"))
                 .andExpect(header().doesNotExist("Set-Cookie"))
                 .andExpect(jsonPath("$.data.sha256").value("b".repeat(64)));
+    }
+
+    @Test
+    void zipDownloadKeepsFileMetadataAndUsesDefaultSecurityHeaders() throws Exception {
+        String token = "a".repeat(64);
+        String filename = "技能包.zip";
+        byte[] bytes = {0x50, 0x4b, 0x03, 0x04};
+        doAnswer(invocation -> {
+            Consumer<SkillDownloadPayload> send = invocation.getArgument(3);
+            send.accept(new SkillDownloadPayload(filename, bytes, "b".repeat(64)));
+            return null;
+        }).when(downloads).download(eq(token), any(), any(), any());
+
+        mvc.perform(get("/api/v1/skills/downloads/" + token).header("X-Test-Identity", "JWT-user"))
+                .andExpect(status().isOk()).andExpect(content().contentType("application/zip"))
+                .andExpect(content().bytes(bytes))
+                .andExpect(header().longValue(HttpHeaders.CONTENT_LENGTH, bytes.length))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "no-cache, no-store, max-age=0, must-revalidate"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                .andExpect(header().doesNotExist("Referrer-Policy"))
+                .andExpect(result -> assertEquals(filename, ContentDisposition.parse(
+                        result.getResponse().getHeader(HttpHeaders.CONTENT_DISPOSITION)).getFilename()));
     }
 
     @Configuration(proxyBeanMethods = false)

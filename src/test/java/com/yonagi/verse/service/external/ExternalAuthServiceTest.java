@@ -10,8 +10,11 @@ import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.service.*;
 import com.yonagi.verse.service.impl.UserServiceImpl;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.data.redis.core.*;
-import org.springframework.mock.web.*;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.*;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -36,9 +39,10 @@ class ExternalAuthServiceTest {
     UserServiceImpl registration=mock(UserServiceImpl.class);
     CurrentTenantStateService tenants=mock(CurrentTenantStateService.class);
     UserSecurityLocks locks=mock(UserSecurityLocks.class);
+    PlatformTransactionManager manager = mock(PlatformTransactionManager.class);
     ExternalAuthService service; ExternalAuthFlowDO flow; ExternalIdentityDO identity; MockHttpServletRequest request;
     @BeforeEach void setup() {
-        var manager=mock(PlatformTransactionManager.class); when(manager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        when(manager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
         service=new ExternalAuthService(new ExternalAuthProperties(),adapter,flows,identities,bindings,guards,users,redis,mock(AesUtil.class),
                 mock(PasswordEncoder.class),mock(JwtUtil.class),sessions,registration,tenants,locks,manager);
         when(redis.opsForValue()).thenReturn(values); when(adapter.enabled(anyString())).thenReturn(true);
@@ -98,9 +102,9 @@ class ExternalAuthServiceTest {
     }
     @Test void callbackWithWrongBrowserOrReplayNeverExchangesCode() {
         when(flows.selectOne(any())).thenReturn(flow); request.addParameter("state","state"); request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"wrong"));
-        assertTrue(service.callback("google",request,new MockHttpServletResponse()).endsWith("/auth/external/error"));
+        assertTrue(service.callback("google",request,new RecordingCookies()).endsWith("/auth/external/error"));
         request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof")); when(flows.claim(any())).thenReturn(0);
-        assertTrue(service.callback("google",request,new MockHttpServletResponse()).contains("#flow=")); verify(adapter,never()).exchange(any(),any(),any(),any(),any());
+        assertTrue(service.callback("google",request,new RecordingCookies()).contains("#flow=")); verify(adapter,never()).exchange(any(),any(),any(),any(),any());
     }
     @Test void untrustedOriginIsRejectedBeforeMutation() {
         request.removeHeader("Origin"); request.addHeader("Origin","https://evil.example");
@@ -130,11 +134,11 @@ class ExternalAuthServiceTest {
     }
     @Test void feishuCallbackRetainsStateBrowserAndReplayChecks() {
         flow.setProvider("feishu"); when(flows.selectOne(any())).thenReturn(flow);
-        assertTrue(service.callback("feishu",request,new MockHttpServletResponse()).endsWith("/auth/external/error"));
+        assertTrue(service.callback("feishu",request,new RecordingCookies()).endsWith("/auth/external/error"));
         request.addParameter("state","state"); request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"wrong"));
-        assertTrue(service.callback("feishu",request,new MockHttpServletResponse()).endsWith("/auth/external/error"));
+        assertTrue(service.callback("feishu",request,new RecordingCookies()).endsWith("/auth/external/error"));
         request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof")); when(flows.claim(any())).thenReturn(0);
-        assertTrue(service.callback("feishu",request,new MockHttpServletResponse()).contains("#flow="));
+        assertTrue(service.callback("feishu",request,new RecordingCookies()).contains("#flow="));
         verify(adapter,never()).exchange(any(),any(),any(),any(),any());
     }
     @Test void feishuCallbackReusesRegistrationLoginSelectionAndBindingStages() {
@@ -150,7 +154,10 @@ class ExternalAuthServiceTest {
         for (int count=0;count<4;count++) {
             flow.setStage("AUTHENTICATING"); flow.setPurpose(count==3?"BIND":"LOGIN");
             when(bindings.selectList(any())).thenReturn(count==0?List.of():count==1?List.of(relation(20,10)):List.of(relation(20,10),relation(21,11)));
-            String destination=service.callback("feishu",request,new MockHttpServletResponse());
+            var cookies = new RecordingCookies();
+            String destination = service.callback("feishu", request, cookies);
+            assertEquals(List.of(new CookieWrite("verse_ext_" + flow.getFlowId(), Duration.ofMinutes(5), true)),
+                    cookies.writes);
             assertTrue(destination.contains("#flow="));
             assertEquals(List.of("REGISTER_REQUIRED","LOGIN_READY","SELECT_REQUIRED","BIND_CONFIRM_REQUIRED").get(count),flow.getStage());
             assertEquals("飞书用户",identity.getDisplayName()); assertFalse(identity.getEmailVerified()); assertNull(identity.getEmailEncrypted());
@@ -178,12 +185,37 @@ class ExternalAuthServiceTest {
         var a=activeFlow("a".repeat(32),"feishu","LOGIN","REGISTER_REQUIRED");
         var b=activeFlow("b".repeat(32),"github","BIND","AUTHORIZING");
         var c=activeFlow("c".repeat(32),"feishu","BIND","AUTHORIZING");
-        prepareStart(List.of(a,b,c));
+        var expired = activeFlow("d".repeat(32), "google", "LOGIN", "AUTHORIZING");
+        expired.setExpiresAt(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1));
+        prepareStart(List.of(a,b,c,expired));
         request.setCookies(new Cookie("verse_ext_"+a.getFlowId(),"browser-proof"),new Cookie("verse_ext_"+b.getFlowId(),"browser-proof"),
-                new Cookie("verse_ext_"+c.getFlowId(),"browser-proof"));
-        for (String provider : List.of("feishu","github"))
-            assertEquals("A002113",assertThrows(ClientException.class,()->service.start(startInput(provider),10L,request,new MockHttpServletResponse())).getErrorCode());
+                new Cookie("verse_ext_"+c.getFlowId(),"browser-proof"),
+                new Cookie("verse_ext_" + expired.getFlowId(), "browser-proof"), new Cookie("verse_ext_legacy", "old"));
+        for (String provider : List.of("feishu","github")) {
+            var cookies = new RecordingCookies();
+            ClientException failure = assertThrows(ClientException.class,
+                    () -> service.start(startInput(provider), 10L, request, cookies));
+            assertEquals("A002113", failure.getErrorCode());
+            assertEquals(List.of(
+                    new CookieWrite("verse_ext_legacy", Duration.ZERO, false),
+                    new CookieWrite("verse_ext_" + expired.getFlowId(), Duration.ZERO, false)), cookies.writes);
+        }
         verify(flows,never()).insert(any()); verifyNoInteractions(locks);
+    }
+
+    @Test
+    void failedStartCommitStillEmitsCookieFromTransactionCallback() {
+        prepareStart(List.of());
+        request.setCookies();
+        var failure = new TransactionSystemException("fixture commit failure");
+        doThrow(failure).when(manager).commit(any());
+        var cookies = new RecordingCookies();
+
+        assertSame(failure, assertThrows(TransactionSystemException.class,
+                () -> service.start(startInput("google"), null, request, cookies)));
+        assertEquals(1, cookies.writes.size());
+        assertEquals(Duration.ofMinutes(10), cookies.writes.getFirst().ttl());
+        assertTrue(cookies.writes.getFirst().hasValue());
     }
     @Test void expiredMissingInvalidAndTerminalCookiesDoNotBlockANewFlowOrDestroyCompletionProof() {
         var expired=activeFlow("b".repeat(32),"github","BIND","AUTHORIZING"); expired.setExpiresAt(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1));
@@ -195,44 +227,73 @@ class ExternalAuthServiceTest {
         request.setCookies(new Cookie("verse_ext_"+expired.getFlowId(),"browser-proof"),new Cookie("verse_ext_"+cancelled.getFlowId(),"browser-proof"),
                 new Cookie("verse_ext_"+completed.getFlowId(),"browser-proof"),new Cookie("verse_ext_"+failed.getFlowId(),"browser-proof"),
                 new Cookie("verse_ext_"+invalid.getFlowId(),"wrong-proof"),new Cookie("verse_ext_"+"0".repeat(32),"browser-proof"));
-        var response=new MockHttpServletResponse(); var result=service.start(startInput("feishu"),null,request,response);
+        var cookies = new RecordingCookies(); var result=service.start(startInput("feishu"),null,request,cookies);
         assertNotNull(result.flowId()); verify(flows).insert(any());
-        var cookies=response.getHeaders("Set-Cookie");
-        for (String id : List.of(expired.getFlowId(),invalid.getFlowId(),"0".repeat(32)))
-            assertTrue(cookies.stream().anyMatch(value->value.startsWith("verse_ext_"+id+"=")&&value.contains("Max-Age=0")));
-        assertFalse(cookies.stream().anyMatch(value->value.startsWith("verse_ext_"+completed.getFlowId()+"=")));
-        assertFalse(cookies.stream().anyMatch(value->value.startsWith("verse_ext_"+failed.getFlowId()+"=")));
-        assertTrue(cookies.stream().anyMatch(value->value.startsWith("verse_ext_"+result.flowId()+"=")&&value.contains("Max-Age=600")));
+        assertEquals(List.of(
+                new CookieWrite("verse_ext_" + expired.getFlowId(), Duration.ZERO, false),
+                new CookieWrite("verse_ext_" + invalid.getFlowId(), Duration.ZERO, false),
+                new CookieWrite("verse_ext_" + "0".repeat(32), Duration.ZERO, false),
+                new CookieWrite("verse_ext_" + result.flowId(), Duration.ofMinutes(10), true)), cookies.writes);
     }
     @Test void duplicateFlowCookiesCountOnceAndOtherTabsFlowsAreNotCancelled() {
         var other=activeFlow("b".repeat(32),"github","BIND","AUTHORIZING"); prepareStart(List.of(flow,other));
         request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof"),new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof"),
                 new Cookie("verse_ext_"+other.getFlowId(),"browser-proof"));
-        var response=new MockHttpServletResponse(); service.start(startInput("github"),null,request,response);
+        var cookies = new RecordingCookies(); service.start(startInput("github"),null,request,cookies);
         verify(flows,never()).updateById(any());
-        assertTrue(response.getHeaders("Set-Cookie").stream().noneMatch(value->value.contains("Max-Age=0")));
+        assertEquals(1, cookies.writes.size());
+        assertEquals(Duration.ofMinutes(10), cookies.writes.getFirst().ttl());
     }
     @Test void expiredFlowCanOnlyBeCancelledWithBothOriginalProofs() {
-        flow.setExpiresAt(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1)); var response=new MockHttpServletResponse();
+        flow.setExpiresAt(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1)); var cookies = new RecordingCookies();
         request.removeHeader("X-External-Flow-Token");
-        assertEquals("A002101",assertThrows(ClientException.class,()->service.cancel(flow.getFlowId(),request,response,false)).getErrorCode());
+        assertEquals("A002101",assertThrows(ClientException.class,()->service.cancel(flow.getFlowId(),request,cookies,false)).getErrorCode());
         request.addHeader("X-External-Flow-Token","tab-proof");
         request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"wrong-proof"));
-        assertEquals("A002101",assertThrows(ClientException.class,()->service.cancel(flow.getFlowId(),request,response,false)).getErrorCode());
+        assertEquals("A002101",assertThrows(ClientException.class,()->service.cancel(flow.getFlowId(),request,cookies,false)).getErrorCode());
         request.setCookies(new Cookie("verse_ext_"+flow.getFlowId(),"browser-proof"));
         assertEquals("A002100",assertThrows(ClientException.class,()->service.context(flow.getFlowId(),request)).getErrorCode());
-        service.cancel(flow.getFlowId(),request,response,false);
+        service.cancel(flow.getFlowId(),request,cookies,false);
         assertEquals("CANCELLED",flow.getStage()); assertFalse(ExternalAuthService.matches(flow.getFlowTokenHash(),"tab-proof"));
-        assertTrue(response.getHeader("Set-Cookie").contains("Max-Age=0"));
+        assertEquals(List.of(new CookieWrite("verse_ext_" + flow.getFlowId(), Duration.ZERO, false)), cookies.writes);
         verify(redis).delete(List.of("verse:external:protocol:"+flow.getFlowId(),"verse:external:result:"+flow.getFlowId()));
     }
-    @Test void failedCallbackKeepsDiagnosticsForActionTtl() {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void failedCallbackKeepsDiagnosticsForActionTtl(boolean redisUnavailable) {
         flow.setStage("AUTHENTICATING"); when(flows.selectOne(any())).thenReturn(flow); when(flows.claim(any())).thenReturn(1);
         request.addParameter("state","state"); request.addParameter("error","access_denied");
-        var response=new MockHttpServletResponse(); service.callback("google",request,response);
+        var cookies = new RecordingCookies();
+        if (redisUnavailable) {
+            var failure = new DataAccessResourceFailureException("fixture Redis cleanup failure");
+            when(redis.delete("verse:external:protocol:" + flow.getFlowId())).thenThrow(failure);
+            assertSame(failure, assertThrows(DataAccessResourceFailureException.class,
+                    () -> service.callback("google", request, cookies)));
+        } else {
+            assertTrue(service.callback("google", request, cookies).endsWith("#flow=" + flow.getFlowId()));
+        }
         assertEquals("FAILED",flow.getStage()); assertEquals("AUTHORIZATION_CANCELLED",flow.getErrorReason());
-        assertTrue(response.getHeader("Set-Cookie").contains("Max-Age=300"));
+        assertEquals(List.of(new CookieWrite("verse_ext_" + flow.getFlowId(), Duration.ofMinutes(5), true)),
+                cookies.writes);
         assertEquals("FAILED",service.context(flow.getFlowId(),request).stage());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void cancelOrAcknowledgeClearsBrowserProofBeforeRedisFailure(boolean acknowledge) {
+        if (acknowledge) {
+            flow.setStage("COMPLETED");
+        }
+        var failure = new DataAccessResourceFailureException("fixture Redis cleanup failure");
+        when(redis.delete(anyList())).thenThrow(failure);
+        var cookies = new RecordingCookies();
+
+        assertSame(failure, assertThrows(DataAccessResourceFailureException.class,
+                () -> service.cancel(flow.getFlowId(), request, cookies, acknowledge)));
+        assertEquals(acknowledge ? "COMPLETED" : "CANCELLED", flow.getStage());
+        assertEquals(List.of(new CookieWrite("verse_ext_" + flow.getFlowId(), Duration.ZERO, false)), cookies.writes);
+        assertFalse(ExternalAuthService.matches(flow.getFlowTokenHash(), "tab-proof"));
+        assertFalse(ExternalAuthService.matches(flow.getBrowserCookieHash(), "browser-proof"));
     }
     @Test void cancelledFlowIsNotResurrectedWhenProviderExchangeReturns() {
         flow.setStage("AUTHENTICATING"); flow.setProvider("feishu");
@@ -242,10 +303,22 @@ class ExternalAuthServiceTest {
         var aes=(AesUtil)ReflectionTestUtils.getField(service,"aes");
         when(aes.decrypt("encrypted-protocol")).thenReturn("{\"verifier\":\"verifier\",\"nonce\":\"nonce\"}");
         when(adapter.exchange(anyString(),anyString(),anyString(),anyString(),anyString())).thenAnswer(inv->{
-            service.cancel(flow.getFlowId(),request,new MockHttpServletResponse(),false);
+            service.cancel(flow.getFlowId(),request,new RecordingCookies(),false);
             return new ExternalProviderAdapter.VerifiedIdentity("feishu","https://open.feishu.cn/apps/cli_test","ou_test",null,"用户",null);
         });
-        var response=new MockHttpServletResponse(); service.callback("feishu",request,response);
-        assertEquals("CANCELLED",flow.getStage()); assertNull(response.getHeader("Set-Cookie")); verify(identities,never()).ensure(any());
+        var cookies = new RecordingCookies(); service.callback("feishu",request,cookies);
+        assertEquals("CANCELLED",flow.getStage()); assertTrue(cookies.writes.isEmpty()); verify(identities,never()).ensure(any());
+    }
+
+    private record CookieWrite(String name, Duration ttl, boolean hasValue) {
+    }
+
+    private static final class RecordingCookies implements ExternalAuthCookieOutput {
+        private final List<CookieWrite> writes = new ArrayList<>();
+
+        @Override
+        public void write(String name, String value, Duration ttl) {
+            writes.add(new CookieWrite(name, ttl, !value.isEmpty()));
+        }
     }
 }

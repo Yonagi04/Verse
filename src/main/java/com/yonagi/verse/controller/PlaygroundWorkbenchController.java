@@ -15,7 +15,6 @@ import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.RoundReqDTO;
 import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.UpdateReqDTO;
 import com.yonagi.verse.service.PlaygroundWorkbenchService;
 import com.yonagi.verse.service.playground.PlaygroundConfiguration;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -77,11 +76,11 @@ public class PlaygroundWorkbenchController {
                                 @RequestHeader("Idempotency-Key") String key, @RequestBody RoundReqDTO body) {
         return Results.success(service.round(UserContextHolder.get(), tenantId, id, body.getPrompt(), key));
     }
-    @PostMapping(value = "/attempts/{id}/stream", produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
-    public SseEmitter stream(@PathVariable Long tenantId, @PathVariable Long id, HttpServletResponse response) {
-        var events = service.stream(UserContextHolder.get(), tenantId, id);
-        response.setContentType("text/event-stream;charset=UTF-8"); response.setHeader("Cache-Control", "no-cache");
-        return PlaygroundController.emitter(events);
+    @PostMapping(value = "/attempts/{id}/stream",
+            produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
+    public ResponseEntity<SseEmitter> stream(@PathVariable Long tenantId, @PathVariable Long id) {
+        SseEmitter emitter = PlaygroundController.emitter(service.stream(UserContextHolder.get(), tenantId, id));
+        return PlaygroundController.eventStreamResponse().body(emitter);
     }
     @PostMapping("/attempts/{id}/stop")
     public Result<Boolean> stop(@PathVariable Long tenantId, @PathVariable Long id) { return Results.success(service.stop(UserContextHolder.get(), tenantId, id)); }

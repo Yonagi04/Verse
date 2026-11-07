@@ -4,6 +4,9 @@ import com.yonagi.verse.common.security.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.budget.*;
 import org.junit.jupiter.api.*;
+import org.springframework.security.web.header.HeaderWriterFilter;
+import org.springframework.security.web.header.writers.CacheControlHeadersWriter;
+import org.springframework.security.web.header.writers.XContentTypeOptionsHeaderWriter;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.http.MediaType;
@@ -18,20 +21,29 @@ class TenantCostBudgetControllerTest {
     MockMvc mvc;
     @BeforeEach void setup() {
         UserContextHolder.set(new UserContext().setUserId(1L));
-        mvc = MockMvcBuilders.standaloneSetup(new TenantCostBudgetController(budgets,readiness)).build();
+        mvc = MockMvcBuilders.standaloneSetup(new TenantCostBudgetController(budgets, readiness))
+                .addFilters(new HeaderWriterFilter(List.of(
+                        new CacheControlHeadersWriter(), new XContentTypeOptionsHeaderWriter())))
+                .build();
     }
     @AfterEach void cleanup() { UserContextHolder.clear(); }
     @Test void memberStatusNoStoreAndNoSensitiveFields() throws Exception {
         when(budgets.status(1L,2L)).thenReturn(new TenantCostStatusRespDTO.Summary("2","SUMMARY","LIMITED","2026-10-18T00:00:00+08:00",
                 "Asia/Shanghai","2026-10-17T15:00:00+08:00",List.of(new ApiKeyCostStatusRespDTO.Hit("TENANT","DAY","2026-10-18T00:00:00+08:00")),"联系管理员"));
-        mvc.perform(get("/api/v1/tenants/2/cost-status")).andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store"))
+        mvc.perform(get("/api/v1/tenants/2/cost-status")).andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-cache, no-store, max-age=0, must-revalidate"))
+                .andExpect(header().string("Pragma", "no-cache")).andExpect(header().string("Expires", "0"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
                 .andExpect(jsonPath("$.data.visibility").value("SUMMARY")).andExpect(jsonPath("$.data.costLimit").doesNotExist())
                 .andExpect(jsonPath("$.data.costWarning").doesNotExist()).andExpect(jsonPath("$.data.periods").doesNotExist());
         verify(budgets).status(1L,2L);
     }
     @Test void missingVersionAndInvalidBaseInputNeverReachSaveUseCase() throws Exception {
         mvc.perform(post("/api/v1/tenants/2/settings/save").contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"\"}"))
-                .andExpect(status().isBadRequest()); verifyNoInteractions(budgets);
+                .andExpect(status().isBadRequest())
+                .andExpect(header().string("Cache-Control", "no-cache, no-store, max-age=0, must-revalidate"))
+                .andExpect(header().string("Pragma", "no-cache"))
+                .andExpect(header().string("Expires", "0"));
+        verifyNoInteractions(budgets);
     }
     @Test void pendingConfirmationIsSuccessfulProtocolResponseWithoutSavedSnapshot() throws Exception {
         when(budgets.save(eq(1L),eq(2L),any())).thenReturn(new TenantSettingsSaveRespDTO("CONFIRMATION_REQUIRED",true,"确认","proof",

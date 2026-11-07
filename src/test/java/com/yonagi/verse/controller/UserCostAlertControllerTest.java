@@ -23,14 +23,14 @@ class UserCostAlertControllerTest {
     }
     @AfterEach void cleanup() { UserContextHolder.clear(); }
     @Test void noTenantIsNeededAndTrustedSelfIdentityReachesAllQueries() throws Exception {
-        mvc.perform(get("/api/v1/users/me/cost-alert")).andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store")); verify(query).getSettings(99L);
+        mvc.perform(get("/api/v1/users/me/cost-alert")).andExpect(status().isOk()); verify(query).getSettings(99L);
     }
     @Test void invalidInputCannotReachReplacementAndValidCompleteBodyUsesCurrentUser() throws Exception {
         mvc.perform(put("/api/v1/users/me/cost-alert").contentType(MediaType.APPLICATION_JSON).content("{\"daily\":{\"enabled\":true,\"thresholdFen\":\"0.1\"}}"))
                 .andExpect(jsonPath("$.code").isNotEmpty()); verifyNoInteractions(configuration);
         mvc.perform(put("/api/v1/users/me/cost-alert").contentType(MediaType.APPLICATION_JSON).content("""
                 {"expectedVersion":"0","daily":{"enabled":true,"thresholdFen":"1000"},"weekly":{"enabled":false,"thresholdFen":null},"channels":["EMAIL"]}
-                """)).andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store")); verify(configuration).replace(eq(99L),any());
+                """)).andExpect(status().isOk()); verify(configuration).replace(eq(99L),any());
     }
     @Test void unauthenticatedRequestDoesNotReachService() throws Exception {
         UserContextHolder.clear(); mvc.perform(get("/api/v1/users/me/cost-alert")).andExpect(jsonPath("$.code").isNotEmpty()); verifyNoInteractions(query);
@@ -48,7 +48,7 @@ class UserCostAlertControllerTest {
         mvc.perform(put("/api/v1/users/me/cost-alert").contentType(MediaType.APPLICATION_JSON).content("{"))
                 .andExpect(jsonPath("$.code").value("A000001")).andExpect(jsonPath("$.message").value("请求参数格式不正确"));
         mvc.perform(get("/api/v1/users/me/cost-alert").param("userId","1"))
-                .andExpect(jsonPath("$.code").value("A001601")).andExpect(header().string("Cache-Control","no-store"));
+                .andExpect(jsonPath("$.code").value("A001601"));
         verifyNoInteractions(query,configuration);
     }
 }

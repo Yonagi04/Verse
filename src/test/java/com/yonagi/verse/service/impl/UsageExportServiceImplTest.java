@@ -10,6 +10,7 @@ import com.yonagi.verse.dao.projection.UsageRawExportRow;
 import com.yonagi.verse.dto.resp.UsageBreakdownRespDTO;
 import com.yonagi.verse.dto.resp.UsageReportRespDTO;
 import com.yonagi.verse.service.UsageReportService;
+import com.yonagi.verse.service.reporting.UsageExportTarget;
 import com.yonagi.verse.service.reporting.UsageReportFilter;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -17,10 +18,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.mock.web.MockHttpServletResponse;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -48,11 +50,11 @@ class UsageExportServiceImplTest {
         UsageBreakdownRespDTO.Item item=new UsageBreakdownRespDTO.Item();item.setId("1");item.setLabel("=2+2");item.setRatio("1");item.setMetrics(metrics);
         UsageBreakdownRespDTO report=new UsageBreakdownRespDTO();report.setItems(List.of(item));
         when(reportService.breakdown(any(),eq(20L),any(),eq(from),eq(to),isNull(),isNull(),isNull(),any(),any(),eq(10))).thenReturn(report);
-        MockHttpServletResponse response=new MockHttpServletResponse();
+        RecordingExportTarget response=new RecordingExportTarget();
         service.export(response,new UserContext().setUserId(10L),20L,UsageExportType.BREAKDOWN,UsageGranularity.DAY,from,to,
                 null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10);
-        assertTrue(response.getContentType().contains("spreadsheetml"));
-        try(XSSFWorkbook workbook=new XSSFWorkbook(new ByteArrayInputStream(response.getContentAsByteArray()))) {
+        assertTrue(response.filename.startsWith("usage-breakdown-"));
+        try(XSSFWorkbook workbook=new XSSFWorkbook(new ByteArrayInputStream(response.bytes.toByteArray()))) {
             var row=workbook.getSheetAt(0).getRow(1);
             assertEquals("'=2+2",row.getCell(1).getStringCellValue());
             assertEquals("9007199254740994",row.getCell(5).getStringCellValue());
@@ -67,18 +69,18 @@ class UsageExportServiceImplTest {
         LocalDateTime from=LocalDateTime.of(2026,1,1,0,0),longTo=from.plusDays(32);
         when(reportService.resolveFilter(any(),anyLong(),any(),any(),any(),any(),any(),any()))
                 .thenReturn(new UsageReportFilter(20L,null,null,null,from,longTo,UsageGranularity.DAY,true));
-        MockHttpServletResponse response=new MockHttpServletResponse();
+        RecordingExportTarget response=new RecordingExportTarget();
         ClientException rangeError=assertThrows(ClientException.class,()->service.export(response,new UserContext().setUserId(10L),20L,
                 UsageExportType.RAW,UsageGranularity.DAY,from,longTo,null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10));
-        assertEquals("A000955",rangeError.getErrorCode());assertEquals(0,response.getContentAsByteArray().length);
+        assertEquals("A000955",rangeError.getErrorCode());assertEquals(0,response.bytes.toByteArray().length);
 
         LocalDateTime to=from.plusDays(1);UsageReportFilter shortFilter=new UsageReportFilter(20L,null,null,null,from,to,UsageGranularity.DAY,true);
         when(reportService.resolveFilter(any(),anyLong(),any(),any(),any(),any(),any(),any())).thenReturn(shortFilter);
         when(mapper.countRawExport(20L,null,null,null,from,to)).thenReturn(3L);
-        LocalDateTime finalTo=to;MockHttpServletResponse second=new MockHttpServletResponse();
+        LocalDateTime finalTo=to;RecordingExportTarget second=new RecordingExportTarget();
         ClientException sizeError=assertThrows(ClientException.class,()->service.export(second,new UserContext().setUserId(10L),20L,
                 UsageExportType.RAW,UsageGranularity.DAY,from,finalTo,null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10));
-        assertEquals("A000956",sizeError.getErrorCode());assertEquals(0,second.getContentAsByteArray().length);
+        assertEquals("A000956",sizeError.getErrorCode());assertEquals(0,second.bytes.toByteArray().length);
     }
 
     @Test
@@ -89,10 +91,10 @@ class UsageExportServiceImplTest {
         UsageReportFilter filter=new UsageReportFilter(20L,null,null,null,from,to,UsageGranularity.DAY,true);
         when(reportService.resolveFilter(any(),anyLong(),any(),any(),any(),any(),any(),any())).thenReturn(filter);
         when(mapper.selectRawExportBatch(anyLong(),any(),any(),any(),any(),any(),any(),any(),anyInt())).thenReturn(List.of());
-        MockHttpServletResponse response=new MockHttpServletResponse();
+        RecordingExportTarget response=new RecordingExportTarget();
         service.export(response,new UserContext().setUserId(10L),20L,UsageExportType.RAW,UsageGranularity.DAY,from,to,
                 null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10);
-        try(XSSFWorkbook workbook=new XSSFWorkbook(new ByteArrayInputStream(response.getContentAsByteArray()))) {
+        try(XSSFWorkbook workbook=new XSSFWorkbook(new ByteArrayInputStream(response.bytes.toByteArray()))) {
             String headers=workbook.getSheetAt(0).getRow(0).toString();
             assertTrue(headers.contains("请求时间")&&headers.contains("预估费用(分)"));
             assertFalse(headers.contains("usageDetailsJson"));assertFalse(headers.contains("apiKeyId"));
@@ -107,7 +109,7 @@ class UsageExportServiceImplTest {
         when(mapper.selectRawExportBatch(eq(20L), eq(10L), eq(11L), eq(12L), eq(RAW_FROM), eq(RAW_TO),
                 any(), any(), anyInt()))
                 .thenReturn(List.of(rawRow(1L), rawRow(2L), rawRow(3L)), List.of(rawRow(4L), rawRow(5L)));
-        MockHttpServletResponse response = new MockHttpServletResponse();
+        RecordingExportTarget response = new RecordingExportTarget();
 
         ClientException failure = assertThrows(ClientException.class, () -> exportRaw(service, response));
 
@@ -125,13 +127,13 @@ class UsageExportServiceImplTest {
         List<UsageRawExportRow> tail = maxRows == 3 ? List.of() : List.of(rawRow(4L));
         when(mapper.selectRawExportBatch(eq(20L), eq(10L), eq(11L), eq(12L), eq(RAW_FROM), eq(RAW_TO),
                 any(), any(), anyInt())).thenReturn(List.of(rawRow(1L), rawRow(2L), rawRow(3L)), tail);
-        MockHttpServletResponse response = new MockHttpServletResponse();
+        RecordingExportTarget response = new RecordingExportTarget();
 
         exportRaw(service, response);
 
-        assertTrue(response.getContentType().contains("spreadsheetml"));
-        assertTrue(response.containsHeader("Content-Disposition"));
-        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(response.getContentAsByteArray()))) {
+        assertTrue(response.filename.startsWith("usage-raw-"));
+        assertTrue(response.filename.endsWith(".xlsx"));
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(response.bytes.toByteArray()))) {
             XSSFSheet sheet = workbook.getSheetAt(0);
             assertEquals(maxRows + 1, sheet.getPhysicalNumberOfRows());
             for (int index = 1; index <= maxRows; index++) {
@@ -153,15 +155,15 @@ class UsageExportServiceImplTest {
                 .thenReturn(List.of(rawRow(1L), rawRow(2L), rawRow(3L)))
                 .thenThrow(new DataAccessResourceFailureException("fixture database failure"))
                 .thenReturn(List.of());
-        MockHttpServletResponse response = new MockHttpServletResponse();
+        RecordingExportTarget response = new RecordingExportTarget();
 
         ServerException failure = assertThrows(ServerException.class, () -> exportRaw(service, response));
 
         assertEquals(UsageReportingErrorCodeEnum.EXPORT_FAILED.code(), failure.getErrorCode());
         assertNoWorkbook(response);
-        MockHttpServletResponse retry = new MockHttpServletResponse();
+        RecordingExportTarget retry = new RecordingExportTarget();
         exportRaw(service, retry);
-        assertTrue(retry.getContentAsByteArray().length > 0);
+        assertTrue(retry.bytes.toByteArray().length > 0);
     }
 
     private static UsageExportServiceImpl rawExportService(TokenUsageMapper mapper, int maxRows) {
@@ -176,7 +178,7 @@ class UsageExportServiceImplTest {
         return new UsageExportServiceImpl(reportService, mapper, properties, new SimpleMeterRegistry());
     }
 
-    private static void exportRaw(UsageExportServiceImpl service, MockHttpServletResponse response) {
+    private static void exportRaw(UsageExportServiceImpl service, RecordingExportTarget response) {
         service.export(response, new UserContext().setUserId(10L), 20L, UsageExportType.RAW, UsageGranularity.DAY,
                 RAW_FROM, RAW_TO, 10L, 11L, 12L, UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS, 10);
     }
@@ -189,11 +191,9 @@ class UsageExportServiceImplTest {
         return row;
     }
 
-    private static void assertNoWorkbook(MockHttpServletResponse response) {
-        assertFalse(response.isCommitted());
-        assertFalse(response.containsHeader("Content-Disposition"));
-        assertNull(response.getContentType());
-        assertEquals(0, response.getContentAsByteArray().length);
+    private static void assertNoWorkbook(RecordingExportTarget response) {
+        assertNull(response.filename);
+        assertEquals(0, response.bytes.toByteArray().length);
     }
 
     @Test
@@ -204,11 +204,25 @@ class UsageExportServiceImplTest {
         CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
         when(reportService.resolveFilter(any(),anyLong(),any(),any(),any(),any(),any(),any())).thenAnswer(invocation->{entered.countDown();release.await(5,TimeUnit.SECONDS);return filter;});
         UsageReportRespDTO report=new UsageReportRespDTO();report.setPoints(List.of());when(reportService.query(any(),anyLong(),any(),any(),any(),any(),any(),any())).thenReturn(report);
-        CompletableFuture<Void> first=CompletableFuture.runAsync(()->service.export(new MockHttpServletResponse(),new UserContext().setUserId(10L),20L,
+        CompletableFuture<Void> first=CompletableFuture.runAsync(()->service.export(new RecordingExportTarget(),new UserContext().setUserId(10L),20L,
                 UsageExportType.TIMESERIES,UsageGranularity.DAY,from,to,null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10));
         assertTrue(entered.await(2,TimeUnit.SECONDS));
-        ClientException busy=assertThrows(ClientException.class,()->service.export(new MockHttpServletResponse(),new UserContext().setUserId(11L),20L,
+        ClientException busy=assertThrows(ClientException.class,()->service.export(new RecordingExportTarget(),new UserContext().setUserId(11L),20L,
                 UsageExportType.TIMESERIES,UsageGranularity.DAY,from,to,null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10));
         assertEquals("A000957",busy.getErrorCode());release.countDown();first.get(5,TimeUnit.SECONDS);
+    }
+    private static final class RecordingExportTarget implements UsageExportTarget {
+        private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        private String filename;
+
+        @Override
+        public void prepare(String filename) {
+            this.filename = filename;
+        }
+
+        @Override
+        public OutputStream outputStream() {
+            return bytes;
+        }
     }
 }

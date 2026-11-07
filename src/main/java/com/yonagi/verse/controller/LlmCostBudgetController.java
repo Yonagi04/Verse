@@ -1,13 +1,13 @@
 package com.yonagi.verse.controller;
 
 import com.yonagi.verse.common.convention.result.*;
+import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.security.UserContextHolder;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.*;
 import com.yonagi.verse.service.LlmManageService;
 import com.yonagi.verse.service.budget.*;
 import jakarta.validation.Valid;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -28,23 +28,24 @@ public class LlmCostBudgetController {
         var actor=UserContextHolder.get(); return Results.success(models.updateLlmService(actor.getUserId(),actor.getCurrentTenantId(),serviceId,request));
     }
     @PostMapping("/{serviceId}/cost-budget/update") @PreAuthorize("hasAnyRole('ADMIN','SUPER_ADMIN')")
-    public Result<LlmCostStatusRespDTO> updateBudget(@PathVariable Long serviceId,@RequestBody @Valid LlmCostBudgetUpdateReqDTO request,HttpServletResponse response) {
-        response.setHeader("Cache-Control","no-store"); var actor=UserContextHolder.get();
+    public Result<LlmCostStatusRespDTO> updateBudget(@PathVariable Long serviceId,
+                                                     @RequestBody @Valid LlmCostBudgetUpdateReqDTO request) {
+        UserContext actor = UserContextHolder.get();
         return Results.success(budgets.update(actor.getUserId(),actor.getCurrentTenantId(),serviceId,request));
     }
     @GetMapping("/{serviceId}/cost-status")
-    public Result<LlmCostStatusRespDTO> status(@PathVariable Long serviceId,HttpServletResponse response) {
-        response.setHeader("Cache-Control","no-store"); var actor=UserContextHolder.get();
+    public Result<LlmCostStatusRespDTO> status(@PathVariable Long serviceId) {
+        UserContext actor = UserContextHolder.get();
         return Results.success(budgets.status(actor.getUserId(),actor.getCurrentTenantId(),serviceId));
     }
     @GetMapping("/cost-status")
-    public Result<LlmCostStatusRespDTO.Batch> statuses(@RequestParam List<Long> serviceIds,HttpServletResponse response) {
-        response.setHeader("Cache-Control","no-store"); var actor=UserContextHolder.get();
+    public Result<LlmCostStatusRespDTO.Batch> statuses(@RequestParam List<Long> serviceIds) {
+        UserContext actor = UserContextHolder.get();
         return Results.success(budgets.statuses(actor.getUserId(),actor.getCurrentTenantId(),serviceIds));
     }
     @GetMapping("/cost-notification-readiness") @PreAuthorize("hasAnyRole('ADMIN','SUPER_ADMIN')")
-    public Result<CostNotificationReadinessRespDTO> readiness(HttpServletResponse response) {
-        response.setHeader("Cache-Control","no-store"); var actor=UserContextHolder.get();
+    public Result<CostNotificationReadinessRespDTO> readiness() {
+        UserContext actor = UserContextHolder.get();
         return Results.success(readiness.readiness(actor.getUserId(),actor.getCurrentTenantId()));
     }
 }

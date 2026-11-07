@@ -167,7 +167,6 @@ public class LlmForwardController {
                 Flux<String> events = llmForwardService.responsesStream(ctx, body, requestId, started)
                         .map(this::toNamedSse);
                 return ResponseEntity.ok().contentType(MediaType.TEXT_EVENT_STREAM)
-                        .header(HttpHeaders.CACHE_CONTROL, "no-cache")
                         .header(HEADER_REQUEST_ID, requestId).body(events);
             }
             llmForwardService.preflight(ctx, operation, body);
@@ -247,7 +246,6 @@ public class LlmForwardController {
                     .map(this::toDataOnlySse);
             return ResponseEntity.ok()
                     .contentType(MediaType.TEXT_EVENT_STREAM)
-                    .header(HttpHeaders.CACHE_CONTROL, "no-cache")
                     .header(HEADER_REQUEST_ID, requestId)
                     .body(flux);
         } catch (AbstractException e) {
