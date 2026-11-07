@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.time.LocalDateTime;
-import java.util.Map;
 
 /** 单条租户动态响应。 */
 @Data
@@ -43,7 +42,7 @@ public class TenantActivityItemRespDTO {
     private String targetName;
 
     /** 经过动态类型白名单过滤的结构化详情。 */
-    private Map<String, Object> details;
+    private TenantActivityDetailRespDTO details;
 
     /** 业务发生时间。 */
     private LocalDateTime occurredAt;
