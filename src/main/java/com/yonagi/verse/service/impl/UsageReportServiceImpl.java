@@ -101,8 +101,10 @@ public class UsageReportServiceImpl implements UsageReportService {
         UsageBreakdownDimension dimension, UsageBreakdownOrder order, int limit) {
         UsageReportFilter filter = resolveFilter(context, tenantId, granularity, from, to, userId, apiKeyId, serviceId);
         reportAccess.checkBreakdown(filter, dimension, limit);
+        // SQL 将全量总计放在首行，查询时需为它预留一个位置。
+        int rowLimit = Math.incrementExact(limit);
         List<UsageBreakdownRow> rows = aggregateMapper.summarizeRankedBreakdown(dimension, order, filter.tenantId(),
-                filter.userId(), filter.apiKeyId(), filter.serviceId(), filter.from(), filter.to(), limit + 1);
+                filter.userId(), filter.apiKeyId(), filter.serviceId(), filter.from(), filter.to(), rowLimit);
         UsageBreakdownRow total = new UsageBreakdownRow();
         if (!rows.isEmpty()) {
             total = rows.getFirst();

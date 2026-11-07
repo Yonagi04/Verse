@@ -240,7 +240,7 @@ class UsageReportServiceImplTest {
     }
 
     @ParameterizedTest
-    @ValueSource(ints = {0, 101})
+    @ValueSource(ints = {Integer.MIN_VALUE, 0, 101, Integer.MAX_VALUE})
     void breakdownRejectsInvalidLimitBeforeReadingTheProjection(int limit) {
         when(userTenantService.getRoleByUserIdAndTenantId(10L, 20L)).thenReturn("ADMIN");
         UserContext context = new UserContext().setUserId(10L);
