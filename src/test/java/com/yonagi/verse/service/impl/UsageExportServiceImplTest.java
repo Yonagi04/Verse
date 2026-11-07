@@ -11,6 +11,7 @@ import com.yonagi.verse.dto.resp.UsageBreakdownRespDTO;
 import com.yonagi.verse.dto.resp.UsageReportRespDTO;
 import com.yonagi.verse.service.UsageReportService;
 import com.yonagi.verse.service.reporting.UsageExportTarget;
+import com.yonagi.verse.service.reporting.UsageReportAccessPolicy;
 import com.yonagi.verse.service.reporting.UsageReportFilter;
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -36,14 +37,18 @@ import static org.mockito.Mockito.*;
 class UsageExportServiceImplTest {
     private static final LocalDateTime RAW_FROM = LocalDateTime.of(2026, 9, 1, 0, 0);
     private static final LocalDateTime RAW_TO = RAW_FROM.plusDays(1);
+    private final UsageReportAccessPolicy reportAccess = mock(UsageReportAccessPolicy.class);
 
     @Test
     void breakdownWorkbookNeutralizesFormulaTextAndKeepsPrecisionStrings() throws Exception {
         UsageReportService reportService=mock(UsageReportService.class);TokenUsageMapper mapper=mock(TokenUsageMapper.class);
-        UsageReportingProperties properties=new UsageReportingProperties();UsageExportServiceImpl service=new UsageExportServiceImpl(reportService,mapper,properties,new SimpleMeterRegistry());
+        UsageReportingProperties properties = new UsageReportingProperties();
+        UsageExportServiceImpl service = new UsageExportServiceImpl(reportService, reportAccess, mapper, properties,
+                new SimpleMeterRegistry());
         LocalDateTime from=LocalDateTime.of(2026,9,1,0,0),to=from.plusDays(1);
         UsageReportFilter filter=new UsageReportFilter(20L,null,null,null,from,to,UsageGranularity.DAY,true);
-        when(reportService.resolveFilter(any(),eq(20L),any(),eq(from),eq(to),isNull(),isNull(),isNull())).thenReturn(filter);
+        when(reportAccess.resolveExportFilter(any(), eq(20L), any(), eq(from), eq(to), isNull(), isNull(), isNull(),
+                eq(UsageExportType.BREAKDOWN))).thenReturn(filter);
         UsageReportRespDTO.UsageMetrics metrics=new UsageReportRespDTO.UsageMetrics();metrics.setInputTokens("9007199254740993");
         metrics.setOutputTokens("1");metrics.setTotalTokens("9007199254740994");metrics.setRequestCount("1");metrics.setEstimatedCostFen("0.000000000000000001");
         metrics.setUncalculableCount("0");metrics.setUnpricedCount("0");
@@ -62,34 +67,27 @@ class UsageExportServiceImplTest {
     }
 
     @Test
-    void rawExportRejectsRangeAndRowLimitBeforeWritingBytes() {
-        UsageReportService reportService=mock(UsageReportService.class);TokenUsageMapper mapper=mock(TokenUsageMapper.class);
-        UsageReportingProperties properties=new UsageReportingProperties();properties.setExportMaxRows(2);
-        UsageExportServiceImpl service=new UsageExportServiceImpl(reportService,mapper,properties,new SimpleMeterRegistry());
-        LocalDateTime from=LocalDateTime.of(2026,1,1,0,0),longTo=from.plusDays(32);
-        when(reportService.resolveFilter(any(),anyLong(),any(),any(),any(),any(),any(),any()))
-                .thenReturn(new UsageReportFilter(20L,null,null,null,from,longTo,UsageGranularity.DAY,true));
-        RecordingExportTarget response=new RecordingExportTarget();
-        ClientException rangeError=assertThrows(ClientException.class,()->service.export(response,new UserContext().setUserId(10L),20L,
-                UsageExportType.RAW,UsageGranularity.DAY,from,longTo,null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10));
-        assertEquals("A000955",rangeError.getErrorCode());assertEquals(0,response.bytes.toByteArray().length);
+    void rawExportRejectsRowLimitBeforeWritingBytes() {
+        TokenUsageMapper mapper = mock(TokenUsageMapper.class);
+        UsageExportServiceImpl service = rawExportService(mapper, 2);
+        when(mapper.countRawExport(20L, 10L, 11L, 12L, RAW_FROM, RAW_TO)).thenReturn(3L);
+        RecordingExportTarget response = new RecordingExportTarget();
 
-        LocalDateTime to=from.plusDays(1);UsageReportFilter shortFilter=new UsageReportFilter(20L,null,null,null,from,to,UsageGranularity.DAY,true);
-        when(reportService.resolveFilter(any(),anyLong(),any(),any(),any(),any(),any(),any())).thenReturn(shortFilter);
-        when(mapper.countRawExport(20L,null,null,null,from,to)).thenReturn(3L);
-        LocalDateTime finalTo=to;RecordingExportTarget second=new RecordingExportTarget();
-        ClientException sizeError=assertThrows(ClientException.class,()->service.export(second,new UserContext().setUserId(10L),20L,
-                UsageExportType.RAW,UsageGranularity.DAY,from,finalTo,null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10));
-        assertEquals("A000956",sizeError.getErrorCode());assertEquals(0,second.bytes.toByteArray().length);
+        ClientException sizeError = assertThrows(ClientException.class, () -> exportRaw(service, response));
+
+        assertEquals(UsageReportingErrorCodeEnum.EXPORT_TOO_LARGE.code(), sizeError.getErrorCode());
+        assertNoWorkbook(response);
     }
 
     @Test
     void rawWorkbookContainsOnlyDocumentedSafeHeaders() throws Exception {
         UsageReportService reportService=mock(UsageReportService.class);TokenUsageMapper mapper=mock(TokenUsageMapper.class);
-        UsageExportServiceImpl service=new UsageExportServiceImpl(reportService,mapper,new UsageReportingProperties(),new SimpleMeterRegistry());
+        UsageExportServiceImpl service = new UsageExportServiceImpl(reportService, reportAccess, mapper,
+                new UsageReportingProperties(), new SimpleMeterRegistry());
         LocalDateTime from=LocalDateTime.of(2026,9,1,0,0),to=from.plusDays(1);
         UsageReportFilter filter=new UsageReportFilter(20L,null,null,null,from,to,UsageGranularity.DAY,true);
-        when(reportService.resolveFilter(any(),anyLong(),any(),any(),any(),any(),any(),any())).thenReturn(filter);
+        when(reportAccess.resolveExportFilter(any(), anyLong(), any(), any(), any(), any(), any(), any(),
+                eq(UsageExportType.RAW))).thenReturn(filter);
         when(mapper.selectRawExportBatch(anyLong(),any(),any(),any(),any(),any(),any(),any(),anyInt())).thenReturn(List.of());
         RecordingExportTarget response=new RecordingExportTarget();
         service.export(response,new UserContext().setUserId(10L),20L,UsageExportType.RAW,UsageGranularity.DAY,from,to,
@@ -166,16 +164,16 @@ class UsageExportServiceImplTest {
         assertTrue(retry.bytes.toByteArray().length > 0);
     }
 
-    private static UsageExportServiceImpl rawExportService(TokenUsageMapper mapper, int maxRows) {
+    private UsageExportServiceImpl rawExportService(TokenUsageMapper mapper, int maxRows) {
         UsageReportService reportService = mock(UsageReportService.class);
-        when(reportService.resolveFilter(any(), eq(20L), eq(UsageGranularity.DAY), eq(RAW_FROM), eq(RAW_TO),
-                eq(10L), eq(11L), eq(12L)))
+        when(reportAccess.resolveExportFilter(any(), eq(20L), eq(UsageGranularity.DAY), eq(RAW_FROM), eq(RAW_TO),
+                eq(10L), eq(11L), eq(12L), eq(UsageExportType.RAW)))
                 .thenReturn(new UsageReportFilter(20L, 10L, 11L, 12L, RAW_FROM, RAW_TO, UsageGranularity.DAY, false));
         UsageReportingProperties properties = new UsageReportingProperties();
         properties.setExportMaxRows(maxRows);
         properties.setExportBatchSize(3);
         properties.setExportMaxConcurrency(1);
-        return new UsageExportServiceImpl(reportService, mapper, properties, new SimpleMeterRegistry());
+        return new UsageExportServiceImpl(reportService, reportAccess, mapper, properties, new SimpleMeterRegistry());
     }
 
     private static void exportRaw(UsageExportServiceImpl service, RecordingExportTarget response) {
@@ -199,10 +197,17 @@ class UsageExportServiceImplTest {
     @Test
     void concurrencyLimitRejectsPromptly() throws Exception {
         UsageReportService reportService=mock(UsageReportService.class);UsageReportingProperties properties=new UsageReportingProperties();
-        properties.setExportMaxConcurrency(1);UsageExportServiceImpl service=new UsageExportServiceImpl(reportService,mock(TokenUsageMapper.class),properties,new SimpleMeterRegistry());
+        properties.setExportMaxConcurrency(1);
+        UsageExportServiceImpl service = new UsageExportServiceImpl(reportService, reportAccess,
+                mock(TokenUsageMapper.class), properties, new SimpleMeterRegistry());
         LocalDateTime from=LocalDateTime.of(2026,9,1,0,0),to=from.plusDays(1);UsageReportFilter filter=new UsageReportFilter(20L,null,null,null,from,to,UsageGranularity.DAY,true);
         CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
-        when(reportService.resolveFilter(any(),anyLong(),any(),any(),any(),any(),any(),any())).thenAnswer(invocation->{entered.countDown();release.await(5,TimeUnit.SECONDS);return filter;});
+        when(reportAccess.resolveExportFilter(any(), anyLong(), any(), any(), any(), any(), any(), any(),
+                eq(UsageExportType.TIMESERIES))).thenAnswer(invocation -> {
+                    entered.countDown();
+                    release.await(5, TimeUnit.SECONDS);
+                    return filter;
+                });
         UsageReportRespDTO report=new UsageReportRespDTO();report.setPoints(List.of());when(reportService.query(any(),anyLong(),any(),any(),any(),any(),any(),any())).thenReturn(report);
         CompletableFuture<Void> first=CompletableFuture.runAsync(()->service.export(new RecordingExportTarget(),new UserContext().setUserId(10L),20L,
                 UsageExportType.TIMESERIES,UsageGranularity.DAY,from,to,null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10));

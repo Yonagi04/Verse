@@ -21,6 +21,7 @@ import com.yonagi.verse.dto.resp.UsageReportRespDTO;
 import com.yonagi.verse.service.UsageExportService;
 import com.yonagi.verse.service.UsageReportService;
 import com.yonagi.verse.service.reporting.UsageExportTarget;
+import com.yonagi.verse.service.reporting.UsageReportAccessPolicy;
 import com.yonagi.verse.service.reporting.UsageReportFilter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -41,14 +42,17 @@ import java.util.concurrent.Semaphore;
 public class UsageExportServiceImpl implements UsageExportService {
     private static final DateTimeFormatter FILE_TIME = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
     private final UsageReportService reportService;
+    private final UsageReportAccessPolicy reportAccess;
     private final TokenUsageMapper tokenUsageMapper;
     private final UsageReportingProperties properties;
     private final MeterRegistry meterRegistry;
     private final Semaphore permits;
 
-    public UsageExportServiceImpl(UsageReportService reportService, TokenUsageMapper tokenUsageMapper,
+    public UsageExportServiceImpl(UsageReportService reportService, UsageReportAccessPolicy reportAccess,
+                                  TokenUsageMapper tokenUsageMapper,
                                   UsageReportingProperties properties, MeterRegistry meterRegistry) {
         this.reportService = reportService;
+        this.reportAccess = reportAccess;
         this.tokenUsageMapper = tokenUsageMapper;
         this.properties = properties;
         this.meterRegistry = meterRegistry;
@@ -66,7 +70,8 @@ public class UsageExportServiceImpl implements UsageExportService {
             throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_BUSY);
         }
         try {
-            UsageReportFilter filter = reportService.resolveFilter(context,tenantId,granularity,from,to,userId,apiKeyId,serviceId);
+            UsageReportFilter filter = reportAccess.resolveExportFilter(context, tenantId, granularity, from, to,
+                    userId, apiKeyId, serviceId, type);
             switch (type) {
                 case TIMESERIES -> writeTimeseries(target, context, filter);
                 case BREAKDOWN -> writeBreakdown(target, context, filter, dimension, orderBy, limit);
@@ -124,10 +129,6 @@ public class UsageExportServiceImpl implements UsageExportService {
     }
 
     private void writeRaw(UsageExportTarget target, UsageReportFilter filter) throws IOException {
-        Duration requestedRange = Duration.between(filter.from(), filter.to());
-        if (requestedRange.compareTo(Duration.ofDays(properties.getRawExportMaxRangeDays())) > 0) {
-            throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_INVALID);
-        }
         int maxRows = properties.getExportMaxRows();
         long count = tokenUsageMapper.countRawExport(filter.tenantId(), filter.userId(), filter.apiKeyId(),
                 filter.serviceId(), filter.from(), filter.to());

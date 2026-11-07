@@ -15,7 +15,7 @@ public class UsageReportingProperties {
     /** 近实时重算回看小时数。 */ @Min(1) private int refreshLookbackHours = 2;
     /** 补偿重算天数。 */ @Min(1) private int compensationDays = 7;
     /** 允许查询的最大天数。 */ @Min(1) private int maxRangeDays = 366;
-    /** 原始导出最大天数。 */ @Min(1) private int rawExportMaxRangeDays = 31;
+    /** 原始导出最大天数。 */ @Min(1) private int rawExportMaxRangeDays = 90;
     /** 原始导出最大行数。 */ @Min(1) private int exportMaxRows = 100000;
     /** 原始导出查询批大小。 */ @Min(1) private int exportBatchSize = 1000;
     /** 单实例并发导出数。 */ @Min(1) private int exportMaxConcurrency = 2;
