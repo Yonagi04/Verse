@@ -6,13 +6,13 @@ import com.yonagi.verse.common.cache.QueryCacheTtl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import cn.hutool.crypto.digest.DigestUtil;
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.common.cache.QueryCache;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import com.yonagi.verse.dao.entity.ApiKeyDO;
 import com.yonagi.verse.dao.mapper.ApiKeyMapper;
+import com.yonagi.verse.dto.resp.OpenAiErrorRespDTO;
 import com.yonagi.verse.service.impl.ApiKeyUsageRecorder;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -47,6 +47,10 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
     private static final String OPENAI_PATH_PREFIX = "/api/v1/openai";
     private static final String AUTH_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
+    private static final OpenAiErrorRespDTO.DetailDTO INVALID_API_KEY = new OpenAiErrorRespDTO.DetailDTO(
+            LlmForwardErrorCodeEnum.API_KEY_INVALID.message(), "invalid_request_error", "invalid_api_key");
+    private static final OpenAiErrorRespDTO.DetailDTO AUTHENTICATION_UNAVAILABLE = new OpenAiErrorRespDTO.DetailDTO(
+            "Authentication temporarily unavailable", "server_error", "authentication_unavailable");
 
     private final QueryCache queryCache;
     private final ApiKeyMapper apiKeyMapper;
@@ -64,21 +68,19 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                                     FilterChain filterChain) throws ServletException, IOException {
         String token = extractToken(request);
         if (!StringUtils.hasText(token)) {
-            writeOpenAiError(response, HttpServletResponse.SC_UNAUTHORIZED, LlmForwardErrorCodeEnum.API_KEY_INVALID);
+            writeOpenAiError(response, HttpServletResponse.SC_UNAUTHORIZED, INVALID_API_KEY);
             return;
         }
 
         ApiKeyDO apiKey;
-        try { apiKey = loadApiKey(token); }
-        catch (ServerException | org.springframework.dao.DataAccessException error) {
-            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
-            response.setContentType("application/json;charset=UTF-8");
-            response.getWriter().write("{\"error\":{\"message\":\"Authentication temporarily unavailable\","
-                    + "\"type\":\"server_error\",\"code\":\"authentication_unavailable\"}}");
+        try {
+            apiKey = loadApiKey(token);
+        } catch (ServerException | org.springframework.dao.DataAccessException error) {
+            writeOpenAiError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, AUTHENTICATION_UNAVAILABLE);
             return;
         }
         if (apiKey == null || !isKeyValid(apiKey)) {
-            writeOpenAiError(response, HttpServletResponse.SC_UNAUTHORIZED, LlmForwardErrorCodeEnum.API_KEY_INVALID);
+            writeOpenAiError(response, HttpServletResponse.SC_UNAUTHORIZED, INVALID_API_KEY);
             return;
         }
 
@@ -131,15 +133,10 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
         return null;
     }
 
-    private void writeOpenAiError(HttpServletResponse response, int status, LlmForwardErrorCodeEnum errorCode) throws IOException {
+    private void writeOpenAiError(HttpServletResponse response, int status,
+                                  OpenAiErrorRespDTO.DetailDTO error) throws IOException {
         response.setStatus(status);
         response.setContentType("application/json;charset=UTF-8");
-        JSONObject body = new JSONObject();
-        JSONObject error = new JSONObject();
-        error.put("message", errorCode.message());
-        error.put("type", "invalid_request_error");
-        error.put("code", "invalid_api_key");
-        body.put("error", error);
-        response.getWriter().write(JSON.toJSONString(body));
+        response.getWriter().write(JSON.toJSONString(new OpenAiErrorRespDTO<>(error)));
     }
 }

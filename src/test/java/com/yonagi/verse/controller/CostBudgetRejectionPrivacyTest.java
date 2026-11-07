@@ -1,6 +1,7 @@
 package com.yonagi.verse.controller;
 
-import com.alibaba.fastjson2.JSON;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.common.security.UserContext;
@@ -27,12 +28,15 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class CostBudgetRejectionPrivacyTest {
+    private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+
     @AfterEach void clearContext() { UserContextHolder.clear(); }
 
     @ParameterizedTest
     @CsvSource({"CHAT,false", "CHAT,true", "JSON,false", "JSON,true", "STREAM,false", "STREAM,true",
             "RESPONSES_STREAM,false", "RESPONSES_STREAM,true", "MEDIA,false", "MEDIA,true", "RERANK,false", "RERANK,true"})
-    void costRejectionReturnsProtocolErrorWithoutFurtherBusinessCalls(String endpoint, boolean unavailable) {
+    void costRejectionReturnsProtocolErrorWithoutFurtherBusinessCalls(String endpoint, boolean unavailable)
+            throws Exception {
         LlmForwardService service = mock(LlmForwardService.class);
         LlmForwardController controller = new LlmForwardController(service, new InFlightRequestCoalescer());
         UserContextHolder.set(new UserContext().setUserId(1L).setCurrentTenantId(2L).setApiKeyId(3L));
@@ -74,16 +78,16 @@ class CostBudgetRejectionPrivacyTest {
         assertNotNull(requestId);
         String payload = response.getBody() instanceof Publisher<?> publisher
                 ? (String) Flux.from(publisher).blockFirst() : (String) response.getBody();
-        var error = JSON.parseObject(payload).getJSONObject("error");
-        assertEquals(unavailable ? "cost_budget_unavailable" : "cost_limit_exceeded", error.getString("code"));
-        assertEquals(requestId, error.getString("request_id"));
+        JsonNode error = JSON_MAPPER.readTree(payload).path("error");
+        assertEquals(unavailable ? "cost_budget_unavailable" : "cost_limit_exceeded", error.path("code").textValue());
+        assertEquals(requestId, error.path("request_id").textValue());
         if (unavailable) {
             assertNull(response.getHeaders().getFirst("Retry-After"));
-            assertFalse(error.containsKey("retry_at"));
+            assertFalse(error.has("retry_at"));
         } else {
             assertTrue(Long.parseLong(response.getHeaders().getFirst("Retry-After")) > 0);
-            assertEquals("API_KEY", error.getString("scope"));
-            assertEquals("DAY", error.getString("period"));
+            assertEquals("API_KEY", error.path("scope").textValue());
+            assertEquals("DAY", error.path("period").textValue());
         }
         verifyNoMoreInteractions(service);
     }

@@ -11,6 +11,9 @@ import com.yonagi.verse.service.forward.AdapterExchange;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.security.UserContextHolder;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
+import com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory;
+import com.yonagi.verse.dto.resp.OpenAiErrorRespDTO;
+import com.yonagi.verse.dto.resp.OpenAiModelListRespDTO;
 import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.forward.InFlightRequestCoalescer;
 import lombok.RequiredArgsConstructor;
@@ -54,6 +57,8 @@ import java.util.Map;
 public class LlmForwardController {
 
     private static final String HEADER_REQUEST_ID = "x-request-id";
+    private static final String MODEL_LIST_OBJECT = "list";
+    private static final String MODEL_OBJECT = "model";
 
     /**
      * 限流 429 的 Retry-After 秒数（RPM/TPM 均以 1 分钟为窗口）
@@ -262,23 +267,17 @@ public class LlmForwardController {
         }
     }
 
+    /** 返回当前租户的 OpenAI 兼容模型列表。 */
     @GetMapping("/models")
     public ResponseEntity<String> listModels() {
         UserContext ctx = UserContextHolder.get();
         Long tenantId = ctx == null ? null : ctx.getCurrentTenantId();
         List<String> models = llmForwardService.listModels(tenantId);
 
-        JSONObject body = new JSONObject();
-        body.put("object", "list");
-        List<JSONObject> data = models.stream()
-                .map(name -> {
-                    JSONObject item = new JSONObject();
-                    item.put("id", name);
-                    item.put("object", "model");
-                    return item;
-                })
+        List<OpenAiModelListRespDTO.ModelDTO> data = models.stream()
+                .map(name -> new OpenAiModelListRespDTO.ModelDTO(name, MODEL_OBJECT))
                 .toList();
-        body.put("data", data);
+        OpenAiModelListRespDTO body = new OpenAiModelListRespDTO(MODEL_LIST_OBJECT, data);
         return ResponseEntity.ok()
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(JSON.toJSONString(body));
@@ -288,9 +287,9 @@ public class LlmForwardController {
      * 业务异常 → OpenAI error 格式。
      */
     private ResponseEntity<Publisher<String>> toOpenAiError(AbstractException e, String requestId) {
-        if (com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(e)) {
-            return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
-                    .body(Mono.just(com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.body(e, requestId)));
+        if (OpenAiCostErrorResponseFactory.supports(e)) {
+            return OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
+                    .body(Mono.just(OpenAiCostErrorResponseFactory.body(e, requestId)));
         }
         String code = e.getErrorCode();
         HttpStatus status = statusFor(code);
@@ -300,9 +299,9 @@ public class LlmForwardController {
 
     /** 二进制接口的错误体必须是实际 JSON 字符串，不能把 Mono 交给 Jackson 序列化。 */
     private ResponseEntity<String> toOpenAiMediaError(AbstractException e, String requestId) {
-        if (com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(e)) {
-            return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
-                    .body(com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.body(e, requestId));
+        if (OpenAiCostErrorResponseFactory.supports(e)) {
+            return OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
+                    .body(OpenAiCostErrorResponseFactory.body(e, requestId));
         }
         return errorHeaders(statusFor(e.getErrorCode()), requestId).body(openAiErrorJson(e));
     }
@@ -318,27 +317,7 @@ public class LlmForwardController {
     }
 
     private String openAiErrorJson(AbstractException e) {
-        String code = e.getErrorCode();
-        JSONObject error = new JSONObject();
-        error.put("message", e.getErrorMessage());
-        error.put("type", typeFor(code));
-        error.put("code", code);
-        JSONObject body = new JSONObject();
-        body.put("error", error);
-        return JSON.toJSONString(body);
-    }
-
-    private String typeFor(String code) {
-        if (code == null) {
-            return "server_error";
-        }
-        if (code.startsWith("A")) {
-            return "invalid_request_error";
-        }
-        if (code.startsWith("C")) {
-            return "upstream_error";
-        }
-        return "server_error";
+        return JSON.toJSONString(OpenAiErrorRespDTO.gatewayError(e.getErrorMessage(), e.getErrorCode()));
     }
 
     private HttpStatus statusFor(String code) {
