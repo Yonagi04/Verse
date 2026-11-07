@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.forward;
 
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.CredentialMode;
 import com.yonagi.verse.common.enums.LlmManageErrorCodeEnum;
@@ -9,6 +12,7 @@ import com.yonagi.verse.common.util.JsonNumbers;
 import com.yonagi.verse.dto.req.CapabilityBindingReqDTO;
 import org.springframework.util.StringUtils;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -18,6 +22,10 @@ import java.util.Set;
 
 /** 服务配置校验，禁止供应商名称隐式决定协议。 */
 public final class CapabilityConfiguration {
+    private static final JsonFactory JSON_FACTORY = new JsonFactory();
+    private static final double MAX_TEMPERATURE = 2D;
+    private static final double MAX_TOP_P = 1D;
+
     private CapabilityConfiguration() {}
 
     public static List<CapabilityBindingReqDTO> normalize(List<CapabilityBindingReqDTO> bindings) {
@@ -126,21 +134,80 @@ public final class CapabilityConfiguration {
     }
 
     private static void validatePlayground(String value) {
-        try {
-            com.alibaba.fastjson2.JSONObject p = com.alibaba.fastjson2.JSON.parseObject(value);
-            if (p == null || !Set.of("system", "temperature", "topP", "maxTokens").containsAll(p.keySet())) throw invalid();
-            if (p.containsKey("system") && !(p.get("system") instanceof Boolean)) throw invalid();
-            for (String name : Set.of("temperature", "topP")) {
-                if (!p.containsKey(name)) continue;
-                com.alibaba.fastjson2.JSONObject range = p.getJSONObject(name);
-                if (range == null || !Set.of("min", "max").equals(range.keySet())
-                        || !(range.get("min") instanceof Number) || !(range.get("max") instanceof Number)) throw invalid();
-                double min = range.getDoubleValue("min"), max = range.getDoubleValue("max");
-                if (!Double.isFinite(min) || !Double.isFinite(max) || min < 0 || max < min || max > (name.equals("topP") ? 1 : 2)) throw invalid();
-            }
-            if (p.containsKey("maxTokens") && !JsonNumbers.isPositiveInteger(p.get("maxTokens"), Integer.MAX_VALUE)) {
+        if (value == null) {
+            throw invalid();
+        }
+        try (JsonParser parser = JSON_FACTORY.createParser(value)) {
+            if (parser.nextToken() != JsonToken.START_OBJECT) {
                 throw invalid();
             }
-        } catch (RuntimeException ex) { throw invalid(); }
+            while (parser.nextToken() == JsonToken.FIELD_NAME) {
+                String name = parser.currentName();
+                JsonToken token = parser.nextToken();
+                switch (name) {
+                    case "system" -> {
+                        if (token != JsonToken.VALUE_TRUE && token != JsonToken.VALUE_FALSE) {
+                            throw invalid();
+                        }
+                    }
+                    case "maxTokens" -> {
+                        if (!isNumeric(token)
+                                || !JsonNumbers.isPositiveInteger(parser.getDecimalValue(), Integer.MAX_VALUE)) {
+                            throw invalid();
+                        }
+                    }
+                    case "temperature" -> validateRange(parser, MAX_TEMPERATURE);
+                    case "topP" -> validateRange(parser, MAX_TOP_P);
+                    default -> throw invalid();
+                }
+            }
+            if (parser.currentToken() != JsonToken.END_OBJECT || parser.nextToken() != null) {
+                throw invalid();
+            }
+        } catch (IOException | NumberFormatException exception) {
+            throw invalid();
+        }
+    }
+
+    private static void validateRange(JsonParser parser, double upperBound) throws IOException {
+        if (parser.currentToken() == JsonToken.VALUE_STRING) {
+            // 已有模型配置允许把参数范围存为嵌套的 JSON 字符串。
+            try (JsonParser nested = JSON_FACTORY.createParser(parser.getText())) {
+                nested.nextToken();
+                validateRangeObject(nested, upperBound);
+                if (nested.nextToken() != null) {
+                    throw invalid();
+                }
+            }
+            return;
+        }
+        validateRangeObject(parser, upperBound);
+    }
+
+    private static void validateRangeObject(JsonParser parser, double upperBound) throws IOException {
+        if (parser.currentToken() != JsonToken.START_OBJECT) {
+            throw invalid();
+        }
+        Double min = null;
+        Double max = null;
+        while (parser.nextToken() == JsonToken.FIELD_NAME) {
+            String name = parser.currentName();
+            if (!isNumeric(parser.nextToken())) {
+                throw invalid();
+            }
+            switch (name) {
+                case "min" -> min = parser.getDoubleValue();
+                case "max" -> max = parser.getDoubleValue();
+                default -> throw invalid();
+            }
+        }
+        if (parser.currentToken() != JsonToken.END_OBJECT || min == null || max == null
+                || !Double.isFinite(min) || !Double.isFinite(max) || min < 0 || max < min || max > upperBound) {
+            throw invalid();
+        }
+    }
+
+    private static boolean isNumeric(JsonToken token) {
+        return token == JsonToken.VALUE_NUMBER_INT || token == JsonToken.VALUE_NUMBER_FLOAT;
     }
 }
