@@ -1,6 +1,8 @@
 package com.yonagi.verse.dao.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import com.yonagi.verse.common.enums.UsageBreakdownDimension;
+import com.yonagi.verse.common.enums.UsageBreakdownOrder;
 import com.yonagi.verse.dao.entity.TokenUsageHourlyAggDO;
 import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Insert;
@@ -67,33 +69,56 @@ public interface TokenUsageHourlyAggMapper extends BaseMapper<TokenUsageHourlyAg
                                            @Param("apiKeyId") Long apiKeyId, @Param("serviceId") Long serviceId,
                                            @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 
-    /** 按所选业务维度聚合全部分组，由服务层完成稳定排序、占比和截断。 */
+    /** 首行是筛选范围的总计，后续是前 N 个分组，rowLimit 包含总计行。 */
     @Select("""
-      <script>SELECT
+      <script>
+      WITH breakdown_rows AS (
+        SELECT
+        <choose>
+          <when test='dimension.name() == "MODEL"'>
+            GROUPING(service_id) AS grand_total, service_id AS dimensionId, model
+          </when>
+          <when test='dimension.name() == "API_KEY"'>
+            GROUPING(api_key_id) AS grand_total, api_key_id AS dimensionId, NULL AS model
+          </when>
+          <otherwise>GROUPING(user_id) AS grand_total, user_id AS dimensionId, NULL AS model</otherwise>
+        </choose>,
+        SUM(input_tokens) AS inputTokens, SUM(output_tokens) AS outputTokens, SUM(total_tokens) AS totalTokens,
+        SUM(success_request_count) AS requestCount, SUM(estimated_cost_fen) AS estimatedCostFen,
+        SUM(exact_usage_count) AS exactUsageCount, SUM(estimated_usage_count) AS estimatedUsageCount,
+        SUM(unknown_usage_count) AS unknownUsageCount, SUM(calculated_count) AS calculatedCount,
+        SUM(unpriced_count) AS unpricedCount, SUM(uncalculable_count) AS uncalculableCount,
+        SUM(not_chargeable_count) AS notChargeableCount
+        FROM t_token_usage_hourly_agg
+        WHERE tenant_id=#{tenantId} AND bucket_start&gt;=#{from} AND bucket_start&lt;#{to}
+        <if test='userId != null'>AND user_id=#{userId}</if>
+        <if test='apiKeyId != null'>AND api_key_id=#{apiKeyId}</if>
+        <if test='serviceId != null'>AND service_id=#{serviceId}</if>
+        <choose>
+          <when test='dimension.name() == "MODEL"'>
+            GROUP BY service_id, model WITH ROLLUP
+            HAVING GROUPING(service_id)=1 OR GROUPING(model)=0
+          </when>
+          <when test='dimension.name() == "API_KEY"'>GROUP BY api_key_id WITH ROLLUP</when>
+          <otherwise>GROUP BY user_id WITH ROLLUP</otherwise>
+        </choose>
+      )
+      SELECT dimensionId, model, inputTokens, outputTokens, totalTokens, requestCount, estimatedCostFen,
+             exactUsageCount, estimatedUsageCount, unknownUsageCount, calculatedCount, unpricedCount,
+             uncalculableCount, notChargeableCount
+      FROM breakdown_rows
+      ORDER BY grand_total DESC,
       <choose>
-        <when test='dimension == "MODEL"'>service_id AS dimensionId,model AS model</when>
-        <when test='dimension == "API_KEY"'>api_key_id AS dimensionId,NULL AS model</when>
-        <otherwise>user_id AS dimensionId,NULL AS model</otherwise>
-      </choose>,
-      SUM(input_tokens) AS inputTokens,SUM(output_tokens) AS outputTokens,SUM(total_tokens) AS totalTokens,
-      SUM(success_request_count) AS requestCount,SUM(estimated_cost_fen) AS estimatedCostFen,
-      SUM(exact_usage_count) AS exactUsageCount,SUM(estimated_usage_count) AS estimatedUsageCount,
-      SUM(unknown_usage_count) AS unknownUsageCount,SUM(calculated_count) AS calculatedCount,
-      SUM(unpriced_count) AS unpricedCount,SUM(uncalculable_count) AS uncalculableCount,
-      SUM(not_chargeable_count) AS notChargeableCount
-      FROM t_token_usage_hourly_agg WHERE tenant_id=#{tenantId} AND bucket_start&gt;=#{from} AND bucket_start&lt;#{to}
-      <if test='userId != null'>AND user_id=#{userId}</if>
-      <if test='apiKeyId != null'>AND api_key_id=#{apiKeyId}</if>
-      <if test='serviceId != null'>AND service_id=#{serviceId}</if>
-      GROUP BY
-      <choose>
-        <when test='dimension == "MODEL"'>service_id,model</when>
-        <when test='dimension == "API_KEY"'>api_key_id</when>
-        <otherwise>user_id</otherwise>
-      </choose></script>
+        <when test='order.name() == "ESTIMATED_COST_FEN"'>estimatedCostFen</when>
+        <when test='order.name() == "REQUEST_COUNT"'>requestCount</when>
+        <otherwise>totalTokens</otherwise>
+      </choose> DESC, dimensionId IS NULL, dimensionId
+      <if test='dimension.name() == "MODEL"'>, CAST(CONVERT(COALESCE(model, '') USING utf16) AS BINARY)</if>
+      LIMIT #{rowLimit}
+      </script>
       """)
-    List<UsageBreakdownRow> summarizeBreakdown(@Param("dimension") String dimension,
-        @Param("tenantId") Long tenantId, @Param("userId") Long userId,
+    List<UsageBreakdownRow> summarizeRankedBreakdown(@Param("dimension") UsageBreakdownDimension dimension,
+        @Param("order") UsageBreakdownOrder order, @Param("tenantId") Long tenantId, @Param("userId") Long userId,
         @Param("apiKeyId") Long apiKeyId, @Param("serviceId") Long serviceId,
-        @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+        @Param("from") LocalDateTime from, @Param("to") LocalDateTime to, @Param("rowLimit") int rowLimit);
 }

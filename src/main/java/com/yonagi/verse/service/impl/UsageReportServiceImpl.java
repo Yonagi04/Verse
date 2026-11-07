@@ -32,10 +32,13 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
+import java.math.RoundingMode;
 import java.time.*;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
 import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
@@ -96,29 +99,42 @@ public class UsageReportServiceImpl implements UsageReportService {
     public UsageBreakdownRespDTO breakdown(UserContext context, Long tenantId, UsageGranularity granularity,
         LocalDateTime from, LocalDateTime to, Long userId, Long apiKeyId, Long serviceId,
         UsageBreakdownDimension dimension, UsageBreakdownOrder order, int limit) {
-        UsageReportFilter filter=resolveFilter(context,tenantId,granularity,from,to,userId,apiKeyId,serviceId);
+        UsageReportFilter filter = resolveFilter(context, tenantId, granularity, from, to, userId, apiKeyId, serviceId);
         reportAccess.checkBreakdown(filter, dimension, limit);
-        List<UsageBreakdownRow> rows=aggregateMapper.summarizeBreakdown(dimension.name(),tenantId,filter.userId(),
-                filter.apiKeyId(),filter.serviceId(),filter.from(),filter.to());
-        Map<Long,String> labels=loadLabels(dimension,tenantId,rows);
-        Metrics total=new Metrics(); rows.forEach(total::add);
-        Comparator<UsageBreakdownRow> comparator=Comparator.<UsageBreakdownRow, BigDecimal>comparing(r->metric(r,order),BigDecimal::compareTo).reversed()
-                .thenComparing(UsageBreakdownRow::getDimensionId,Comparator.nullsLast(Long::compareTo))
-                .thenComparing(r->Objects.toString(r.getModel(),""));
-        rows.sort(comparator);
-        BigDecimal denominator=metric(total,order);
-        List<UsageBreakdownRespDTO.Item> items=rows.stream().limit(limit).map(row->{
-            UsageBreakdownRespDTO.Item item=new UsageBreakdownRespDTO.Item();
-            item.setId(dimension==UsageBreakdownDimension.MODEL
-                    ? row.getDimensionId()+":"+Objects.toString(row.getModel(),"") : String.valueOf(row.getDimensionId()));
-            item.setLabel(dimension==UsageBreakdownDimension.MODEL?Objects.toString(row.getModel(),"模型 "+row.getDimensionId()):labels.getOrDefault(row.getDimensionId(),fallbackLabel(dimension,row.getDimensionId())));
-            item.setMetrics(Metrics.from(row).toDto());
-            item.setRatio(denominator.signum()==0?"0":metric(row,order).divide(denominator,8,java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString());
+        List<UsageBreakdownRow> rows = aggregateMapper.summarizeRankedBreakdown(dimension, order, filter.tenantId(),
+                filter.userId(), filter.apiKeyId(), filter.serviceId(), filter.from(), filter.to(), limit + 1);
+        UsageBreakdownRow total = new UsageBreakdownRow();
+        if (!rows.isEmpty()) {
+            total = rows.getFirst();
+            rows = rows.subList(1, rows.size());
+        }
+        Map<Long, String> labels = loadLabels(dimension, filter.tenantId(), rows);
+        BigDecimal denominator = breakdownMetric(total, order);
+        List<UsageBreakdownRespDTO.Item> items = rows.stream().map(row -> {
+            UsageBreakdownRespDTO.Item item = new UsageBreakdownRespDTO.Item();
+            Long id = row.getDimensionId();
+            if (dimension == UsageBreakdownDimension.MODEL) {
+                item.setId(id + ":" + Objects.toString(row.getModel(), ""));
+                item.setLabel(Objects.toString(row.getModel(), "模型 " + id));
+            } else {
+                item.setId(String.valueOf(id));
+                item.setLabel(labels.getOrDefault(id, fallbackLabel(dimension, id)));
+            }
+            item.setMetrics(breakdownMetrics(row));
+            item.setRatio(denominator.signum() == 0 ? "0" : breakdownMetric(row, order)
+                    .divide(denominator, 8, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString());
             return item;
         }).toList();
-        UsageBreakdownRespDTO response=new UsageBreakdownRespDTO(); response.setDimension(dimension.name().toLowerCase());
-        response.setOrderBy(switch(order){case TOTAL_TOKENS->"totalTokens";case ESTIMATED_COST_FEN->"estimatedCostFen";case REQUEST_COUNT->"requestCount";});
-        response.setTotal(total.toDto()); response.setItems(items); return response;
+        UsageBreakdownRespDTO response = new UsageBreakdownRespDTO();
+        response.setDimension(dimension.name().toLowerCase(Locale.ROOT));
+        response.setOrderBy(switch (order) {
+            case TOTAL_TOKENS -> "totalTokens";
+            case ESTIMATED_COST_FEN -> "estimatedCostFen";
+            case REQUEST_COUNT -> "requestCount";
+        });
+        response.setTotal(breakdownMetrics(total));
+        response.setItems(items);
+        return response;
     }
 
     @Override
@@ -150,16 +166,56 @@ public class UsageReportServiceImpl implements UsageReportService {
     }
 
 
-    private Map<Long,String> loadLabels(UsageBreakdownDimension dimension,Long tenantId,List<UsageBreakdownRow> rows) {
-        Set<Long> ids=rows.stream().map(UsageBreakdownRow::getDimensionId).filter(Objects::nonNull).collect(java.util.stream.Collectors.toSet());
-        if(ids.isEmpty()||dimension==UsageBreakdownDimension.MODEL)return Map.of();
-        if(dimension==UsageBreakdownDimension.API_KEY)return apiKeyMapper.selectList(Wrappers.lambdaQuery(ApiKeyDO.class).eq(ApiKeyDO::getTenantId,tenantId).in(ApiKeyDO::getApiKeyId,ids)).stream().collect(java.util.stream.Collectors.toMap(ApiKeyDO::getApiKeyId,k->k.getName()+" ("+k.getKeyPrefix()+")"));
-        return userMapper.selectList(Wrappers.lambdaQuery(UserDO.class).in(UserDO::getUserId,ids)).stream().collect(java.util.stream.Collectors.toMap(UserDO::getUserId,UsageReportServiceImpl::displayUser));
+    private Map<Long, String> loadLabels(UsageBreakdownDimension dimension, Long tenantId,
+                                         List<UsageBreakdownRow> rows) {
+        if (dimension == UsageBreakdownDimension.MODEL || rows.isEmpty()) {
+            return Map.of();
+        }
+        Set<Long> ids = rows.stream().map(UsageBreakdownRow::getDimensionId).collect(Collectors.toSet());
+        if (dimension == UsageBreakdownDimension.API_KEY) {
+            return apiKeyMapper.selectList(Wrappers.lambdaQuery(ApiKeyDO.class)
+                            .select(ApiKeyDO::getApiKeyId, ApiKeyDO::getName, ApiKeyDO::getKeyPrefix)
+                            .eq(ApiKeyDO::getTenantId, tenantId).in(ApiKeyDO::getApiKeyId, ids))
+                    .stream().collect(Collectors.toMap(ApiKeyDO::getApiKeyId,
+                            key -> key.getName() + " (" + key.getKeyPrefix() + ")", (first, duplicate) -> first));
+        }
+        return userMapper.selectList(Wrappers.lambdaQuery(UserDO.class)
+                        .select(UserDO::getUserId, UserDO::getUsername, UserDO::getNickname)
+                        .in(UserDO::getUserId, ids))
+                .stream().collect(Collectors.toMap(UserDO::getUserId,
+                        user -> Objects.toString(displayUser(user), fallbackLabel(dimension, user.getUserId())),
+                        (first, duplicate) -> first));
     }
     private static String displayUser(UserDO user){return user.getNickname()==null||user.getNickname().isBlank()?user.getUsername():user.getNickname()+" ("+user.getUsername()+")";}
-    private static String fallbackLabel(UsageBreakdownDimension d,Long id){return (d==UsageBreakdownDimension.API_KEY?"API Key ":"成员 ")+id;}
-    private static BigDecimal metric(UsageBreakdownRow r,UsageBreakdownOrder o){return switch(o){case TOTAL_TOKENS->BigDecimal.valueOf(Metrics.n(r.getTotalTokens()));case REQUEST_COUNT->BigDecimal.valueOf(Metrics.n(r.getRequestCount()));case ESTIMATED_COST_FEN->r.getEstimatedCostFen()==null?BigDecimal.ZERO:r.getEstimatedCostFen();};}
-    private static BigDecimal metric(Metrics r,UsageBreakdownOrder o){return switch(o){case TOTAL_TOKENS->BigDecimal.valueOf(r.total);case REQUEST_COUNT->BigDecimal.valueOf(r.requests);case ESTIMATED_COST_FEN->r.cost;};}
+    private static String fallbackLabel(UsageBreakdownDimension dimension, Long id) {
+        return (dimension == UsageBreakdownDimension.API_KEY ? "API Key " : "成员 ") + id;
+    }
+
+    private static BigDecimal breakdownMetric(UsageBreakdownRow row, UsageBreakdownOrder order) {
+        return switch (order) {
+            case TOTAL_TOKENS -> new BigDecimal(Objects.requireNonNullElse(row.getTotalTokens(), BigInteger.ZERO));
+            case REQUEST_COUNT -> new BigDecimal(Objects.requireNonNullElse(row.getRequestCount(), BigInteger.ZERO));
+            case ESTIMATED_COST_FEN -> Objects.requireNonNullElse(row.getEstimatedCostFen(), BigDecimal.ZERO);
+        };
+    }
+
+    private static UsageReportRespDTO.UsageMetrics breakdownMetrics(UsageBreakdownRow row) {
+        UsageReportRespDTO.UsageMetrics metrics = new UsageReportRespDTO.UsageMetrics();
+        metrics.setInputTokens(Objects.toString(row.getInputTokens(), "0"));
+        metrics.setOutputTokens(Objects.toString(row.getOutputTokens(), "0"));
+        metrics.setTotalTokens(Objects.toString(row.getTotalTokens(), "0"));
+        metrics.setRequestCount(Objects.toString(row.getRequestCount(), "0"));
+        metrics.setEstimatedCostFen(Objects.requireNonNullElse(row.getEstimatedCostFen(), BigDecimal.ZERO)
+                .toPlainString());
+        metrics.setExactUsageCount(Objects.toString(row.getExactUsageCount(), "0"));
+        metrics.setEstimatedUsageCount(Objects.toString(row.getEstimatedUsageCount(), "0"));
+        metrics.setUnknownUsageCount(Objects.toString(row.getUnknownUsageCount(), "0"));
+        metrics.setCalculatedCount(Objects.toString(row.getCalculatedCount(), "0"));
+        metrics.setUnpricedCount(Objects.toString(row.getUnpricedCount(), "0"));
+        metrics.setUncalculableCount(Objects.toString(row.getUncalculableCount(), "0"));
+        metrics.setNotChargeableCount(Objects.toString(row.getNotChargeableCount(), "0"));
+        return metrics;
+    }
 
     @Override
     @QueryCached(keyPrefix = USAGE_REPORT_DASHBOARD_KEY, seconds = MINUTES_10, access = UsageReportAccessPolicy.class,
@@ -207,7 +263,6 @@ public class UsageReportServiceImpl implements UsageReportService {
             exact+=n(r.getExactUsageCount()); estimated+=n(r.getEstimatedUsageCount()); unknown+=n(r.getUnknownUsageCount());
             calculated+=n(r.getCalculatedCount()); unpriced+=n(r.getUnpricedCount()); uncalculable+=n(r.getUncalculableCount()); notChargeable+=n(r.getNotChargeableCount());
             cost=cost.add(r.getEstimatedCostFen()==null?BigDecimal.ZERO:r.getEstimatedCostFen()); }
-        void add(UsageBreakdownRow r) { add(from(r)); }
         void add(Metrics r) { input+=r.input; output+=r.output; total+=r.total; requests+=r.requests; exact+=r.exact; estimated+=r.estimated;
             unknown+=r.unknown; calculated+=r.calculated; unpriced+=r.unpriced; uncalculable+=r.uncalculable; notChargeable+=r.notChargeable; cost=cost.add(r.cost); }
         UsageReportRespDTO.UsageMetrics toDto() { UsageReportRespDTO.UsageMetrics d=new UsageReportRespDTO.UsageMetrics(); fill(d); return d; }
@@ -217,6 +272,5 @@ public class UsageReportServiceImpl implements UsageReportService {
             d.setEstimatedUsageCount(String.valueOf(estimated)); d.setUnknownUsageCount(String.valueOf(unknown)); d.setCalculatedCount(String.valueOf(calculated));
             d.setUnpricedCount(String.valueOf(unpriced)); d.setUncalculableCount(String.valueOf(uncalculable)); d.setNotChargeableCount(String.valueOf(notChargeable)); }
         static long n(Long v) { return v==null?0:v; }
-        static Metrics from(UsageBreakdownRow r){Metrics m=new Metrics();m.input=n(r.getInputTokens());m.output=n(r.getOutputTokens());m.total=n(r.getTotalTokens());m.requests=n(r.getRequestCount());m.exact=n(r.getExactUsageCount());m.estimated=n(r.getEstimatedUsageCount());m.unknown=n(r.getUnknownUsageCount());m.calculated=n(r.getCalculatedCount());m.unpriced=n(r.getUnpricedCount());m.uncalculable=n(r.getUncalculableCount());m.notChargeable=n(r.getNotChargeableCount());m.cost=r.getEstimatedCostFen()==null?BigDecimal.ZERO:r.getEstimatedCostFen();return m;}
     }
 }

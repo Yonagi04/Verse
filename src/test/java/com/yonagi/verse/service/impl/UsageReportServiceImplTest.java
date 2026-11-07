@@ -1,5 +1,8 @@
 package com.yonagi.verse.service.impl;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.yonagi.verse.service.reporting.UsageReportAccessPolicy;
 
 import com.yonagi.verse.common.config.UsageReportingProperties;
@@ -7,6 +10,7 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.UsageBreakdownDimension;
 import com.yonagi.verse.common.enums.UsageBreakdownOrder;
 import com.yonagi.verse.common.enums.UsageGranularity;
+import com.yonagi.verse.common.enums.UsageReportingErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.dao.mapper.ApiKeyMapper;
 import com.yonagi.verse.dao.mapper.LlmServiceMapper;
@@ -17,12 +21,17 @@ import com.yonagi.verse.dao.entity.UserDO;
 import com.yonagi.verse.dao.projection.UsageBreakdownRow;
 import com.yonagi.verse.dto.resp.UsageBreakdownRespDTO;
 import com.yonagi.verse.service.UserTenantService;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -107,23 +116,32 @@ class UsageReportServiceImplTest {
         when(llmServiceMapper.exists(any())).thenReturn(true);when(aggregateMapper.summarizeHours(20L,11L,30L,40L,from,to)).thenReturn(List.of());
         service.query(new UserContext().setUserId(10L),20L,UsageGranularity.DAY,from,to,11L,30L,40L);
         verify(aggregateMapper).summarizeHours(20L,11L,30L,40L,from,to);
+        service.breakdown(new UserContext().setUserId(10L), 20L, UsageGranularity.DAY, from, to, 11L, 30L, 40L,
+                UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS, 100);
+        verify(aggregateMapper).summarizeRankedBreakdown(
+                UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS, 20L, 11L, 30L, 40L, from, to, 101);
     }
 
     @Test
-    void adminBreakdownUsesDeterministicTieOrderAndZeroRatios() {
-        when(userTenantService.getRoleByUserIdAndTenantId(10L,20L)).thenReturn("ADMIN");
-        UsageBreakdownRow later=row(2L,"z-model",0,0,"0.000000000000000001");
-        UsageBreakdownRow first=row(1L,"a-model",0,0,"0.000000000000000001");
-        when(aggregateMapper.summarizeBreakdown("MODEL",20L,null,null,null,from,to)).thenReturn(new java.util.ArrayList<>(List.of(later,first)));
-        UsageBreakdownRespDTO result=service.breakdown(new UserContext().setUserId(10L),20L,UsageGranularity.DAY,
-                from,to,null,null,null,UsageBreakdownDimension.MODEL,UsageBreakdownOrder.TOTAL_TOKENS,10);
-        assertEquals(List.of("1:a-model","2:z-model"),result.getItems().stream().map(UsageBreakdownRespDTO.Item::getId).toList());
-        assertTrue(result.getItems().stream().allMatch(item->"0".equals(item.getRatio())));
-        assertEquals("0.000000000000000002",result.getTotal().getEstimatedCostFen());
+    void breakdownKeepsDatabaseOrderAndZeroRatios() {
+        when(userTenantService.getRoleByUserIdAndTenantId(10L, 20L)).thenReturn("ADMIN");
+        UsageBreakdownRow total = row(null, null, 0, 0, "0.000000000000000002");
+        UsageBreakdownRow first = row(1L, "a-model", 0, 0, "0.000000000000000001");
+        UsageBreakdownRow second = row(2L, "z-model", 0, 0, "0.000000000000000001");
+        when(aggregateMapper.summarizeRankedBreakdown(UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS,
+                20L, null, null, null, from, to, 11)).thenReturn(List.of(total, first, second));
+        UsageBreakdownRespDTO result = service.breakdown(new UserContext().setUserId(10L), 20L, UsageGranularity.DAY,
+                from, to, null, null, null, UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS, 10);
+        assertEquals(List.of("1:a-model", "2:z-model"),
+                result.getItems().stream().map(UsageBreakdownRespDTO.Item::getId).toList());
+        assertTrue(result.getItems().stream().allMatch(item -> "0".equals(item.getRatio())));
+        assertEquals("0.000000000000000002", result.getTotal().getEstimatedCostFen());
     }
 
     @Test
     void adminCanRankMembersWithSafeLabels() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), "report-members"),
+                UserDO.class);
         UserMapper userMapper=mock(UserMapper.class);
         service=new UsageReportServiceImpl(aggregateMapper,
                 userTenantService,
@@ -133,11 +151,106 @@ class UsageReportServiceImplTest {
                 userMapper,
                 new UsageReportAccessPolicy(userTenantService, new UsageReportingProperties(), mock(ApiKeyMapper.class), mock(LlmServiceMapper.class)));
         when(userTenantService.getRoleByUserIdAndTenantId(10L,20L)).thenReturn("ADMIN");
-        when(aggregateMapper.summarizeBreakdown("MEMBER",20L,null,null,null,from,to)).thenReturn(new java.util.ArrayList<>(List.of(row(11L,null,5,1,"1"))));
-        UserDO user=new UserDO();user.setUserId(11L);user.setUsername("alice");user.setNickname("Alice");when(userMapper.selectList(any())).thenReturn(List.of(user));
-        var result=service.breakdown(new UserContext().setUserId(10L),20L,UsageGranularity.DAY,from,to,null,null,null,
-                UsageBreakdownDimension.MEMBER,UsageBreakdownOrder.REQUEST_COUNT,10);
-        assertEquals("Alice (alice)",result.getItems().get(0).getLabel());assertEquals("1",result.getItems().get(0).getRatio());
+        when(aggregateMapper.summarizeRankedBreakdown(UsageBreakdownDimension.MEMBER, UsageBreakdownOrder.REQUEST_COUNT,
+                20L, null, null, null, from, to, 2))
+                .thenReturn(List.of(row(null, null, 6, 1, "3"), row(11L, null, 5, 1, "1")));
+        UserDO user = new UserDO();
+        user.setUserId(11L);
+        user.setUsername("alice");
+        user.setNickname("Alice");
+        when(userMapper.selectList(any())).thenAnswer(invocation -> {
+            AbstractWrapper<?, ?, ?> query = invocation.getArgument(0);
+            query.getSqlSegment();
+            assertEquals(List.of(11L), List.copyOf(query.getParamNameValuePairs().values()));
+            return List.of(user);
+        });
+        UsageBreakdownRespDTO result = service.breakdown(new UserContext().setUserId(10L), 20L, UsageGranularity.DAY,
+                from, to, null, null, null, UsageBreakdownDimension.MEMBER, UsageBreakdownOrder.REQUEST_COUNT, 1);
+        assertEquals(1, result.getItems().size());
+        assertEquals("Alice (alice)", result.getItems().getFirst().getLabel());
+        assertEquals("1", result.getItems().getFirst().getRatio());
+        assertEquals("6", result.getTotal().getTotalTokens());
+    }
+
+    @Test
+    void apiKeyBreakdownUsesFullCostTotalAndOnlyLoadsRankedTenantLabels() {
+        TableInfoHelper.initTableInfo(new MapperBuilderAssistant(new MybatisConfiguration(), "report-api-keys"),
+                ApiKeyDO.class);
+        ApiKeyMapper keys = mock(ApiKeyMapper.class);
+        LlmServiceMapper models = mock(LlmServiceMapper.class);
+        service = new UsageReportServiceImpl(aggregateMapper, userTenantService, new UsageReportingProperties(),
+                keys, models, mock(UserMapper.class),
+                new UsageReportAccessPolicy(userTenantService, new UsageReportingProperties(), keys, models));
+        when(userTenantService.getRoleByUserIdAndTenantId(10L, 20L)).thenReturn("MEMBER");
+        when(aggregateMapper.summarizeRankedBreakdown(UsageBreakdownDimension.API_KEY,
+                UsageBreakdownOrder.ESTIMATED_COST_FEN, 20L, 10L, null, null, from, to, 3))
+                .thenReturn(List.of(row(null, null, 5, 3, "0.000000000000000017"),
+                        row(31L, null, 3, 1, "0.000000000000000011"),
+                        row(32L, null, 1, 1, "0.000000000000000003")));
+        ApiKeyDO key = new ApiKeyDO();
+        key.setApiKeyId(31L);
+        key.setName("报表");
+        key.setKeyPrefix("prefix");
+        when(keys.selectList(any())).thenAnswer(invocation -> {
+            AbstractWrapper<?, ?, ?> query = invocation.getArgument(0);
+            assertTrue(query.getSqlSegment().contains("tenant_id"));
+            assertEquals(Set.of(20L, 31L, 32L), Set.copyOf(query.getParamNameValuePairs().values()));
+            return List.of(key);
+        });
+
+        UsageBreakdownRespDTO result = service.breakdown(new UserContext().setUserId(10L), 20L, UsageGranularity.DAY,
+                from, to, null, null, null, UsageBreakdownDimension.API_KEY, UsageBreakdownOrder.ESTIMATED_COST_FEN, 2);
+
+        assertEquals(List.of("报表 (prefix)", "API Key 32"),
+                result.getItems().stream().map(UsageBreakdownRespDTO.Item::getLabel).toList());
+        assertEquals(List.of("0.64705882", "0.17647059"),
+                result.getItems().stream().map(UsageBreakdownRespDTO.Item::getRatio).toList());
+        assertEquals("0.000000000000000017", result.getTotal().getEstimatedCostFen());
+    }
+
+    @Test
+    void breakdownKeepsIntegerTotalsWiderThanOneBigint() {
+        when(userTenantService.getRoleByUserIdAndTenantId(10L, 20L)).thenReturn("ADMIN");
+        UsageBreakdownRow total = row(null, null, 0, 0, "0");
+        total.setTotalTokens(BigInteger.valueOf(Long.MAX_VALUE).multiply(BigInteger.TWO));
+        when(aggregateMapper.summarizeRankedBreakdown(UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS,
+                20L, null, null, null, from, to, 2))
+                .thenReturn(List.of(total, row(1L, "model", Long.MAX_VALUE, 1, "0")));
+
+        UsageBreakdownRespDTO result = service.breakdown(new UserContext().setUserId(10L), 20L, UsageGranularity.DAY,
+                from, to, null, null, null, UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS, 1);
+
+        assertEquals("18446744073709551614", result.getTotal().getTotalTokens());
+        assertEquals("9223372036854775807", result.getItems().getFirst().getMetrics().getTotalTokens());
+        assertEquals("0.5", result.getItems().getFirst().getRatio());
+    }
+
+    @Test
+    void emptyBreakdownReturnsZeroTotalAndNoRankedItems() {
+        when(userTenantService.getRoleByUserIdAndTenantId(10L, 20L)).thenReturn("ADMIN");
+        when(aggregateMapper.summarizeRankedBreakdown(UsageBreakdownDimension.MEMBER, UsageBreakdownOrder.REQUEST_COUNT,
+                20L, null, null, null, from, to, 2)).thenReturn(List.of());
+
+        UsageBreakdownRespDTO result = service.breakdown(new UserContext().setUserId(10L), 20L, UsageGranularity.DAY,
+                from, to, null, null, null, UsageBreakdownDimension.MEMBER, UsageBreakdownOrder.REQUEST_COUNT, 1);
+
+        assertTrue(result.getItems().isEmpty());
+        assertEquals("0", result.getTotal().getTotalTokens());
+        assertEquals("0", result.getTotal().getEstimatedCostFen());
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {0, 101})
+    void breakdownRejectsInvalidLimitBeforeReadingTheProjection(int limit) {
+        when(userTenantService.getRoleByUserIdAndTenantId(10L, 20L)).thenReturn("ADMIN");
+        UserContext context = new UserContext().setUserId(10L);
+
+        ClientException failure = assertThrows(ClientException.class, () -> service.breakdown(
+                context, 20L, UsageGranularity.DAY, from, to, null, null, null,
+                UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS, limit));
+
+        assertEquals(UsageReportingErrorCodeEnum.FILTER_INVALID.code(), failure.getErrorCode());
+        verifyNoInteractions(aggregateMapper);
     }
 
     @Test
@@ -157,10 +270,14 @@ class UsageReportServiceImplTest {
         assertEquals("A000951",assertThrows(ClientException.class,()->service.query(context,20L,UsageGranularity.DAY,from,from.plusDays(367),null,null,null)).getErrorCode());
     }
 
-    private UsageBreakdownRow row(Long id,String model,long tokens,long requests,String cost) {
-        UsageBreakdownRow row=new UsageBreakdownRow();row.setDimensionId(id);row.setModel(model);row.setInputTokens(tokens);
-        row.setOutputTokens(0L);row.setTotalTokens(tokens);row.setRequestCount(requests);row.setEstimatedCostFen(new BigDecimal(cost));
-        row.setExactUsageCount(0L);row.setEstimatedUsageCount(0L);row.setUnknownUsageCount(0L);row.setCalculatedCount(0L);
-        row.setUnpricedCount(0L);row.setUncalculableCount(0L);row.setNotChargeableCount(0L);return row;
+    private UsageBreakdownRow row(Long id, String model, long tokens, long requests, String cost) {
+        UsageBreakdownRow row = new UsageBreakdownRow();
+        row.setDimensionId(id);
+        row.setModel(model);
+        row.setInputTokens(BigInteger.valueOf(tokens));
+        row.setTotalTokens(BigInteger.valueOf(tokens));
+        row.setRequestCount(BigInteger.valueOf(requests));
+        row.setEstimatedCostFen(new BigDecimal(cost));
+        return row;
     }
 }
