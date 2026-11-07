@@ -27,7 +27,7 @@ public class DeviceUtil {
             String browser = ua.getBrowser() != null ? ua.getBrowser().getName() : "Unknown";
             return os + " " + browser;
         } catch (Exception e) {
-            log.warn("Failed to parse User-Agent: {}", userAgent, e);
+            log.warn("Failed to parse User-Agent: type={}", e.getClass().getSimpleName());
             return "未知设备";
         }
     }

@@ -436,7 +436,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, UserDO> implements 
         int update = baseMapper.update(null, updateWrapper);
         userCostAlertCancellation.contactsChanged(userId, phoneChanged, emailChanged);
         if (update < 0) {
-            log.error("Failed to update user profile for userId: {}, requestParam: {}", userId, requestParam);
+            log.error("Failed to update user profile: userId={}, affectedRows={}", userId, update);
             throw new ServerException(UserErrorCodeEnum.USER_UPDATE_ERROR);
         }
 
