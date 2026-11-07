@@ -337,8 +337,10 @@ public class PlaygroundServiceImpl implements PlaygroundService {
             if (error instanceof com.yonagi.verse.common.convention.exception.AbstractException business
                     && com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(business)) {
                 payload.put("code", business.getErrorCode()); payload.put("message", business.getErrorMessage());
-                if (business instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget)
-                    payload.put("data", com.yonagi.verse.common.web.PlaygroundCostError.data(budget, turn.getRequestId()));
+                if (business instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) {
+                    payload.put("data",
+                            com.yonagi.verse.service.playground.PlaygroundCostError.data(budget, turn.getRequestId()));
+                }
             }
             return Mono.just(event("error", payload));
         });

@@ -164,7 +164,7 @@ public class PlaygroundController {
         Result<Object> result = new Result<>().setCode(error.getErrorCode())
                 .setMessage(error.getErrorMessage());
         if (error instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) {
-            result.setData(com.yonagi.verse.common.web.PlaygroundCostError.data(budget, budget.getRequestId()));
+            result.setData(com.yonagi.verse.service.playground.PlaygroundCostError.data(budget, budget.getRequestId()));
         } else if (error instanceof PlaygroundRateLimiter.LimitException limit) {
             result.setData(Map.of("reason", limit.getReason(),
                     "retryAfterSeconds", limit.getRetryAfterSeconds()));
