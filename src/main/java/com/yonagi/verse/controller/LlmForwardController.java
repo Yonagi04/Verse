@@ -86,13 +86,25 @@ public class LlmForwardController {
                                          @RequestParam(value = "temperature", required = false) String temperature) {
         String requestId = String.valueOf(SnowflakeIdUtil.nextId());
         try {
-            if (file.getSize() > maxUploadBytes) throw new ClientException(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE);
-            if (file.getContentType() == null) throw new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED);
+            if (file.getSize() > maxUploadBytes) {
+                throw new ClientException(LlmForwardErrorCodeEnum.REQUEST_TOO_LARGE);
+            }
+            if (file.getContentType() == null) {
+                throw new ClientException(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED);
+            }
             Map<String, String> fields = new LinkedHashMap<>();
-            if (format != null) fields.put("response_format", format);
-            if (language != null) fields.put("language", language);
-            if (prompt != null) fields.put("prompt", prompt);
-            if (temperature != null) fields.put("temperature", temperature);
+            if (format != null) {
+                fields.put("response_format", format);
+            }
+            if (language != null) {
+                fields.put("language", language);
+            }
+            if (prompt != null) {
+                fields.put("prompt", prompt);
+            }
+            if (temperature != null) {
+                fields.put("temperature", temperature);
+            }
             AdapterExchange.MultipartRequest request = new AdapterExchange.MultipartRequest(
                     ModelOperation.TRANSCRIPTION, fields, file.getOriginalFilename(),
                     MediaType.parseMediaType(file.getContentType()), file.getBytes());
@@ -182,8 +194,12 @@ public class LlmForwardController {
 
     private String toNamedSse(ServerSentEvent<String> sse) {
         StringBuilder frame = new StringBuilder();
-        if (sse.id() != null) frame.append("id: ").append(sse.id()).append('\n');
-        if (sse.event() != null) frame.append("event: ").append(sse.event()).append('\n');
+        if (sse.id() != null) {
+            frame.append("id: ").append(sse.id()).append('\n');
+        }
+        if (sse.event() != null) {
+            frame.append("event: ").append(sse.event()).append('\n');
+        }
         if (sse.data() != null) {
             String normalized = sse.data().replace("\r\n", "\n").replace('\r', '\n');
             frame.append("data: ").append(normalized.replace("\n", "\ndata: ")).append('\n');

@@ -237,7 +237,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         if (costBudgetService.hasUpstream(requestId)) {
             publishTokenUsage(ctx, tenant.getTenantId(), service, null, requestId, LlmAuditEvent.STATUS_FAIL,
                     TokenUsageEvent.SOURCE_UNKNOWN, start, operation, InvocationSource.API_KEY, costBudgetService.outcome(requestId));
-        } else costBudgetService.abandon(ctx, requestId);
+        } else {
+            costBudgetService.abandon(ctx, requestId);
+        }
     }
 
     @Override
@@ -279,12 +281,16 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 .eq(LlmServiceDO::getServiceId, serviceId)
                 .eq(LlmServiceDO::getStatus, 1)
                 .eq(LlmServiceDO::getDelFlag, 0));
-        if (service == null) throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_CONFIGURED);
+        if (service == null) {
+            throw new ClientException(LlmForwardErrorCodeEnum.MODEL_NOT_CONFIGURED);
+        }
         JSONArray safeMessages = new JSONArray();
         for (ChatMessage message : messages) {
             if (message == null || !("user".equals(message.role()) || "assistant".equals(message.role())
                     || "system".equals(message.role()))
-                    || message.content() == null) throw new IllegalArgumentException("PlayGround 消息无效");
+                    || message.content() == null) {
+                throw new IllegalArgumentException("PlayGround 消息无效");
+            }
             JSONObject safe = new JSONObject();
             safe.put("role", message.role());
             safe.put("content", message.content());
@@ -295,12 +301,20 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         body.put("messages", safeMessages);
         body.put("stream", true);
         if (parameters == null || !java.util.Set.of("temperature", "top_p", "max_tokens")
-                .containsAll(parameters.keySet())) throw new IllegalArgumentException("PlayGround 参数无效");
+                .containsAll(parameters.keySet())) {
+            throw new IllegalArgumentException("PlayGround 参数无效");
+        }
         // PlayGround 独立校验自己的参数范围，不复用普通 API 的输出限额。
         JSONObject config = new JSONObject();
-        if (parameters.containsKey("temperature")) config.put("temperature", parameters.get("temperature"));
-        if (parameters.containsKey("top_p")) config.put("topP", parameters.get("top_p"));
-        if (parameters.containsKey("max_tokens")) config.put("maxTokens", parameters.get("max_tokens"));
+        if (parameters.containsKey("temperature")) {
+            config.put("temperature", parameters.get("temperature"));
+        }
+        if (parameters.containsKey("top_p")) {
+            config.put("topP", parameters.get("top_p"));
+        }
+        if (parameters.containsKey("max_tokens")) {
+            config.put("maxTokens", parameters.get("max_tokens"));
+        }
         body.putAll(PlaygroundConfiguration.parameters(config, PlaygroundConfiguration.capabilities(service,
                 modelResolver.protocolFor(service, ModelOperation.CHAT_COMPLETIONS))));
         // 原生适配器有严格字段白名单，不能携带 OpenAI 专用 stream_options。
@@ -354,7 +368,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         AtomicBoolean subscribed = new AtomicBoolean();
         // API 许可只能消费一次，避免冷 Flux 二次订阅重复执行上游。
         return Flux.defer(() -> {
-            if (!subscribed.compareAndSet(false, true)) return Flux.error(new IllegalStateException("stream already subscribed"));
+            if (!subscribed.compareAndSet(false, true)) {
+                return Flux.error(new IllegalStateException("stream already subscribed"));
+            }
             try { costBudgetService.subscribe(requestId); }
             catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); return Flux.error(rejected); }
             long start = requestStartedAt.toEpochMilli();
@@ -427,7 +443,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         }
         AtomicBoolean subscribed = new AtomicBoolean();
         return Flux.defer(() -> {
-            if (!subscribed.compareAndSet(false, true)) return Flux.error(new IllegalStateException("stream already subscribed"));
+            if (!subscribed.compareAndSet(false, true)) {
+                return Flux.error(new IllegalStateException("stream already subscribed"));
+            }
             try { costBudgetService.subscribe(requestId); }
             catch (RuntimeException rejected) { costBudgetService.abandon(ctx, requestId); return Flux.error(rejected); }
             AtomicBoolean firstEvent = new AtomicBoolean();
@@ -446,7 +464,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                             try {
                                 JSONObject envelope = JSON.parseObject(event.data());
                                 JSONObject response = envelope == null ? null : envelope.getJSONObject("response");
-                                if (response != null) terminal.set(response);
+                                if (response != null) {
+                                    terminal.set(response);
+                                }
                             } catch (RuntimeException ignored) {
                                 // 后续损坏的事件不能抹掉已经收到的终态用量证据。
                             }
@@ -457,7 +477,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                     })
                     .publishOn(Schedulers.boundedElastic())
                     .doOnNext(event -> {
-                        if (firstEvent.compareAndSet(false, true)) circuitBreaker.recordSuccess(serviceId);
+                        if (firstEvent.compareAndSet(false, true)) {
+                            circuitBreaker.recordSuccess(serviceId);
+                        }
                     })
                     .doOnComplete(() -> finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
                             requestBody, requestId, start, terminal.get(), terminalStatus.get(), UpstreamExecutionOutcome.UNKNOWN))
@@ -465,7 +487,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                             requestBody, requestId, start, terminal.get(), LlmAuditEvent.STATUS_ABORTED, UpstreamExecutionOutcome.UNKNOWN))
                     .doOnError(error -> {
                         costBudgetService.noteFailure(requestId, "UPSTREAM", errorCode(error));
-                        if (!firstEvent.get() && !finalized.get()) circuitBreaker.recordFailure(serviceId);
+                        if (!firstEvent.get() && !finalized.get()) {
+                            circuitBreaker.recordFailure(serviceId);
+                        }
                         finalizeResponsesStreamOnce(finalized, ctx, tenant, service, rateCtx,
                                 requestBody, requestId, start, terminal.get(), LlmAuditEvent.STATUS_FAIL,
                                 streamFailureOutcome(error, receivedEvent.get()));
@@ -511,7 +535,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             costBudgetService.finalizing(requestId);
             circuitBreaker.recordSuccess(serviceId);
             JSONObject envelope = new JSONObject();
-            if (result.usage().raw() != null) envelope.put("usage", result.usage().raw());
+            if (result.usage().raw() != null) {
+                envelope.put("usage", result.usage().raw());
+            }
             if (result.usage().audioDurationMs() != null) {
                 envelope.put("verse_audio_duration_ms", result.usage().audioDurationMs());
             }
@@ -524,7 +550,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                     LlmAuditEvent.STATUS_SUCCESS, null, operation);
             return result;
         } catch (UpstreamFailureException e) {
-            if (e.isUpstreamHealthFailure()) circuitBreaker.recordFailure(serviceId);
+            if (e.isUpstreamHealthFailure()) {
+                circuitBreaker.recordFailure(serviceId);
+            }
             publishFailureUsage(ctx, tenant, service, requestId, start, operation, e);
             publishAudit(ctx, tenant, service, safeRequest, null, requestId, start,
                     LlmAuditEvent.STATUS_FAIL, e.getErrorCode(), operation);
@@ -567,14 +595,18 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                                              LlmServiceDO service, RateLimitContext rateCtx,
                                              String body, String requestId, long start,
                                              JSONObject response, String status, UpstreamExecutionOutcome outcome) {
-        if (!finalized.compareAndSet(false, true)) return;
+        if (!finalized.compareAndSet(false, true)) {
+            return;
+        }
         if (!LlmAuditEvent.STATUS_SUCCESS.equals(status)) {
             costBudgetService.noteFailure(requestId, "UPSTREAM", LlmForwardErrorCodeEnum.FORWARD_FAILED.code());
         }
         costBudgetService.finalizing(requestId);
         UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), response);
         settleRateLimitSafely(rateCtx, safeTokenCount(normalized.totalTokens()));
-        if (response != null) outcome = UpstreamExecutionOutcome.COMPLETED;
+        if (response != null) {
+            outcome = UpstreamExecutionOutcome.COMPLETED;
+        }
         String source = !normalized.valid() ? TokenUsageEvent.SOURCE_UNKNOWN : TokenUsageEvent.SOURCE_EXACT;
         publishTokenUsage(ctx, tenant.getTenantId(), service, response, requestId, status,
                 source, start, ModelOperation.RESPONSES, InvocationSource.API_KEY, outcome);
@@ -583,7 +615,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     }
 
     private UpstreamExecutionOutcome streamFailureOutcome(Throwable error, boolean receivedEvent) {
-        if (!receivedEvent && error instanceof UpstreamFailureException failure) return failure.getExecutionOutcome();
+        if (!receivedEvent && error instanceof UpstreamFailureException failure) {
+            return failure.getExecutionOutcome();
+        }
         return UpstreamExecutionOutcome.UNKNOWN;
     }
 
@@ -619,7 +653,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         int maxAttempts = Math.max(1, maxRetries + 1);
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             costBudgetService.check(ctx, service.getServiceId());
-            if (attempt > 1) rateLimiter.check(rateCtx);
+            if (attempt > 1) {
+                rateLimiter.check(rateCtx);
+            }
             var control = costBudgetService.attempt(requestId);
             try {
                 String response = timeLimiter.execute(control, () -> {
@@ -638,7 +674,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                         && !costBudgetService.hasUpstream(requestId)) {
                     throw new com.yonagi.verse.service.budget.CostBudgetUnavailableException();
                 }
-                if (e.isUpstreamHealthFailure()) circuitBreaker.recordFailure(serviceId);
+                if (e.isUpstreamHealthFailure()) {
+                    circuitBreaker.recordFailure(serviceId);
+                }
                 if (!UpstreamRetryPolicy.canRetry(operation, e) || attempt >= maxAttempts) {
                     throw e;
                 }
@@ -663,7 +701,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         boolean specified = false;
         for (String field : fields) {
             Object value = request.get(field);
-            if (value == null) continue;
+            if (value == null) {
+                continue;
+            }
             specified = true;
             // 同时检查两种 Chat 参数名，避免换字段名绕过 API 限额。
             if (!JsonNumbers.isPositiveInteger(value, limit)) {
@@ -671,7 +711,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                         LlmForwardErrorCodeEnum.OUTPUT_TOKEN_LIMIT_INVALID);
             }
         }
-        if (specified) return body;
+        if (specified) {
+            return body;
+        }
         request.put(fields[0], limit);
         return request.toJSONString();
     }
@@ -698,7 +740,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         if (operation == ModelOperation.RERANK && responseEnvelope != null) {
             try {
                 JSONArray documents = JSON.parseObject(body).getJSONArray("documents");
-                if (documents != null) responseEnvelope.put("verse_rerank_document_count", documents.size());
+                if (documents != null) {
+                    responseEnvelope.put("verse_rerank_document_count", documents.size());
+                }
             } catch (RuntimeException ignored) { /* 请求已由适配器验证。 */ }
         }
         UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), responseEnvelope);
@@ -752,7 +796,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
     }
 
     private String boundedAudit(String value, ModelOperation operation) {
-        if (value == null) return null;
+        if (value == null) {
+            return null;
+        }
         if (operation == ModelOperation.IMAGE_GENERATION && value.contains("b64_json")) {
             try {
                 JSONObject json = JSON.parseObject(value);
@@ -828,8 +874,11 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         JSONObject responseEnvelope = snapshot.envelope();
         JSONObject usage = snapshot.usage();
         String response = snapshot.response();
-        if (snapshot.completed()) outcome = UpstreamExecutionOutcome.COMPLETED;
-        else if (snapshot.receivedEvent() || outcome == UpstreamExecutionOutcome.COMPLETED) outcome = UpstreamExecutionOutcome.UNKNOWN;
+        if (snapshot.completed()) {
+            outcome = UpstreamExecutionOutcome.COMPLETED;
+        } else if (snapshot.receivedEvent() || outcome == UpstreamExecutionOutcome.COMPLETED) {
+            outcome = UpstreamExecutionOutcome.UNKNOWN;
+        }
         UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), responseEnvelope);
         int totalTokens = safeTokenCount(normalized.totalTokens());
         // 同步结算 TPM，保证「拦后续请求」及时生效；abort/无 usage 时 totalTokens=0
@@ -900,7 +949,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         costBudgetService.finalizing(requestId);
         if (!costingEnabled) {
             costBudgetService.markUnknown(tenantId, ctx.getApiKeyId(), requestId, "COSTING_DISABLED");
-            if (!userModelUsagePublisher.enabled()) return;
+            if (!userModelUsagePublisher.enabled()) {
+                return;
+            }
         }
         TokenUsageEvent event = new TokenUsageEvent();
         event.setUserId(ctx.getUserId());
@@ -958,8 +1009,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             event.setCostResult(CostResult.of(CostStatus.UNCALCULABLE));
         }
         // Outbox 写入成功才代表计费用量事件已被可靠接管；失败必须显式向上传播。
-        if (costingEnabled) costBudgetService.settle(event);
-        else {
+        if (costingEnabled) {
+            costBudgetService.settle(event);
+        } else {
             try { userModelUsagePublisher.publish(event); }
             catch (RuntimeException failure) {
                 log.error("[personal-usage] 活动事实未接管 requestId={}, failureType={}",requestId,failure.getClass().getSimpleName());
@@ -1024,7 +1076,9 @@ public class LlmForwardServiceImpl implements LlmForwardService {
 
     private String failureStage(RuntimeException failure) {
         if (failure instanceof com.yonagi.verse.service.budget.CostLimitExceededException
-                || failure instanceof com.yonagi.verse.service.budget.CostBudgetUnavailableException) return "BUDGET_CHECK";
+                || failure instanceof com.yonagi.verse.service.budget.CostBudgetUnavailableException) {
+            return "BUDGET_CHECK";
+        }
         return "DISPATCH";
     }
 

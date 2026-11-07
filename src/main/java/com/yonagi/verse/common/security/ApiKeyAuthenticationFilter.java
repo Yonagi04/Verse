@@ -112,7 +112,9 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
                     .select(ApiKeyDO::getApiKeyId).eq(ApiKeyDO::getApiKey, hash));
             return key == null ? null : key.getApiKeyId();
         });
-        if (id == null) return null;
+        if (id == null) {
+            return null;
+        }
         // 即使缓存失效链路异常，撤销、过期、限流与租户归属也以这次实时查询为准。
         return queryCache.check(() -> apiKeyMapper.selectAuthState(id, hash));
     }
