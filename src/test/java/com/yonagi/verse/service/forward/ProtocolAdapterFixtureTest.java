@@ -492,7 +492,7 @@ class ProtocolAdapterFixtureTest {
         UpstreamFailureException bad = assertThrows(UpstreamFailureException.class,
                 () -> adapter.forward(context(body)));
         assertFalse(bad.isRetryable());
-        assertEquals("invalid input", bad.getMessage());
+        assertEquals(com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum.UPSTREAM_ERROR.message(), bad.getMessage());
         responseStatus = 503;
         UpstreamFailureException unavailable = assertThrows(UpstreamFailureException.class,
                 () -> adapter.forward(context(body)));

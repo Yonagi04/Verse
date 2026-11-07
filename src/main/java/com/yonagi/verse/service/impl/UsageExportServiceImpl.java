@@ -6,7 +6,11 @@ import com.alibaba.excel.write.metadata.WriteSheet;
 import com.yonagi.verse.common.config.UsageReportingProperties;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
-import com.yonagi.verse.common.enums.*;
+import com.yonagi.verse.common.enums.UsageBreakdownDimension;
+import com.yonagi.verse.common.enums.UsageBreakdownOrder;
+import com.yonagi.verse.common.enums.UsageExportType;
+import com.yonagi.verse.common.enums.UsageGranularity;
+import com.yonagi.verse.common.enums.UsageReportingErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.dao.mapper.TokenUsageMapper;
 import com.yonagi.verse.dao.projection.UsageRawExportRow;
@@ -16,16 +20,15 @@ import com.yonagi.verse.dto.resp.UsageBreakdownRespDTO;
 import com.yonagi.verse.dto.resp.UsageReportRespDTO;
 import com.yonagi.verse.service.UsageExportService;
 import com.yonagi.verse.service.UsageReportService;
+import com.yonagi.verse.service.reporting.UsageExportTarget;
 import com.yonagi.verse.service.reporting.UsageReportFilter;
-import jakarta.servlet.http.HttpServletResponse;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.ContentDisposition;
 import org.springframework.stereotype.Service;
 
+import java.io.Closeable;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -53,7 +56,7 @@ public class UsageExportServiceImpl implements UsageExportService {
     }
 
     @Override
-    public void export(HttpServletResponse response, UserContext context, Long tenantId, UsageExportType type,
+    public void export(UsageExportTarget target, UserContext context, Long tenantId, UsageExportType type,
                        UsageGranularity granularity, LocalDateTime from, LocalDateTime to, Long userId,
                        Long apiKeyId, Long serviceId, UsageBreakdownDimension dimension,
                        UsageBreakdownOrder orderBy, int limit) {
@@ -65,9 +68,9 @@ public class UsageExportServiceImpl implements UsageExportService {
         try {
             UsageReportFilter filter = reportService.resolveFilter(context,tenantId,granularity,from,to,userId,apiKeyId,serviceId);
             switch (type) {
-                case TIMESERIES -> writeTimeseries(response,context,filter);
-                case BREAKDOWN -> writeBreakdown(response,context,filter,dimension,orderBy,limit);
-                case RAW -> writeRaw(response,filter);
+                case TIMESERIES -> writeTimeseries(target, context, filter);
+                case BREAKDOWN -> writeBreakdown(target, context, filter, dimension, orderBy, limit);
+                case RAW -> writeRaw(target, filter);
             }
             log.info("usage_export_completed tenantId={} userId={} type={} elapsedMs={}",tenantId,context.getUserId(),type,
                     Duration.ofNanos(System.nanoTime()-started).toMillis());
@@ -75,11 +78,9 @@ public class UsageExportServiceImpl implements UsageExportService {
         } catch (ClientException e) {
             record(type,"rejected",started);
             throw e;
-        } catch (Exception e) {
-            log.error("usage_export_failed tenantId={} userId={} type={}",tenantId,context.getUserId(),type,e);
-            record(type,"failed",started);
-            if (response.isCommitted()) return;
-            throw new ServerException("生成用量报表失败",e,UsageReportingErrorCodeEnum.EXPORT_FAILED);
+        } catch (IOException | RuntimeException e) {
+            record(type, "failed", started);
+            throw new ServerException("生成用量报表失败", e, UsageReportingErrorCodeEnum.EXPORT_FAILED);
         } finally {
             permits.release();
         }
@@ -91,7 +92,7 @@ public class UsageExportServiceImpl implements UsageExportService {
                 .register(meterRegistry).record(Duration.ofNanos(System.nanoTime()-started));
     }
 
-    private void writeTimeseries(HttpServletResponse response, UserContext context, UsageReportFilter filter) throws IOException {
+    private void writeTimeseries(UsageExportTarget target, UserContext context, UsageReportFilter filter) {
         UsageReportRespDTO result=reportService.query(context,filter.tenantId(),filter.granularity(),filter.from(),filter.to(),
                 filter.userId(),filter.apiKeyId(),filter.serviceId());
         List<UsageTimeseriesExportRow> rows=result.getPoints().stream().map(point->{
@@ -101,12 +102,13 @@ public class UsageExportServiceImpl implements UsageExportService {
             row.setExactUsageCount(point.getExactUsageCount()); row.setEstimatedUsageCount(point.getEstimatedUsageCount());
             row.setUnknownUsageCount(point.getUnknownUsageCount()); return row;
         }).toList();
-        prepare(response,"usage-timeseries");
-        EasyExcel.write(response.getOutputStream(),UsageTimeseriesExportRow.class).autoCloseStream(false).sheet("时间序列").doWrite(rows);
+        target.prepare(filename("usage-timeseries"));
+        EasyExcel.write(target.outputStream(), UsageTimeseriesExportRow.class)
+                .autoCloseStream(false).sheet("时间序列").doWrite(rows);
     }
 
-    private void writeBreakdown(HttpServletResponse response, UserContext context, UsageReportFilter filter,
-                                UsageBreakdownDimension dimension, UsageBreakdownOrder orderBy, int limit) throws IOException {
+    private void writeBreakdown(UsageExportTarget target, UserContext context, UsageReportFilter filter,
+                                UsageBreakdownDimension dimension, UsageBreakdownOrder orderBy, int limit) {
         UsageBreakdownRespDTO result=reportService.breakdown(context,filter.tenantId(),filter.granularity(),filter.from(),filter.to(),
                 filter.userId(),filter.apiKeyId(),filter.serviceId(),dimension,orderBy,limit);
         List<UsageBreakdownExportRow> rows=result.getItems().stream().map(item->{
@@ -116,41 +118,67 @@ public class UsageExportServiceImpl implements UsageExportService {
             row.setEstimatedCostFen(item.getMetrics().getEstimatedCostFen()); row.setUncalculableCount(item.getMetrics().getUncalculableCount());
             row.setUnpricedCount(item.getMetrics().getUnpricedCount()); return row;
         }).toList();
-        prepare(response,"usage-breakdown");
-        EasyExcel.write(response.getOutputStream(),UsageBreakdownExportRow.class).autoCloseStream(false).sheet("维度排行").doWrite(rows);
+        target.prepare(filename("usage-breakdown"));
+        EasyExcel.write(target.outputStream(), UsageBreakdownExportRow.class)
+                .autoCloseStream(false).sheet("维度排行").doWrite(rows);
     }
 
-    private void writeRaw(HttpServletResponse response, UsageReportFilter filter) throws IOException {
-        if (Duration.between(filter.from(),filter.to()).compareTo(Duration.ofDays(properties.getRawExportMaxRangeDays()))>0)
+    private void writeRaw(UsageExportTarget target, UsageReportFilter filter) throws IOException {
+        Duration requestedRange = Duration.between(filter.from(), filter.to());
+        if (requestedRange.compareTo(Duration.ofDays(properties.getRawExportMaxRangeDays())) > 0) {
             throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_INVALID);
-        long count=tokenUsageMapper.countRawExport(filter.tenantId(),filter.userId(),filter.apiKeyId(),filter.serviceId(),filter.from(),filter.to());
-        if (count>properties.getExportMaxRows()) throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_TOO_LARGE);
-        prepare(response,"usage-raw");
-        try (ExcelWriter writer=EasyExcel.write(response.getOutputStream(),UsageRawExportRow.class).autoCloseStream(false).build()) {
-            WriteSheet sheet=EasyExcel.writerSheet("逐请求明细").build();
-            LocalDateTime afterTime=null; Long afterId=null; long written=0;
-            while (true) {
-                List<UsageRawExportRow> rows=tokenUsageMapper.selectRawExportBatch(filter.tenantId(),filter.userId(),filter.apiKeyId(),
-                        filter.serviceId(),filter.from(),filter.to(),afterTime,afterId,properties.getExportBatchSize());
-                if (rows.isEmpty()) {
-                    if (written==0) writer.write(List.of(),sheet);
-                    break;
-                }
-                rows.forEach(this::sanitize);
-                writer.write(rows,sheet); written+=rows.size();
-                UsageRawExportRow last=rows.get(rows.size()-1); afterTime=last.getRequestStartedAt(); afterId=last.getId();
-                if (rows.size()<properties.getExportBatchSize()) break;
-                if (written>properties.getExportMaxRows()) throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_TOO_LARGE);
-            }
+        }
+        int maxRows = properties.getExportMaxRows();
+        long count = tokenUsageMapper.countRawExport(filter.tenantId(), filter.userId(), filter.apiKeyId(),
+                filter.serviceId(), filter.from(), filter.to());
+        if (count > maxRows) {
+            throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_TOO_LARGE);
+        }
+
+        ExcelWriter writer = EasyExcel.write(target.outputStream(), UsageRawExportRow.class)
+                .autoCloseStream(false).writeExcelOnException(false).build();
+        // 正常 finish 才会发送文件。失败时清理未完成的工作簿，响应仍可返回业务错误。
+        try (Closeable discardWorkbook = () -> writer.writeContext().finish(true)) {
+            writeRawRows(writer, filter, maxRows);
+            target.prepare(filename("usage-raw"));
+            writer.finish();
         }
     }
 
-    private void prepare(HttpServletResponse response,String prefix) {
-        String filename=prefix+'-'+LocalDateTime.now().format(FILE_TIME)+".xlsx";
-        response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-        response.setHeader("Content-Disposition",ContentDisposition.attachment().filename(filename,StandardCharsets.UTF_8).build().toString());
-        response.setHeader("X-Content-Type-Options","nosniff");
+    private void writeRawRows(ExcelWriter writer, UsageReportFilter filter, int maxRows) {
+        WriteSheet sheet = EasyExcel.writerSheet("逐请求明细").build();
+        int batchSize = properties.getExportBatchSize();
+        int remainingRows = maxRows;
+        LocalDateTime afterTime = null;
+        Long afterId = null;
+        while (true) {
+            // 计数后可能有新用量入库，多读一行可区分恰好到上限与超限。
+            int limit = (int) Math.min(batchSize, remainingRows + 1L);
+            List<UsageRawExportRow> rows = tokenUsageMapper.selectRawExportBatch(filter.tenantId(), filter.userId(),
+                    filter.apiKeyId(), filter.serviceId(), filter.from(), filter.to(), afterTime, afterId, limit);
+            if (rows.size() > remainingRows) {
+                throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_TOO_LARGE);
+            }
+            if (rows.isEmpty()) {
+                if (remainingRows == maxRows) {
+                    writer.write(List.of(), sheet);
+                }
+                return;
+            }
+            rows.forEach(this::sanitize);
+            writer.write(rows, sheet);
+            if (rows.size() < limit) {
+                return;
+            }
+            remainingRows -= rows.size();
+            UsageRawExportRow last = rows.getLast();
+            afterTime = last.getRequestStartedAt();
+            afterId = last.getId();
+        }
+    }
+
+    private String filename(String prefix) {
+        return prefix + '-' + LocalDateTime.now().format(FILE_TIME) + ".xlsx";
     }
 
     /** 防止来自数据库的文本被 Excel 当作公式执行。 */

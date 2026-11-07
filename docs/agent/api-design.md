@@ -63,6 +63,7 @@ POST /api/v1/tenants/{tenantId}/join-requests/{requestId}/approve
 ## 请求与响应
 
 - Controller 不直接接收或返回 DO、Mapper Projection 或 Provider SDK 类型。
+- Controller 与公开业务 Service 的业务返回使用自定义 DTO/VO，禁止返回 `JSONObject`，也不能用动态 Map 或 JSON 树包装业务返回结构。生产代码不新增 `JSONObject` 用法；存量按专项清单迁移。
 - DTO 字段必须有中文说明，并通过 Bean Validation 表达长度、格式、范围和必填约束。
 - 普通业务接口返回 `Result<T>`，成功使用 `Results.success(...)`；禁止 Controller 自行拼装不同的包装结构。
 - 分页接口统一表达 page、size、total、items，并限制最大 page size；稳定定义默认排序和空结果。

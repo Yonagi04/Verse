@@ -4,13 +4,36 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.CredentialMode;
 import com.yonagi.verse.dto.req.CapabilityBindingReqDTO;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 class CapabilityConfigurationTest {
+    @ParameterizedTest
+    @ValueSource(strings = {"1.0", "1e0", "2147483647.0"})
+    void playgroundTokenCapabilityKeepsExactMathematicalIntegers(String value) {
+        assertEquals(CredentialMode.API_KEY, CapabilityConfiguration.validate(
+                "custom", "API_KEY", "https://example.invalid", "secret",
+                Map.of("playground", "{\"maxTokens\":" + value + "}"),
+                List.of(binding("CHAT_COMPLETIONS", "OPENAI_COMPAT"))));
+    }
+
+    @Test
+    void playgroundTokenCapabilityRejectsHighPrecisionFraction() {
+        ClientException error = assertThrows(ClientException.class, () -> CapabilityConfiguration.validate(
+                "custom", "API_KEY", "https://example.invalid", "secret",
+                Map.of("playground", "{\"maxTokens\":1.00000000000000000001}"),
+                List.of(binding("CHAT_COMPLETIONS", "OPENAI_COMPAT"))));
+        assertEquals(com.yonagi.verse.common.enums.LlmManageErrorCodeEnum.LLM_CAPABILITY_INVALID.code(),
+                error.getErrorCode());
+    }
+
     private CapabilityBindingReqDTO binding(String operation, String protocol) {
         CapabilityBindingReqDTO result = new CapabilityBindingReqDTO();
         result.setOperation(operation);
@@ -66,6 +89,43 @@ class CapabilityConfigurationTest {
                 Map.of("playground", "{\"apiKey\":\"injected\"}"), bindings));
         assertThrows(ClientException.class, () -> CapabilityConfiguration.validate("custom", "API_KEY", "https://example.invalid", "secret",
                 Map.of("playground", "{\"temperature\":{\"min\":2,\"max\":1}}"), bindings));
+    }
+
+    @Test
+    void playgroundRangeAcceptsLegacyJsonStringAndNumericBoundaries() {
+        String settings = """
+                {"system":false,"temperature":{"min":0,"max":2},"topP":"{\\"min\\":0,\\"max\\":1}"}
+                """;
+        assertEquals(CredentialMode.API_KEY, CapabilityConfiguration.validate("custom", "API_KEY",
+                "https://example.invalid", "secret", Map.of("playground", settings),
+                List.of(binding("CHAT_COMPLETIONS", "OPENAI_COMPAT"))));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{\"system\":null}", "{\"maxTokens\":\"1\"}", "{\"topP\":{\"min\":0}}",
+            "{\"temperature\":{\"min\":0,\"max\":1,\"other\":0}}"})
+    void playgroundCapabilitiesRejectNullWrongTypesAndUnexpectedRangeFields(String settings) {
+        ClientException error = assertThrows(ClientException.class, () -> CapabilityConfiguration.validate(
+                "custom", "API_KEY", "https://example.invalid", "secret", Map.of("playground", settings),
+                List.of(binding("CHAT_COMPLETIONS", "OPENAI_COMPAT"))));
+        assertEquals(com.yonagi.verse.common.enums.LlmManageErrorCodeEnum.LLM_CAPABILITY_INVALID.code(),
+                error.getErrorCode());
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"[]", "{}{}", "{\"maxTokens\":", "{\"topP\":null}",
+            "{\"topP\":\"{}{}\"}", "{\"topP\":\"{\\\"min\\\":0,\\\"max\\\":1}{}\"}",
+            "{\"topP\":{\"min\":-0.1,\"max\":1}}", "{\"temperature\":{\"min\":0,\"max\":2.1}}",
+            "{\"temperature\":{\"min\":0,\"max\":1e400}}"})
+    void rejectsMalformedSettingsAndValuesOutsideCapabilityRanges(String settings) {
+        ClientException error = assertThrows(ClientException.class, () -> CapabilityConfiguration.validate(
+                "custom", "API_KEY", "https://example.invalid", "secret",
+                Collections.singletonMap("playground", settings),
+                List.of(binding("CHAT_COMPLETIONS", "OPENAI_COMPAT"))));
+
+        assertEquals(com.yonagi.verse.common.enums.LlmManageErrorCodeEnum.LLM_CAPABILITY_INVALID.code(),
+                error.getErrorCode());
     }
 
     @Test

@@ -7,12 +7,12 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.UserErrorCodeEnum;
-import com.yonagi.verse.common.util.DeviceUtil;
 import com.yonagi.verse.dao.entity.LoginDeviceDO;
 import com.yonagi.verse.dao.mapper.LoginDeviceMapper;
 import com.yonagi.verse.dto.resp.LoginDeviceRespDTO;
 import com.yonagi.verse.dto.resp.LoginSessionVO;
 import com.yonagi.verse.service.LoginDeviceService;
+import com.yonagi.verse.service.UserLoginSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,15 +37,14 @@ import java.util.stream.Collectors;
 public class LoginDeviceServiceImpl extends ServiceImpl<LoginDeviceMapper, LoginDeviceDO> implements LoginDeviceService {
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final UserLoginSessionService sessions;
 
     @Override
     public List<LoginDeviceRespDTO> listDevices(Long userId, HttpServletRequest request) {
         String hashKey = RedisKeyConstant.USER_DEVICES_KEY + userId;
         Map<Object, Object> onlineDevices = stringRedisTemplate.opsForHash().entries(hashKey);
 
-        String userAgent = request.getHeader("User-Agent");
-        String ip = DeviceUtil.getClientIp(request);
-        String currentDeviceId = DeviceUtil.generateDeviceId(userAgent, ip);
+        String currentDeviceId = sessions.currentDeviceId(userId).orElse(null);
 
         List<LoginDeviceDO> allDevices = baseMapper.selectList(Wrappers.lambdaQuery(LoginDeviceDO.class)
                 .eq(LoginDeviceDO::getUserId, userId)
@@ -64,10 +63,8 @@ public class LoginDeviceServiceImpl extends ServiceImpl<LoginDeviceMapper, Login
 
     @Override
     public Boolean kickDevice(Long userId, String deviceId, HttpServletRequest request) {
-        String userAgent = request.getHeader("User-Agent");
-        String ip = DeviceUtil.getClientIp(request);
-        String currentDeviceId = DeviceUtil.generateDeviceId(userAgent, ip);
-        if (currentDeviceId.equals(deviceId)) {
+        String currentDeviceId = sessions.currentDeviceId(userId).orElse(null);
+        if (deviceId.equals(currentDeviceId)) {
             throw new ClientException(UserErrorCodeEnum.CANNOT_KICK_CURRENT_DEVICE);
         }
 

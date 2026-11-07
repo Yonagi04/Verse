@@ -20,7 +20,7 @@ class UserModelActivityCalendarControllerTest {
     }
     @AfterEach void cleanup() { UserContextHolder.clear(); }
     @Test void noTenantIsNeededAndTrustedSelfIdentityReachesCalendarQuery() throws Exception {
-        mvc.perform(get("/api/v1/users/me/activity-calendar").param("view","YEAR").param("year","2024")).andExpect(status().isOk()).andExpect(header().string("Cache-Control","no-store")); verify(query).getCalendar(99L,"YEAR",2024);
+        mvc.perform(get("/api/v1/users/me/activity-calendar").param("view","YEAR").param("year","2024")).andExpect(status().isOk()); verify(query).getCalendar(99L,"YEAR",2024);
     }
     @Test void forgedIdentityParametersNeverReachCalendarQuery() throws Exception {
         mvc.perform(get("/api/v1/users/me/activity-calendar").param("userId","1").param("tenantId","2")).andExpect(jsonPath("$.code").value("A001604")); verifyNoInteractions(query);

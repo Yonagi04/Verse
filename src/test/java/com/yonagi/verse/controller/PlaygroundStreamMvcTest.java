@@ -8,9 +8,12 @@ import com.yonagi.verse.service.PlaygroundService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.codec.ServerSentEvent;
+import org.springframework.security.web.header.HeaderWriterFilter;
+import org.springframework.security.web.header.writers.CacheControlHeadersWriter;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import reactor.core.publisher.Flux;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -36,14 +39,19 @@ class PlaygroundStreamMvcTest {
         when(service.prepareSend(any(), eq(2L), eq(11L), eq("hello"), anyString()))
                 .thenReturn(new PlaygroundService.PreparedTurn("request-1", events));
         UserContextHolder.set(new UserContext().setUserId(7L).setCurrentTenantId(2L));
-        var mvc = MockMvcBuilders.standaloneSetup(new PlaygroundController(service)).build();
+        var mvc = MockMvcBuilders.standaloneSetup(new PlaygroundController(service))
+                .addFilters(new HeaderWriterFilter(List.of(new CacheControlHeadersWriter())))
+                .build();
         var result = mvc.perform(post("/api/v1/tenants/2/playground/sessions/11/turns/stream")
                         .header("Idempotency-Key", "8f5e7338-6385-4f78-963e-889564109956")
                         .contentType("application/json").accept("text/event-stream")
                         .content("{\"prompt\":\"hello\"}"))
                 .andExpect(request().asyncStarted()).andReturn();
 
-        mvc.perform(asyncDispatch(result)).andExpect(status().isOk());
+        mvc.perform(asyncDispatch(result)).andExpect(status().isOk())
+                .andExpect(header().string("Content-Type", "text/event-stream;charset=UTF-8"))
+                .andExpect(header().string("Cache-Control", "no-cache, no-store, max-age=0, must-revalidate"))
+                .andExpect(header().string("X-Request-Id", "request-1"));
         String body = result.getResponse().getContentAsString();
         assertTrue(body.contains("event:accepted") || body.contains("event: accepted"));
         assertTrue(body.contains("event:delta") || body.contains("event: delta"));

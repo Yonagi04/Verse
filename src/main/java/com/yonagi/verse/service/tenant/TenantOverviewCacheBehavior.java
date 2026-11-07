@@ -1,12 +1,12 @@
 package com.yonagi.verse.service.tenant;
 
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
-import com.yonagi.verse.common.cache.*;
+import com.yonagi.verse.common.cache.QueryCacheBehavior;
+import com.yonagi.verse.dto.resp.TenantOverviewRespDTO;
 import org.springframework.stereotype.Component;
 
-import java.time.*;
-import java.util.*;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.List;
 
 /** 概览结果的时间边界与完整性约束。 */
 @Component
@@ -15,16 +15,18 @@ public class TenantOverviewCacheBehavior implements QueryCacheBehavior {
     @Override public void contributeParameters(List<Object> parameters, Object[] args) {
         parameters.add(LocalDateTime.now(SHANGHAI).toLocalDate().toString());
     }
-    @Override public boolean cacheable(Object value) {
-        JSONObject result = JSON.parseObject(JSON.toJSONString(value));
-        if (result == null) return false;
-        if (result.containsKey("items")) {
-            return result.getJSONArray("items").stream().allMatch(item -> complete((JSONObject) item));
+    /** 只有完整指标可进入概览缓存，查询降级结果只用于当前响应。 */
+    @Override
+    public boolean cacheable(Object value) {
+        if (value instanceof TenantOverviewRespDTO.Batch batch) {
+            return batch.getItems() != null
+                    && batch.getItems().stream().allMatch(TenantOverviewCacheBehavior::complete);
         }
-        return complete(result);
+        return value instanceof TenantOverviewRespDTO.Item item && complete(item);
     }
-    private static boolean complete(JSONObject value) {
+
+    private static boolean complete(TenantOverviewRespDTO.Item value) {
         // 聚合发生降级时不把缺失指标冻结到缓存中。
-        return value.get("memberCount") != null && value.get("availableServiceCount") != null;
+        return value != null && value.getMemberCount() != null && value.getAvailableServiceCount() != null;
     }
 }

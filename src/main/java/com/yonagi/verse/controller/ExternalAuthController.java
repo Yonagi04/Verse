@@ -5,9 +5,11 @@ import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.ExternalAuthRespDTO.*;
 import com.yonagi.verse.service.external.ExternalAuthService;
-import jakarta.servlet.http.*;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
@@ -16,15 +18,19 @@ import java.util.List;
 @RequestMapping("/api/v1/auth/external")
 public class ExternalAuthController {
     private final ExternalAuthService service;
+    private final ExternalAuthResponse authResponse;
+
     @GetMapping("/providers")
     public Result<List<ProviderInfo>> providers() { return Results.success(service.providers()); }
     @PostMapping("/flows")
-    public Result<Start> start(@Valid @RequestBody ExternalFlowStartReqDTO input,HttpServletRequest request,HttpServletResponse response) {
-        return Results.success(service.start(input,null,request,response));
+    public Result<Start> start(@Valid @RequestBody ExternalFlowStartReqDTO input,
+                               HttpServletRequest request, HttpServletResponse response) {
+        return Results.success(service.start(input, null, request, authResponse.cookies(response)));
     }
     @GetMapping("/callback/{provider}")
-    public void callback(@PathVariable String provider,HttpServletRequest request,HttpServletResponse response) {
-        response.setStatus(303); response.setHeader("Location",service.callback(provider,request,response));
+    public ResponseEntity<Void> callback(@PathVariable String provider, HttpServletRequest request,
+                                         HttpServletResponse response) {
+        return authResponse.redirect(response, () -> service.callback(provider, request, authResponse.cookies(response)));
     }
     @GetMapping("/flows/{id}")
     public Result<Context> context(@PathVariable String id,HttpServletRequest request) { return Results.success(service.context(id,request)); }
@@ -43,11 +49,13 @@ public class ExternalAuthController {
         return Results.success(service.attach(id,user,input,request));
     }
     @PostMapping("/flows/{id}/cancel")
-    public Result<Void> cancel(@PathVariable String id,HttpServletRequest request,HttpServletResponse response) {
-        service.cancel(id,request,response,false); return Results.success();
+    public Result<Void> cancel(@PathVariable String id, HttpServletRequest request, HttpServletResponse response) {
+        service.cancel(id, request, authResponse.cookies(response), false);
+        return Results.success();
     }
     @PostMapping("/flows/{id}/acknowledge")
-    public Result<Void> acknowledge(@PathVariable String id,HttpServletRequest request,HttpServletResponse response) {
-        service.cancel(id,request,response,true); return Results.success();
+    public Result<Void> acknowledge(@PathVariable String id, HttpServletRequest request, HttpServletResponse response) {
+        service.cancel(id, request, authResponse.cookies(response), true);
+        return Results.success();
     }
 }

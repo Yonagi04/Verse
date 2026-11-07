@@ -10,9 +10,7 @@ import com.yonagi.verse.dto.resp.PlaygroundDtos;
 import com.yonagi.verse.resilience.impl.PlaygroundRateLimiter;
 import com.yonagi.verse.service.PlaygroundService;
 import com.yonagi.verse.service.impl.PlaygroundServiceImpl;
-import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -30,6 +28,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.Disposable;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
@@ -91,19 +90,21 @@ public class PlaygroundController {
 
     @PostMapping(value = "/sessions/{sessionId}/turns/stream", produces = {
             MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
-    public SseEmitter stream(@PathVariable Long tenantId, @PathVariable Long sessionId,
+    public ResponseEntity<SseEmitter> stream(@PathVariable Long tenantId, @PathVariable Long sessionId,
             @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
-            @RequestBody Map<String, Object> body, HttpServletResponse response) {
+            @RequestBody Map<String, Object> body) {
         if (body == null || body.size() != 1 || !body.containsKey("prompt")
                 || !(body.get("prompt") instanceof String prompt)) {
             throw new ClientException(PlaygroundErrorCodeEnum.INVALID_PROMPT);
         }
         PlaygroundService.PreparedTurn prepared = playgroundService.prepareSend(
                 UserContextHolder.get(), tenantId, sessionId, prompt, idempotencyKey);
-        response.setContentType("text/event-stream;charset=UTF-8");
-        response.setHeader(HttpHeaders.CACHE_CONTROL, "no-cache");
-        response.setHeader("X-Request-Id", prepared.requestId());
-        return emitter(prepared.events());
+        return eventStreamResponse().header("X-Request-Id", prepared.requestId()).body(emitter(prepared.events()));
+    }
+
+    static ResponseEntity.BodyBuilder eventStreamResponse() {
+        return ResponseEntity.ok()
+                .contentType(new MediaType(MediaType.TEXT_EVENT_STREAM, StandardCharsets.UTF_8));
     }
 
     /** 一、二期共用 Servlet 断连取消规则。 */
@@ -164,7 +165,7 @@ public class PlaygroundController {
         Result<Object> result = new Result<>().setCode(error.getErrorCode())
                 .setMessage(error.getErrorMessage());
         if (error instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) {
-            result.setData(com.yonagi.verse.common.web.PlaygroundCostError.data(budget, budget.getRequestId()));
+            result.setData(com.yonagi.verse.service.playground.PlaygroundCostError.data(budget, budget.getRequestId()));
         } else if (error instanceof PlaygroundRateLimiter.LimitException limit) {
             result.setData(Map.of("reason", limit.getReason(),
                     "retryAfterSeconds", limit.getRetryAfterSeconds()));

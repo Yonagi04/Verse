@@ -80,7 +80,7 @@ class QueryCatalogueCoverageTest {
             "/api/v1/tenants/{tenantId}/cost-status",
             "/api/v1/tenants/{tenantId}/cost-notification-readiness",
             "/api/v1/llm-services/cost-notification-readiness",
-            "/api/v1/usage/{tenantId}/export", "/api/v1/usage-events/{tenantId}/reconciliation");
+            "/api/v1/usage/{tenantId}/export");
 
     @Test void everyCoreGetHasPolicyAndEveryGetIsClassified() throws Exception {
         var scanner = new ClassPathScanningCandidateComponentProvider(false);

@@ -3,30 +3,52 @@ package com.yonagi.verse.service.impl;
 import com.yonagi.verse.service.playground.PlaygroundAccessPolicy;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 
-import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONArray;
-import com.alibaba.fastjson2.JSONObject;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.AbstractWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.ServerException;
+import com.yonagi.verse.common.enums.BillingMode;
+import com.yonagi.verse.common.enums.PlaygroundErrorCodeEnum;
+import com.yonagi.verse.common.enums.PricePeriodType;
 import com.yonagi.verse.common.enums.UpstreamProtocol;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.dao.entity.*;
 import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.dto.resp.PlaygroundDtos;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.AttemptVO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.ConfigDTO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.LaneDTO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.MessageDTO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.ModelVO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.RoundVO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.RunConfigDTO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.VersionDTO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.WorkspaceVO;
+import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.CreateReqDTO;
+import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.ForkReqDTO;
+import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.UpdateReqDTO;
 import com.yonagi.verse.resilience.impl.PlaygroundRateLimiter;
 import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.PlaygroundService;
 import com.yonagi.verse.service.forward.ModelResolver;
+import com.yonagi.verse.service.playground.WorkbenchJson;
 import com.yonagi.verse.service.pricing.PricingResolver;
 import com.yonagi.verse.service.pricing.PricingSnapshot;
 import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
+import java.math.BigDecimal;
 import java.time.Duration;
+import java.util.stream.Stream;
 import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -99,12 +121,17 @@ class PlaygroundWorkbenchServiceImplTest {
         assertTrue(sql.contains("tenant_id") && (sql.contains("owner_user_id") || sql.contains("user_id")));
         return p.contains(resource) && p.contains(tenant) && p.contains(owner);
     }
-    private JSONObject config() {
-        return JSONObject.of("synced", false, "lanes", JSONArray.of(
-                JSONObject.of("laneId", "00000000-0000-0000-0000-000000000001", "serviceId", "9", "config", JSONObject.of("system", "中文顾问", "temperature", 0.2)),
-                JSONObject.of("laneId", "00000000-0000-0000-0000-000000000002", "serviceId", "9", "config", JSONObject.of("temperature", 0.8))));
+    private ConfigDTO config() {
+        return new ConfigDTO(List.of(
+                new LaneDTO("00000000-0000-0000-0000-000000000001", "9",
+                        new RunConfigDTO("中文顾问", new BigDecimal("0.2"), null, null)),
+                new LaneDTO("00000000-0000-0000-0000-000000000002", "9",
+                        new RunConfigDTO(null, new BigDecimal("0.8"), null, null))), false, null, null);
     }
-    private Long group() { return Long.valueOf(service.create(actor, 2L, "GROUP", JSONObject.of("config", config())).getString("id")); }
+
+    private Long group() {
+        return Long.valueOf(service.create(actor, 2L, "GROUP", new CreateReqDTO(null, null, config())).getId());
+    }
 
     @Test
     void modelsReturnPlaygroundLimitInsteadOfApiLimit() {
@@ -113,7 +140,7 @@ class PlaygroundWorkbenchServiceImplTest {
         when(gate.models(actor, 2L)).thenReturn(new PlaygroundDtos.Models(List.of(
                 new PlaygroundDtos.Model("9", model.getName(), model.getProvider(), null, model.getContextWindow()))));
         when(pricing.resolve(anyLong(), anyLong(), any())).thenReturn(PricingSnapshot.unpriced());
-        assertEquals(8192L, service.models(actor, 2L).get(0).getJSONObject("capabilities").getLongValue("maxTokens"));
+        assertEquals(8192L, service.models(actor, 2L).getFirst().getCapabilities().getMaxTokens());
     }
 
     @Test
@@ -123,13 +150,16 @@ class PlaygroundWorkbenchServiceImplTest {
         assertEquals(2, history.size()); assertNotEquals(history.get(0).getRequestId(), history.get(1).getRequestId());
         service.round(actor, 2L, id, "同一个问题", key); assertEquals(2, history.size());
         assertThrows(ClientException.class, () -> service.round(actor, 2L, id, "并发下一轮", UUID.randomUUID().toString()));
-        assertEquals(0.2, JSON.parseObject(history.get(0).getSnapshot()).getJSONObject("request").getDoubleValue("temperature"));
+        assertEquals(0.2D, WorkbenchJson.tree(history.getFirst().getSnapshot()).path("request").path("temperature")
+                .doubleValue());
         verifyNoInteractions(forward, limits);
         history.get(0).setStatus("COMPLETED"); history.get(0).setReply("A 的历史"); history.get(1).setStatus("STOPPED"); store.get(id).setGenerating(0);
         service.round(actor, 2L, id, "第二个问题", UUID.randomUUID().toString());
-        JSONArray a = JSON.parseObject(history.get(2).getSnapshot()).getJSONObject("request").getJSONArray("messages");
-        JSONArray b = JSON.parseObject(history.get(3).getSnapshot()).getJSONObject("request").getJSONArray("messages");
-        assertTrue(a.toJSONString().contains("A 的历史")); assertFalse(b.toJSONString().contains("A 的历史")); assertEquals(1, b.size());
+        JsonNode a = WorkbenchJson.tree(history.get(2).getSnapshot()).path("request").path("messages");
+        JsonNode b = WorkbenchJson.tree(history.get(3).getSnapshot()).path("request").path("messages");
+        assertTrue(a.toString().contains("A 的历史"));
+        assertFalse(b.toString().contains("A 的历史"));
+        assertEquals(1, b.size());
     }
 
     @Test
@@ -149,6 +179,15 @@ class PlaygroundWorkbenchServiceImplTest {
         var stream = service.stream(actor, 2L, first.getAttemptId());
         var events = stream.collectList().block(Duration.ofSeconds(3));
         assertEquals(List.of("accepted", "delta", "completed"), events.stream().map(ServerSentEvent::event).toList());
+        JsonNode accepted = WorkbenchJson.tree(events.getFirst().data());
+        assertEquals(first.getAttemptId().toString(), accepted.path("attemptId").textValue());
+        assertEquals(first.getRequestId(), accepted.path("requestId").textValue());
+        assertEquals("完整回答", WorkbenchJson.tree(events.get(1).data()).path("text").textValue());
+        JsonNode completed = WorkbenchJson.tree(events.getLast().data());
+        assertEquals("COMPLETED", completed.path("status").textValue());
+        assertEquals(1000L, completed.path("snapshot").path("request").path("max_tokens").longValue());
+        assertFalse(completed.path("snapshot").path("request").has("maxTokens"));
+        assertTrue(completed.path("metrics").path("durationMs").isIntegralNumber());
         assertEquals("COMPLETED", first.getStatus()); assertEquals("完整回答", first.getReply()); assertNotNull(first.getFirstContentMs());
         assertThrows(ClientException.class, () -> service.stream(actor, 2L, first.getAttemptId()));
         assertThrows(ClientException.class, () -> stream.collectList().block(Duration.ofSeconds(3)));
@@ -164,8 +203,10 @@ class PlaygroundWorkbenchServiceImplTest {
                 .thenReturn(Flux.just(ServerSentEvent.<String>builder("{\"choices\":[{\"delta\":{\"content\":\"另一栏成功\"}}]}").build()));
         assertSame(budget,assertThrows(com.yonagi.verse.service.budget.CostLimitExceededException.class,()->service.stream(actor,2L,history.get(0).getAttemptId())));
         assertEquals("FAILED",history.get(0).getStatus()); assertEquals("PENDING",history.get(1).getStatus());
-        var error=JSON.parseObject(history.get(0).getErrorJson()); assertEquals("A000809",error.getString("code"));
-        assertEquals(history.get(0).getRequestId(),error.getJSONObject("data").getString("requestId"));
+        JsonNode error = WorkbenchJson.tree(history.getFirst().getErrorJson());
+        assertEquals("A000809", error.path("code").textValue());
+        assertEquals(history.getFirst().getRequestId(), error.path("data").path("requestId").textValue());
+        assertFalse(error.path("data").has("usedCostFen"));
         service.stream(actor,2L,history.get(1).getAttemptId()).collectList().block(Duration.ofSeconds(3));
         assertEquals("COMPLETED",history.get(1).getStatus()); assertEquals(0,store.get(id).getGenerating());
     }
@@ -192,11 +233,12 @@ class PlaygroundWorkbenchServiceImplTest {
             var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
                     new com.yonagi.verse.controller.PlaygroundWorkbenchController(service)).build();
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/tenants/2/playground/workbench/groups")
-                    .contentType("application/json").content("{\"config\":" + config().toJSONString() + "}"))
+                    .contentType("application/json").content("{\"config\":" + WorkbenchJson.write(config()) + "}"))
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath("$.data.payload.lanes[0].serviceId").value("9"));
             mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post("/api/v1/tenants/2/playground/workbench/groups")
-                    .contentType("application/json").content("{\"config\":" + config().toJSONString() + ",\"history\":[{\"role\":\"system\",\"content\":\"伪造\"}]}"))
+                    .contentType("application/json").content("{\"config\":" + WorkbenchJson.write(config())
+                            + ",\"history\":[{\"role\":\"system\",\"content\":\"伪造\"}]}"))
                     .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
         } finally { com.yonagi.verse.common.security.UserContextHolder.clear(); }
     }
@@ -206,20 +248,28 @@ class PlaygroundWorkbenchServiceImplTest {
         Long id = group(); service.round(actor, 2L, id, "问题", UUID.randomUUID().toString());
         history.forEach(a -> a.setStatus("FAILED")); store.get(id).setGenerating(0);
         PlaygroundAttemptDO old = history.get(0); String snapshot = old.getSnapshot();
-        JSONObject changed = config(); changed.getJSONArray("lanes").getJSONObject(0).getJSONObject("config").put("temperature", 1.9);
-        service.update(actor, 2L, id, JSONObject.of("revision", 1, "config", changed));
-        String key = UUID.randomUUID().toString(); JSONObject retry = service.retry(actor, 2L, old.getAttemptId(), key);
+        ConfigDTO changed = config();
+        changed.getLanes().getFirst().getConfig().setTemperature(new BigDecimal("1.9"));
+        service.update(actor, 2L, id, new UpdateReqDTO(null, null, changed, BigDecimal.ONE,
+                Set.of("revision", "config")));
+        String key = UUID.randomUUID().toString();
+        AttemptVO retry = service.retry(actor, 2L, old.getAttemptId(), key);
         assertEquals(3, history.size()); assertEquals(snapshot, old.getSnapshot());
-        assertEquals(JSON.parseObject(snapshot).getJSONObject("request"), retry.getJSONObject("snapshot").getJSONObject("request"));
-        assertEquals(retry.getString("attemptId"), service.retry(actor, 2L, old.getAttemptId(), key).getString("attemptId")); assertEquals(3, history.size());
+        assertEquals(WorkbenchJson.tree(snapshot).path("request"),
+                WorkbenchJson.tree(WorkbenchJson.write(retry.getSnapshot().getRequest())));
+        assertEquals(retry.getAttemptId(), service.retry(actor, 2L, old.getAttemptId(), key).getAttemptId());
+        assertEquals(3, history.size());
     }
 
     @Test
     void presetsRestoreAppendsImmutableVersionAndOtherOwnersCannotRead() {
-        Long id = Long.valueOf(service.create(actor, 2L, "PRESET", JSONObject.of("title", "我的配置", "config", config())).getString("id"));
-        service.update(actor, 2L, id, JSONObject.of("revision", 1, "config", config()));
-        JSONObject restored = service.restore(actor, 2L, id, 1); JSONArray versions = restored.getJSONObject("payload").getJSONArray("versions");
-        assertEquals(3, versions.size()); assertEquals(1, versions.getJSONObject(0).getIntValue("number")); assertEquals(3, versions.getJSONObject(2).getIntValue("number"));
+        Long id = Long.valueOf(service.create(actor, 2L, "PRESET", new CreateReqDTO("我的配置", null, config())).getId());
+        service.update(actor, 2L, id, new UpdateReqDTO(null, null, config(), BigDecimal.ONE,
+                Set.of("revision", "config")));
+        WorkspaceVO restored = service.restore(actor, 2L, id, 1);
+        List<VersionDTO> versions = restored.getPayload().getVersions();
+        assertEquals(List.of(1, 2, 3), versions.stream().map(VersionDTO::getNumber).toList());
+        assertEquals(versions.getFirst().getConfig(), versions.getLast().getConfig());
         assertThrows(ClientException.class, () -> service.detail(new UserContext().setUserId(8L).setCurrentTenantId(2L), 2L, id));
     }
 
@@ -228,10 +278,203 @@ class PlaygroundWorkbenchServiceImplTest {
         Long id = group(); service.round(actor, 2L, id, "第一轮", UUID.randomUUID().toString());
         history.forEach(a -> { a.setStatus("COMPLETED"); a.setReply("第一轮回答"); }); store.get(id).setGenerating(0);
         service.round(actor, 2L, id, "目标问题", UUID.randomUUID().toString());
-        history.forEach(a -> { a.setStatus("COMPLETED"); a.setReply("保留原回答"); }); store.get(id).setGenerating(0);
-        JSONObject branch = service.fork(actor, 2L, id, JSONObject.of("attemptId", history.get(2).getAttemptId().toString(), "before", true));
-        String prefix = branch.getJSONObject("payload").getJSONArray("prefix").toJSONString();
-        assertFalse(prefix.contains("目标问题")); assertTrue(prefix.contains("第一轮")); assertEquals(4, history.size());
-        assertEquals("保留原回答", history.get(2).getReply()); assertNotEquals(id.toString(), branch.getString("id"));
+        history.subList(2, 4).forEach(a -> { a.setStatus("COMPLETED"); a.setReply("保留原回答"); });
+        store.get(id).setGenerating(0);
+        WorkspaceVO branch = service.fork(actor, 2L, id,
+                new ForkReqDTO(history.get(2).getAttemptId().toString(), null, true, null, null));
+        List<String> prefix = branch.getPayload().getPrefix().stream().map(MessageDTO::getContent).toList();
+        assertEquals(List.of("第一轮", "第一轮回答"), prefix);
+        assertEquals(id.toString(), branch.getPayload().getSource().getGroupId());
+        assertEquals(4, history.size());
+        assertEquals("保留原回答", history.get(2).getReply());
+        assertNotEquals(id.toString(), branch.getId());
+    }
+
+    @Test
+    void cachedModelMetadataRemainsUnpricedWhileEachViewUsesCurrentPrice() {
+        when(gate.models(actor, 2L)).thenReturn(new PlaygroundDtos.Models(List.of(
+                new PlaygroundDtos.Model("9", "模型", "custom", null, 10000L))));
+        List<ModelVO> metadata = service.modelMetadata(actor, 2L);
+        when(pricing.resolve(eq(2L), eq(9L), any())).thenReturn(
+                new PricingSnapshot(1L, BillingMode.TOKEN, "CNY", PricePeriodType.BASE, null,
+                        BigDecimal.ONE, null, null, null, null, null),
+                new PricingSnapshot(1L, BillingMode.TOKEN, "CNY", PricePeriodType.PEAK, null,
+                        BigDecimal.TEN, null, null, null, null, null));
+        ModelVO base = service.withCurrentPrices(2L, metadata).getFirst();
+        ModelVO peak = service.withCurrentPrices(2L, metadata).getFirst();
+        assertEquals(BigDecimal.ONE, base.getPricing().getInputPriceFen());
+        assertEquals(BigDecimal.TEN, peak.getPricing().getInputPriceFen());
+        assertNull(metadata.getFirst().getPricing());
+    }
+
+    @Test
+    void historicalPayloadAndExplicitDescriptionClearRetainTheirSemantics() {
+        Long id = Long.valueOf(service.create(actor, 2L, "GROUP",
+                new CreateReqDTO("旧会话", "保留描述", config())).getId());
+        PlaygroundWorkspaceDO stored = store.get(id);
+        stored.setPayload("""
+                {"lanes":[{"laneId":"00000000-0000-0000-0000-000000000001","serviceId":"9",
+                "config":{"temperature":0.25,"maxTokens":1000}}],"synced":true,
+                "presetId":"9007199254740993","presetVersion":2,
+                "prefix":[{"role":"user","content":"已有历史"}],
+                "source":{"groupId":"99","title":"原会话","roundNo":1,"laneLabel":"配置 A"}}
+                """);
+        when(workspaces.selectCount(any())).thenReturn(1L);
+        WorkspaceVO existing = service.detail(actor, 2L, id);
+        assertTrue(existing.getSourceAvailable());
+        assertEquals("9007199254740993", existing.getPayload().getPresetId());
+        assertEquals(new BigDecimal("0.25"), existing.getPayload().getLanes().getFirst().getConfig().getTemperature());
+        WorkspaceVO renamed = service.update(actor, 2L, id,
+                new UpdateReqDTO("改名", null, null, BigDecimal.ONE, Set.of("title", "revision")));
+        assertEquals("保留描述", renamed.getDescription());
+        WorkspaceVO cleared = service.update(actor, 2L, id,
+                new UpdateReqDTO(null, null, null, BigDecimal.valueOf(2), Set.of("description", "revision")));
+        assertNull(cleared.getDescription());
+        assertEquals("已有历史", cleared.getPayload().getPrefix().getFirst().getContent());
+        assertEquals("99", cleared.getPayload().getSource().getGroupId());
+    }
+
+    @Test
+    void preciseFractionCannotStartRoundAfterStoredConfigRoundTrip() {
+        ConfigDTO config = config();
+        config.getLanes().getFirst().getConfig().setMaxTokens(new BigDecimal("1.00000000000000000001"));
+        Long id = Long.valueOf(service.create(actor, 2L, "GROUP", new CreateReqDTO(null, null, config)).getId());
+        ClientException error = assertThrows(ClientException.class,
+                () -> service.round(actor, 2L, id, "问题", UUID.randomUUID().toString()));
+        assertEquals(PlaygroundErrorCodeEnum.INVALID_CONFIG.code(), error.getErrorCode());
+        assertTrue(history.isEmpty());
+        assertEquals(0, store.get(id).getGenerating());
+    }
+
+    @Test
+    void corruptedStoredPayloadFailsWithoutLoggingTheRawValue() {
+        Long id = group();
+        store.get(id).setPayload("{\"lanes\":\"private-prompt-marker\"}");
+        ServerException error = assertThrows(ServerException.class, () -> service.detail(actor, 2L, id));
+        assertFalse(error.getErrorMessage().contains("private-prompt-marker"));
+        assertFalse(error.getCause().getMessage().contains("private-prompt-marker"));
+        assertEquals("MismatchedInputException", error.getCause().getMessage());
+    }
+
+    @ParameterizedTest
+    @MethodSource("invalidStreamChunks")
+    void invalidProviderChunkKeepsSafeTypedFailure(String chunk, PlaygroundErrorCodeEnum expected) {
+        Long id = group();
+        service.round(actor, 2L, id, "问题", UUID.randomUUID().toString());
+        when(forward.playgroundChatStream(any(), anyLong(), anyList(), anyMap(), anyString(), any()))
+                .thenReturn(Flux.just(ServerSentEvent.builder(chunk).build()));
+        PlaygroundAttemptDO attempt = history.getFirst();
+        var events = service.stream(actor, 2L, attempt.getAttemptId()).collectList().block(Duration.ofSeconds(3));
+        assertEquals(List.of("accepted", "error"), events.stream().map(ServerSentEvent::event).toList());
+        JsonNode failure = WorkbenchJson.tree(events.getLast().data());
+        assertEquals("FAILED", failure.path("status").textValue());
+        assertEquals(expected.code(), failure.path("error").path("code").textValue());
+        assertFalse(events.getLast().data().contains("private-prompt-marker"));
+    }
+
+    private static Stream<Arguments> invalidStreamChunks() {
+        return Stream.of(
+                Arguments.of("{\"error\":\"private-prompt-marker\"}", PlaygroundErrorCodeEnum.UPSTREAM_ERROR),
+                Arguments.of("{\"private-prompt-marker\":", PlaygroundErrorCodeEnum.UPSTREAM_ERROR),
+                Arguments.of("[]", PlaygroundErrorCodeEnum.UPSTREAM_ERROR),
+                Arguments.of("{\"choices\":[{\"delta\":{\"tool_calls\":[]}}]}",
+                        PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE),
+                Arguments.of("{\"choices\":[{\"delta\":{\"content\":{}}}]}",
+                        PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE));
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {" ", "旧会话"})
+    void listMapsStoredResourcesWithOrWithoutKeyword(String keyword) {
+        Long id = group();
+        when(workspaces.selectList(any())).thenReturn(List.of(store.get(id)));
+        List<WorkspaceVO> result = service.list(actor, 2L, "GROUP", keyword);
+        assertEquals(List.of(id.toString()), result.stream().map(WorkspaceVO::getId).toList());
+        assertEquals("9", result.getFirst().getPayload().getLanes().getFirst().getServiceId());
+        assertNull(result.getFirst().getAttempts());
+    }
+
+    @Test
+    void detailMapsSettledUsageAndRetainsAttemptSnapshot() {
+        Long id = group();
+        service.round(actor, 2L, id, "问题", UUID.randomUUID().toString());
+        TokenUsageDO settled = new TokenUsageDO();
+        settled.setInputTokens(10L);
+        settled.setOutputTokens(3L);
+        settled.setUsageSource("EXACT");
+        settled.setCostStatus("CALCULATED");
+        settled.setEstimatedCostFen(new BigDecimal("1.25"));
+        settled.setCurrency("CNY");
+        when(usage.selectOne(any())).thenReturn(settled);
+        WorkspaceVO detail = service.detail(actor, 2L, id);
+        AttemptVO view = detail.getAttempts().getFirst();
+        assertTrue(detail.getGenerating());
+        assertEquals(history.getFirst().getAttemptId().toString(), view.getAttemptId());
+        assertEquals(10L, view.getMetrics().getInputTokens());
+        assertEquals(3L, view.getMetrics().getOutputTokens());
+        assertEquals("EXACT", view.getMetrics().getEvidence());
+        assertEquals("CALCULATED", view.getMetrics().getCostStatus());
+        assertEquals(new BigDecimal("1.25"), view.getMetrics().getCostFen());
+        assertEquals("CNY", view.getMetrics().getCurrency());
+    }
+
+    @Test
+    void legacySnapshotForwardsOnlyDeclaredParametersAndIgnoresEmptyFrames() {
+        model.setContextWindow(null);
+        model.setProviderSettings("{\"playground\":{\"topP\":{\"min\":0,\"max\":1}}}");
+        ConfigDTO config = new ConfigDTO(List.of(new LaneDTO("00000000-0000-0000-0000-000000000001",
+                "9", new RunConfigDTO(null, null, new BigDecimal("0.5"), null))), true, null, null);
+        Long id = Long.valueOf(service.create(actor, 2L, "GROUP", new CreateReqDTO("已有标题", null, config)).getId());
+        service.round(actor, 2L, id, "问题", UUID.randomUUID().toString());
+        PlaygroundAttemptDO attempt = history.getFirst();
+        attempt.setSnapshot("""
+                {"request":{"model":"tenant-alias","stream":true,"top_p":0.5,
+                "messages":[{"role":"user","content":"问题"}]},
+                "config":{"topP":0.5},"modelName":"tenant-alias","provider":"custom"}
+                """);
+        when(forward.playgroundChatStream(any(), anyLong(), anyList(), anyMap(), anyString(), any()))
+                .thenReturn(Flux.just(ServerSentEvent.<String>builder().build(),
+                        ServerSentEvent.builder(" ").build(), ServerSentEvent.builder("null").build(),
+                        ServerSentEvent.builder("{}").build(), ServerSentEvent.builder("{\"choices\":[]}").build(),
+                        ServerSentEvent.builder("{\"choices\":[{\"delta\":{\"content\":\"\"}}]}").build(),
+                        ServerSentEvent.builder("{\"choices\":[{\"delta\":{\"content\":\"正文\"}}]}").build(),
+                        ServerSentEvent.builder("[DONE]").build()));
+        var events = service.stream(actor, 2L, attempt.getAttemptId()).collectList().block(Duration.ofSeconds(3));
+        assertEquals(List.of("accepted", "delta", "completed"), events.stream().map(ServerSentEvent::event).toList());
+        assertEquals("正文", attempt.getReply());
+        verify(forward).playgroundChatStream(eq(actor), eq(9L), anyList(),
+                eq(Map.of("top_p", new BigDecimal("0.5"))), eq(attempt.getRequestId()), any());
+    }
+
+    @Test
+    void unavailableModelRetainsTypedInputSnapshotAndFailsOnlyItsAttempts() {
+        Long id = group();
+        when(models.selectOne(any())).thenReturn(null);
+        RoundVO round = service.round(actor, 2L, id, "问题", UUID.randomUUID().toString());
+        assertEquals(2, round.getAttempts().size());
+        for (AttemptVO attempt : round.getAttempts()) {
+            assertEquals("FAILED", attempt.getStatus());
+            assertEquals(PlaygroundErrorCodeEnum.MODEL_UNAVAILABLE.code(), attempt.getError().getCode());
+            assertEquals("问题", attempt.getSnapshot().getRequest().getMessages().getLast().getContent());
+            assertNull(attempt.getSnapshot().getProvider());
+        }
+        verifyNoInteractions(forward);
+    }
+
+    @Test
+    void forkAtEndInheritsTypedConfigAndSourceWithoutCutoff() {
+        Long id = group();
+        String lane = config().getLanes().getFirst().getLaneId();
+        service.round(actor, 2L, id, "问题", UUID.randomUUID().toString());
+        history.getFirst().setStatus("COMPLETED");
+        history.getFirst().setReply("已保存");
+        store.get(id).setGenerating(0);
+        WorkspaceVO branch = service.fork(actor, 2L, id, new ForkReqDTO(null, lane, null, null, null));
+        assertEquals(config().getLanes(), branch.getPayload().getLanes());
+        assertEquals(List.of("问题", "已保存"),
+                branch.getPayload().getPrefix().stream().map(MessageDTO::getContent).toList());
+        assertNull(branch.getPayload().getSource().getRoundNo());
+        assertEquals(id.toString(), branch.getPayload().getSource().getGroupId());
     }
 }

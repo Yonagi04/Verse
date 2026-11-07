@@ -747,18 +747,50 @@ class LlmForwardUsagePublicationTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"1025", "0", "-1", "1.5", "\"1024\"", "true", "1e100"})
+    @ValueSource(strings = {"1025", "0", "-1", "1.5", "\"1024\"", "true", "1e100",
+            "1.00000000000000000001", "1024.00000000000000000001"})
     void apiRejectsInvalidOrExcessiveOutputBeforeRateLimitAndUpstream(String value) {
         primary.setMaxOutputTokens(1024L);
-        for (String field : List.of("max_tokens", "max_completion_tokens")) {
+        for (String field : List.of("max_tokens", "max_completion_tokens", "max_output_tokens")) {
             String body = "{\"model\":\"alias\",\"" + field + "\":" + value + "}";
+            ModelOperation operation = field.equals("max_output_tokens")
+                    ? ModelOperation.RESPONSES : ModelOperation.CHAT_COMPLETIONS;
             ClientException blocking = assertThrows(ClientException.class,
-                    () -> service.chatCompletion(context, body, "limit-blocking", Instant.now()));
+                    () -> service.jsonCompletion(context, operation, body, "limit-blocking", Instant.now()));
             assertEquals(LlmForwardErrorCodeEnum.OUTPUT_TOKEN_LIMIT_INVALID.code(), blocking.getErrorCode());
-            assertThrows(ClientException.class,
-                    () -> service.chatCompletionStream(context, body, "limit-stream", Instant.now()));
+            ClientException preflight = assertThrows(ClientException.class,
+                    () -> service.preflight(context, operation, body));
+            assertEquals(LlmForwardErrorCodeEnum.OUTPUT_TOKEN_LIMIT_INVALID.code(), preflight.getErrorCode());
+            ClientException streaming = assertThrows(ClientException.class, () -> {
+                if (operation == ModelOperation.RESPONSES) {
+                    service.responsesStream(context, body, "limit-stream", Instant.now());
+                } else {
+                    service.chatCompletionStream(context, body, "limit-stream", Instant.now());
+                }
+            });
+            assertEquals(LlmForwardErrorCodeEnum.OUTPUT_TOKEN_LIMIT_INVALID.code(), streaming.getErrorCode());
         }
         verifyNoInteractions(rateLimiter, timeLimiter, providerAdapter, fallbackExecutor);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"1.0", "1e0", "1024.0", "1.024e3"})
+    void apiPreservesLegalDecimalAndExponentIntegerRequests(String value) {
+        primary.setMaxOutputTokens(1024L);
+        when(timeLimiter.execute(any(), any())).thenAnswer(i -> ((Callable<?>) i.getArgument(1)).call());
+        when(providerAdapter.forward(any())).thenReturn("{}");
+        List<String> bodies = new java.util.ArrayList<>();
+        for (String field : List.of("max_tokens", "max_completion_tokens", "max_output_tokens")) {
+            String body = "{\"model\":\"alias\",\"" + field + "\":" + value + "}";
+            bodies.add(body);
+            ModelOperation operation = field.equals("max_output_tokens")
+                    ? ModelOperation.RESPONSES : ModelOperation.CHAT_COMPLETIONS;
+            service.preflight(context, operation, body);
+            assertEquals("{}", service.jsonCompletion(context, operation, body, "exact-" + field, Instant.now()));
+        }
+        ArgumentCaptor<ForwardContext> forwarded = ArgumentCaptor.forClass(ForwardContext.class);
+        verify(providerAdapter, times(3)).forward(forwarded.capture());
+        assertEquals(bodies, forwarded.getAllValues().stream().map(ForwardContext::getBody).toList());
     }
 
     @Test

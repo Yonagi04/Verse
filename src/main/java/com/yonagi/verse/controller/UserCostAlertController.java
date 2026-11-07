@@ -8,7 +8,7 @@ import com.yonagi.verse.common.enums.UserCostAlertErrorCode;
 import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.UserCostAlertSettingsReplaceReqDTO;
 import com.yonagi.verse.dto.resp.UserCostAlertSettingsRespDTO;
-import jakarta.servlet.http.*;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -20,16 +20,19 @@ public class UserCostAlertController {
     private final UserCostAlertQueryService query;
     private final UserCostAlertSettingsService settings;
     @GetMapping
-    public Result<UserCostAlertSettingsRespDTO> getSettings(@CurrentUser Long userId,HttpServletRequest request,HttpServletResponse response) {
-        validateQuery(request,response); return Results.success(query.getSettings(userId));
+    public Result<UserCostAlertSettingsRespDTO> getSettings(@CurrentUser Long userId,HttpServletRequest request) {
+        validateQuery(request);
+        return Results.success(query.getSettings(userId));
     }
     @PutMapping
     public Result<UserCostAlertSettingsRespDTO> replaceSettings(@CurrentUser Long userId,@Valid @RequestBody UserCostAlertSettingsReplaceReqDTO body,
-            HttpServletRequest request,HttpServletResponse response) {
-        validateQuery(request,response); return Results.success(settings.replace(userId,body));
+            HttpServletRequest request) {
+        validateQuery(request);
+        return Results.success(settings.replace(userId,body));
     }
-    private void validateQuery(HttpServletRequest request,HttpServletResponse response) {
-        response.setHeader("Cache-Control","no-store");
-        if (!request.getParameterMap().isEmpty()) throw new ClientException(UserCostAlertErrorCode.INVALID_SETTINGS);
+    private void validateQuery(HttpServletRequest request) {
+        if (!request.getParameterMap().isEmpty()) {
+            throw new ClientException(UserCostAlertErrorCode.INVALID_SETTINGS);
+        }
     }
 }

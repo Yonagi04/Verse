@@ -6,6 +6,8 @@ import com.yonagi.verse.common.security.UserContextHolder;
 import com.yonagi.verse.dto.resp.SkillPageRespDTO;
 import java.util.List;
 import com.yonagi.verse.service.CurrentTenantStateService;
+import com.yonagi.verse.service.LoginSessionValidationService;
+import java.util.Date;
 import com.yonagi.verse.service.skillhub.SkillDraftService;
 import com.yonagi.verse.service.skillhub.SkillImportTaskService;
 import com.yonagi.verse.service.skillhub.SkillLifecycleService;
@@ -43,6 +45,9 @@ class SkillAuthenticationContractTest {
         JwtUtil jwt = mock(JwtUtil.class);
         Claims claims = mock(Claims.class);
         when(claims.getSubject()).thenReturn("1");
+        when(claims.getId()).thenReturn("session-id");
+        when(claims.get("username", String.class)).thenReturn("alice");
+        when(claims.getExpiration()).thenReturn(new Date(System.currentTimeMillis() + 60_000));
         when(jwt.parseToken("fixture-token")).thenReturn(claims);
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         sessions = mock(ValueOperations.class);
@@ -54,7 +59,9 @@ class SkillAuthenticationContractTest {
                 lifecycle, mock(SkillImportTaskService.class),
                 mock(SkillZipUploadReceiver.class));
         mvc = MockMvcBuilders.standaloneSetup(controller).setControllerAdvice(new SkillExceptionAdvice())
-                .addFilters(new JwtAuthenticationFilter(jwt, redis, tenants, accounts)).build();
+                .addFilters(new JwtAuthenticationFilter(
+                        new LoginSessionValidationService(jwt, redis, accounts), tenants))
+                .build();
     }
 
     @Test

@@ -1,13 +1,14 @@
 package com.yonagi.verse.controller;
 
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
 import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.common.security.UserContextHolder;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
+import com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory;
+import com.yonagi.verse.dto.resp.OpenAiErrorRespDTO;
 import com.yonagi.verse.service.LlmForwardService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ import java.time.Instant;
 public class RerankController {
     private final LlmForwardService forwardService;
 
+    /** 转发 Rerank 请求并返回兼容错误信封。 */
     @PostMapping(value = "/api/v1/rerank", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> rerank(@RequestBody String body) {
         String requestId = String.valueOf(SnowflakeIdUtil.nextId());
@@ -43,23 +45,19 @@ public class RerankController {
     }
 
     private ResponseEntity<String> error(AbstractException e, String requestId) {
-            if (com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(e)) {
-                return com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
-                        .body(com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.body(e, requestId));
-            }
-            JSONObject error = new JSONObject();
-            error.put("message", e.getErrorMessage());
-            error.put("type", e.getErrorCode().startsWith("A") ? "invalid_request_error"
-                    : e.getErrorCode().startsWith("C") ? "upstream_error" : "server_error");
-            error.put("code", e.getErrorCode());
-            JSONObject envelope = new JSONObject();
-            envelope.put("error", error);
-            int status = "A000800".equals(e.getErrorCode()) ? 404
-                    : "A000801".equals(e.getErrorCode()) ? 401
-                    : "A000802".equals(e.getErrorCode()) ? 429
-                    : "A000806".equals(e.getErrorCode()) ? 413
-                    : e.getErrorCode().startsWith("C") ? 502 : 400;
-            return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON)
-                    .header("x-request-id", requestId).body(JSON.toJSONString(envelope));
+        if (OpenAiCostErrorResponseFactory.supports(e)) {
+            return OpenAiCostErrorResponseFactory.headers(e, requestId, Instant.now())
+                    .body(OpenAiCostErrorResponseFactory.body(e, requestId));
+        }
+        String code = e.getErrorCode();
+        int status = "A000800".equals(code) ? 404
+                : "A000801".equals(code) ? 401
+                : "A000802".equals(code) ? 429
+                : "A000806".equals(code) ? 413
+                : code.startsWith("C") ? 502 : 400;
+        OpenAiErrorRespDTO<OpenAiErrorRespDTO.DetailDTO> envelope =
+                OpenAiErrorRespDTO.gatewayError(e.getErrorMessage(), code);
+        return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON)
+                .header("x-request-id", requestId).body(JSON.toJSONString(envelope));
     }
 }

@@ -15,8 +15,8 @@ import com.yonagi.verse.dto.resp.LoginSessionVO;
 import com.yonagi.verse.dto.resp.ExternalAuthRespDTO.*;
 import com.yonagi.verse.service.*;
 import com.yonagi.verse.service.impl.UserServiceImpl;
-import jakarta.servlet.http.*;
-import org.springframework.http.ResponseCookie;
+import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -81,22 +81,40 @@ public class ExternalAuthService {
     }
 
     private <T> T transaction(Supplier<T> action) { return tx.execute(status -> action.get()); }
-    public Start start(ExternalFlowStartReqDTO input, Long user, HttpServletRequest request, HttpServletResponse response) {
+    /**
+     * 创建外部认证流程，并在事务回调中同步发放浏览器证明。
+     * @param input 外部平台和绑定时需要的近期验密证明
+     * @param user 已认证的绑定账号，登录流程为 null
+     * @param request 来源和现有浏览器证明
+     * @param cookies 当前请求的浏览器证明输出
+     * @return 授权地址和标签页证明
+     */
+    public Start start(ExternalFlowStartReqDTO input, Long user, HttpServletRequest request,
+                       ExternalAuthCookieOutput cookies) {
         source(request);
-        if (!providers.enabled(input.getProvider())) throw new ClientException(PROVIDER_DISABLED);
+        if (!providers.enabled(input.getProvider())) {
+            throw new ClientException(PROVIDER_DISABLED);
+        }
         rate("start:" + DigestUtil.sha256Hex(DeviceUtil.getClientIp(request)), config.getStartsPerMinute(), Duration.ofMinutes(1));
-        if (activeFlows(request, response) >= 3) throw new ClientException(FLOW_LIMIT_EXCEEDED);
-        if (user != null) return locks.withUser(user, () -> transaction(() -> startFlow(input, user, request, response)));
-        return transaction(() -> startFlow(input, null, request, response));
+        if (activeFlows(request, cookies) >= 3) {
+            throw new ClientException(FLOW_LIMIT_EXCEEDED);
+        }
+        if (user != null) {
+            return locks.withUser(user, () -> transaction(() -> startFlow(input, user, request, cookies)));
+        }
+        return transaction(() -> startFlow(input, null, request, cookies));
     }
 
-    private int activeFlows(HttpServletRequest request, HttpServletResponse response) {
+    private int activeFlows(HttpServletRequest request, ExternalAuthCookieOutput output) {
         if (request.getCookies() == null) return 0;
         Map<String, List<Cookie>> cookies = new LinkedHashMap<>();
         for (Cookie cookie : request.getCookies()) {
             if (!cookie.getName().startsWith(COOKIE_PREFIX)) continue;
             String id = cookie.getName().substring(COOKIE_PREFIX.length());
-            if (!id.matches("[a-f0-9]{32}")) { cookie(response, id, "", Duration.ZERO); continue; }
+            if (!id.matches("[a-f0-9]{32}")) {
+                writeCookie(output, id, "", Duration.ZERO);
+                continue;
+            }
             cookies.computeIfAbsent(id, ignored -> new ArrayList<>()).add(cookie);
         }
         if (cookies.isEmpty()) return 0;
@@ -109,7 +127,7 @@ public class ExternalAuthService {
             var flow = records.get(entry.getKey());
             if (flow == null || !flow.getExpiresAt().isAfter(current)
                     || entry.getValue().stream().noneMatch(cookie -> matches(flow.getBrowserCookieHash(), cookie.getValue()))) {
-                cookie(response, entry.getKey(), "", Duration.ZERO);
+                writeCookie(output, entry.getKey(), "", Duration.ZERO);
             } else if (ACTIVE_STAGES.contains(flow.getStage())) {
                 active++;
             }
@@ -118,7 +136,8 @@ public class ExternalAuthService {
         return active;
     }
 
-    private Start startFlow(ExternalFlowStartReqDTO input, Long user, HttpServletRequest request, HttpServletResponse response) {
+    private Start startFlow(ExternalFlowStartReqDTO input, Long user, HttpServletRequest request,
+                            ExternalAuthCookieOutput cookies) {
         String id = id(); String state = secret(); String token = secret(); String cookie = secret();
         String verifier = secret(); String nonce = secret();
         ExternalAuthFlowDO flow = new ExternalAuthFlowDO();
@@ -132,23 +151,36 @@ public class ExternalAuthService {
         }
         String url = providers.authorization(input.getProvider(), state, verifier, nonce).getAuthorizationRequestUri();
         redis.opsForValue().set(PREFIX + "protocol:" + id, aes.encrypt(JSON.toJSONString(Map.of("verifier", verifier, "nonce", nonce))), config.getAuthTtl());
-        flows.insert(flow); cookie(response, id, cookie, config.getAuthTtl());
+        flows.insert(flow);
+        writeCookie(cookies, id, cookie, config.getAuthTtl());
         return new Start(id, token, url, iso(flow.getExpiresAt()));
     }
 
-    public String callback(String provider, HttpServletRequest request, HttpServletResponse response) {
+    /**
+     * 领取并处理授权回调，按流程结果续期浏览器证明。
+     * @param provider 当前回调的平台
+     * @param request 授权回调参数和浏览器证明
+     * @param cookies 当前请求的浏览器证明输出
+     * @return 受配置约束的前端跳转目标
+     */
+    public String callback(String provider, HttpServletRequest request, ExternalAuthCookieOutput cookies) {
         String state = request.getParameter("state");
         if (state == null || state.length() > 128) return config.getFrontendOrigin() + "/auth/external/error";
         ExternalAuthFlowDO flow = flows.selectOne(Wrappers.lambdaQuery(ExternalAuthFlowDO.class).eq(ExternalAuthFlowDO::getStateHash, hash(state)));
         if (flow == null || !flow.getProvider().equals(provider) || !matches(flow.getBrowserCookieHash(), cookieValue(request, flow.getFlowId())))
             return config.getFrontendOrigin() + "/auth/external/error";
         String destination = config.getFrontendOrigin() + "/auth/external/callback#flow=" + flow.getFlowId();
-        if (!flow.getExpiresAt().isAfter(now())) { fail(flow.getFlowId(), "FLOW_EXPIRED", request, response); return destination; }
+        if (!flow.getExpiresAt().isAfter(now())) {
+            fail(flow.getFlowId(), "FLOW_EXPIRED", request, cookies);
+            return destination;
+        }
         // CAS只领取一次，网络交换在事务外；回调重放不能再次消费授权码。
         if (flows.claim(flow.getFlowId()) != 1) return destination;
         try {
             if (request.getParameter("error") != null) {
-                fail(flow.getFlowId(), "access_denied".equals(request.getParameter("error")) ? "AUTHORIZATION_CANCELLED" : "PROVIDER_RESPONSE_INVALID", request, response);
+                String reason = "access_denied".equals(request.getParameter("error"))
+                        ? "AUTHORIZATION_CANCELLED" : "PROVIDER_RESPONSE_INVALID";
+                fail(flow.getFlowId(), reason, request, cookies);
                 return destination;
             }
             String code = request.getParameter("code");
@@ -174,10 +206,14 @@ public class ExternalAuthService {
                 current.setExpiresAt(now().plus(config.getActionTtl())); flows.updateById(current);
                 return null;
             });
-            cookie(response, flow.getFlowId(), cookieValue(request, flow.getFlowId()), config.getActionTtl());
-        } catch (ClientException e) { fail(flow.getFlowId(), reason(e.getErrorCode()), request, response);
-        } catch (RuntimeException e) { fail(flow.getFlowId(), "PROVIDER_UNAVAILABLE", request, response);
-        } finally { redis.delete(PREFIX + "protocol:" + flow.getFlowId()); }
+            writeCookie(cookies, flow.getFlowId(), cookieValue(request, flow.getFlowId()), config.getActionTtl());
+        } catch (ClientException e) {
+            fail(flow.getFlowId(), reason(e.getErrorCode()), request, cookies);
+        } catch (RuntimeException e) {
+            fail(flow.getFlowId(), "PROVIDER_UNAVAILABLE", request, cookies);
+        } finally {
+            redis.delete(PREFIX + "protocol:" + flow.getFlowId());
+        }
         return destination;
     }
 
@@ -185,14 +221,16 @@ public class ExternalAuthService {
         return Arrays.stream(com.yonagi.verse.common.enums.ExternalAuthErrorCodeEnum.values())
                 .filter(e -> e.code().equals(code)).map(Enum::name).findFirst().orElse("FLOW_INVALID");
     }
-    private void fail(String id, String reason, HttpServletRequest request, HttpServletResponse response) {
+    private void fail(String id, String reason, HttpServletRequest request, ExternalAuthCookieOutput cookies) {
         boolean failed = transaction(() -> { var row = flows.lock(id);
             // 回调与取消可能并发，不能将已取消或已完成的流程重新写成失败。
             if (row == null || !Set.of("AUTHORIZING", "AUTHENTICATING").contains(row.getStage())) return false;
             row.setStage("FAILED"); row.setErrorReason(reason); row.setExpiresAt(now().plus(config.getActionTtl())); flows.updateById(row);
             return true;
         });
-        if (failed) cookie(response, id, cookieValue(request, id), config.getActionTtl());
+        if (failed) {
+            writeCookie(cookies, id, cookieValue(request, id), config.getActionTtl());
+        }
     }
 
     public Context context(String id, HttpServletRequest request) {
@@ -413,7 +451,14 @@ public class ExternalAuthService {
         guards.audit(id(),"BIND",identity.getProvider(),user,identity.getId(),binding.getId(),flow,null,"BOUND"); return binding;
     }
 
-    public void cancel(String id,HttpServletRequest request,HttpServletResponse response,boolean acknowledge) {
+    /**
+     * 取消流程或确认收到结果，撤销双重证明后清理客户端 Cookie。
+     * @param id 外部认证流程标识
+     * @param request 可信来源和双重证明
+     * @param cookies 当前请求的浏览器证明输出
+     * @param acknowledge 是否确认收到已完成流程的结果
+     */
+    public void cancel(String id, HttpServletRequest request, ExternalAuthCookieOutput cookies, boolean acknowledge) {
         source(request); transaction(()->{
             var row=proven(id,request,!acknowledge);
             if (acknowledge && !"COMPLETED".equals(row.getStage())) throw new ClientException(FLOW_INVALID);
@@ -422,7 +467,8 @@ public class ExternalAuthService {
             row.setFlowTokenHash(hash(secret())); row.setBrowserCookieHash(hash(secret())); flows.updateById(row);
             return null;
         });
-        cookie(response,id,"",Duration.ZERO); redis.delete(List.of(PREFIX+"protocol:"+id,PREFIX+"result:"+id));
+        writeCookie(cookies, id, "", Duration.ZERO);
+        redis.delete(List.of(PREFIX + "protocol:" + id, PREFIX + "result:" + id));
     }
 
     private ExternalAuthFlowDO proven(String id,HttpServletRequest request) {
@@ -503,9 +549,8 @@ public class ExternalAuthService {
             identity.getEmailEncrypted()==null?null:SensitiveUtil.maskEmail(aes.decrypt(identity.getEmailEncrypted()))); }
     private String decrypt(String value) { return value==null?null:aes.decrypt(value); }
     private Duration remaining(ExternalAuthFlowDO row) { return Duration.between(now(),row.getExpiresAt()); }
-    private void cookie(HttpServletResponse response,String id,String value,Duration ttl) {
-        response.addHeader("Set-Cookie",ResponseCookie.from(COOKIE_PREFIX+id,value).httpOnly(true).secure(config.getFrontendOrigin().startsWith("https://"))
-                .sameSite("Lax").path("/api/v1").maxAge(ttl).build().toString());
+    private static void writeCookie(ExternalAuthCookieOutput output, String id, String value, Duration ttl) {
+        output.write(COOKIE_PREFIX + id, value, ttl);
     }
     private String cookieValue(HttpServletRequest request,String id) {
         if (request.getCookies()==null) return null;
