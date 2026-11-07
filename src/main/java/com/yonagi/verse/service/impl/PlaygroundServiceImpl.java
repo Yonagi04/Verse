@@ -6,15 +6,15 @@ import com.yonagi.verse.service.playground.PlaygroundQueryAccess;
 
 import com.yonagi.verse.common.cache.QueryCached;
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONArray;
-import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.common.enums.PlaygroundErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
+import com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
 import com.yonagi.verse.dao.entity.LlmServiceCapabilityDO;
 import com.yonagi.verse.dao.entity.PlaygroundSessionDO;
@@ -27,11 +27,15 @@ import com.yonagi.verse.dao.mapper.PlaygroundTurnMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.dto.resp.PlaygroundDtos;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.ErrorDataVO;
 import com.yonagi.verse.resilience.impl.PlaygroundRateLimiter;
 import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.PlaygroundService;
+import com.yonagi.verse.service.budget.CostLimitExceededException;
 import com.yonagi.verse.service.forward.ModelResolver;
 import com.yonagi.verse.service.forward.ChatMessage;
+import com.yonagi.verse.service.playground.PlaygroundCostError;
+import com.yonagi.verse.service.playground.PlaygroundChatDeltaReader;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
@@ -284,35 +288,13 @@ public class PlaygroundServiceImpl implements PlaygroundService {
         AtomicInteger sequence = new AtomicInteger();
         long[] lastSaved = {System.currentTimeMillis()};
         String turnId = id(turn.getTurnId());
-        ServerSentEvent<String> accepted = event("accepted", JSONObject.of(
-                "sessionId", id(turn.getSessionId()), "turnId", turnId,
-                "requestId", turn.getRequestId(), "status", "PENDING"));
+        ServerSentEvent<String> accepted = event("accepted", new PlaygroundDtos.AcceptedVO(
+                id(turn.getSessionId()), turnId, turn.getRequestId(), "PENDING"));
         Flux<ServerSentEvent<String>> deltas = upstream.handle((chunk, sink) -> {
-            String data = chunk.data();
-            if (data == null || "[DONE]".equals(data.trim())) return;
-            JSONObject envelope = JSON.parseObject(data);
-            if (envelope == null) return;
-            if (envelope.containsKey("error")) {
-                sink.error(new ClientException(PlaygroundErrorCodeEnum.UPSTREAM_ERROR));
+            String text = PlaygroundChatDeltaReader.text(chunk.data());
+            if (text == null || text.isEmpty()) {
                 return;
             }
-            JSONArray choices = envelope.getJSONArray("choices");
-            if (choices == null || choices.isEmpty()) return;
-            JSONObject choice = choices.getJSONObject(0);
-            if (choice != null && ("tool_calls".equals(choice.getString("finish_reason"))
-                    || "function_call".equals(choice.getString("finish_reason")))) {
-                sink.error(new ClientException(PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE));
-                return;
-            }
-            JSONObject delta = choice == null ? null : choice.getJSONObject("delta");
-            if (delta == null) return;
-            if (delta.containsKey("tool_calls") || delta.containsKey("function_call")
-                    || (delta.containsKey("content") && !(delta.get("content") instanceof String))) {
-                sink.error(new ClientException(PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE));
-                return;
-            }
-            String text = delta.getString("content");
-            if (text == null || text.isEmpty()) return;
             synchronized (reply) {
                 reply.append(text);
                 if (System.currentTimeMillis() - lastSaved[0] >= 250) {
@@ -321,28 +303,25 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                     lastSaved[0] = System.currentTimeMillis();
                 }
             }
-            sink.next(event("delta", JSONObject.of("turnId", turnId,
-                    "seq", sequence.incrementAndGet(), "text", text)));
+            sink.next(event("delta", new PlaygroundDtos.DeltaVO(turnId, sequence.incrementAndGet(), text)));
         });
         Flux<ServerSentEvent<String>> completed = deltas.concatWith(Mono.fromSupplier(() -> {
             String full = reply.toString();
             finish(actor, turn, full, "COMPLETED", finished);
-            return event("completed", JSONObject.of("turnId", turnId, "status", "COMPLETED", "reply", full));
+            return event("completed", new PlaygroundDtos.CompletedVO(turnId, "COMPLETED", full));
         })).onErrorResume(error -> {
             finish(actor, turn, reply.toString(), "FAILED", finished);
             PlaygroundErrorCodeEnum code = error instanceof ClientException client
                     && PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE.code().equals(client.getErrorCode())
                     ? PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE : PlaygroundErrorCodeEnum.UPSTREAM_ERROR;
-            JSONObject payload = JSONObject.of("turnId", turnId, "status", "FAILED", "code", code.code(), "message", code.message());
-            if (error instanceof com.yonagi.verse.common.convention.exception.AbstractException business
-                    && com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(business)) {
-                payload.put("code", business.getErrorCode()); payload.put("message", business.getErrorMessage());
-                if (business instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) {
-                    payload.put("data",
-                            com.yonagi.verse.service.playground.PlaygroundCostError.data(budget, turn.getRequestId()));
-                }
+            if (error instanceof AbstractException business && OpenAiCostErrorResponseFactory.supports(business)) {
+                ErrorDataVO data = business instanceof CostLimitExceededException budget
+                        ? PlaygroundCostError.data(budget, turn.getRequestId()) : null;
+                return Mono.just(event("error", new PlaygroundDtos.FailedVO(turnId, "FAILED",
+                        business.getErrorCode(), business.getErrorMessage(), data)));
             }
-            return Mono.just(event("error", payload));
+            return Mono.just(event("error", new PlaygroundDtos.FailedVO(turnId, "FAILED",
+                    code.code(), code.message(), null)));
         });
         return Flux.just(accepted).concatWith(completed)
                 .doOnCancel(() -> finish(actor, turn, reply.toString(), "STOPPED", finished));
@@ -360,8 +339,8 @@ public class PlaygroundServiceImpl implements PlaygroundService {
         }
     }
 
-    private ServerSentEvent<String> event(String name, JSONObject data) {
-        return ServerSentEvent.<String>builder().event(name).data(data.toJSONString()).build();
+    private ServerSentEvent<String> event(String name, PlaygroundDtos.TurnEventVO data) {
+        return ServerSentEvent.<String>builder().event(name).data(JSON.toJSONString(data)).build();
     }
 
     /** 重复发送返回原轮次，控制器据此响应 HTTP 409。 */

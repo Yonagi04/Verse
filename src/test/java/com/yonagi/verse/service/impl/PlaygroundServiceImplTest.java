@@ -4,6 +4,9 @@ import com.yonagi.verse.service.playground.PlaygroundAccessPolicy;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.AbstractException;
+import com.yonagi.verse.common.enums.CostBudgetErrorCodeEnum;
+import com.yonagi.verse.common.enums.PlaygroundErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.dao.entity.LlmServiceCapabilityDO;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
@@ -12,13 +15,21 @@ import com.yonagi.verse.dao.entity.PlaygroundTurnDO;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.entity.UserTenantDO;
 import com.yonagi.verse.dao.mapper.*;
+import com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO.Hit;
 import com.yonagi.verse.resilience.impl.PlaygroundRateLimiter;
 import com.yonagi.verse.service.LlmForwardService;
+import com.yonagi.verse.service.budget.CostBudgetDecision;
+import com.yonagi.verse.service.budget.CostBudgetUnavailableException;
+import com.yonagi.verse.service.budget.CostLimitExceededException;
 import com.yonagi.verse.service.forward.ChatMessage;
 import com.yonagi.verse.service.forward.ModelResolver;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
+import org.skyscreamer.jsonassert.JSONAssert;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
 
@@ -64,7 +75,106 @@ class PlaygroundServiceImplTest {
     }
 
     @Test
-    void stoppedAndFailedTurnsAreVisibleButNeverSentAsContext() {
+    void stoppedAndFailedTurnsAreVisibleButNeverSentAsContext() throws Exception {
+        givenOwnedSession();
+        when(turnMapper.selectList(any())).thenReturn(List.of(
+                turn("COMPLETED", "first", "answer"),
+                turn("STOPPED", "stopped", "partial"),
+                turn("FAILED", "failed", null)));
+        AtomicBoolean upstreamSubscribed = new AtomicBoolean(false);
+        when(forward.playgroundChatStream(any(), eq(9L), anyList(), anyString(), any()))
+                .thenReturn(Flux.just(
+                                ServerSentEvent.<String>builder(
+                                        "{\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}").build(),
+                                ServerSentEvent.<String>builder(
+                                        "{\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}").build(),
+                                ServerSentEvent.<String>builder("[DONE]").build())
+                        .doOnSubscribe(ignored -> upstreamSubscribed.set(true)));
+
+        var prepared = service.prepareSend(actor, 2L, 11L, "new question", UUID.randomUUID().toString());
+        var events = prepared.events().collectList().block();
+        assertTrue(upstreamSubscribed.get(), "SSE 订阅必须真正启动模型流");
+        assertEquals(List.of("accepted", "delta", "completed"),
+                events.stream().map(ServerSentEvent::event).toList());
+        ArgumentCaptor<PlaygroundTurnDO> turn = ArgumentCaptor.forClass(PlaygroundTurnDO.class);
+        verify(turnMapper).insert(turn.capture());
+        String turnId = turn.getValue().getTurnId().toString();
+        JSONAssert.assertEquals("""
+                {"sessionId":"11","turnId":"%s","requestId":"%s","status":"PENDING"}
+                """.formatted(turnId, prepared.requestId()), events.getFirst().data(), true);
+        JSONAssert.assertEquals("""
+                {"turnId":"%s","seq":1,"text":"answer"}
+                """.formatted(turnId), events.get(1).data(), true);
+        JSONAssert.assertEquals("""
+                {"turnId":"%s","status":"COMPLETED","reply":"answer"}
+                """.formatted(turnId), events.getLast().data(), true);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChatMessage>> messages = ArgumentCaptor.forClass(List.class);
+        verify(forward).playgroundChatStream(any(), eq(9L), messages.capture(), anyString(), any());
+        assertEquals(List.of(new ChatMessage("user", "first"),
+                new ChatMessage("assistant", "answer"), new ChatMessage("user", "new question")),
+                messages.getValue());
+    }
+
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {
+            "{\"choices\":[{\"delta\":{\"content\":null}}]}|UNSUPPORTED_RESPONSE",
+            "{\"choices\":[{\"delta\":{\"tool_calls\":null}}]}|UNSUPPORTED_RESPONSE",
+            "{\"error\":null}|UPSTREAM_ERROR",
+            "{\"choices\":[|UPSTREAM_ERROR"
+    })
+    void rejectedFramesEndTurnWithTheCompatibleErrorEvent(String frame, PlaygroundErrorCodeEnum code)
+            throws Exception {
+        givenOwnedSession();
+        when(forward.playgroundChatStream(any(), eq(9L), anyList(), anyString(), any()))
+                .thenReturn(Flux.just(ServerSentEvent.<String>builder(frame).build()));
+
+        var prepared = service.prepareSend(actor, 2L, 11L, "new question", UUID.randomUUID().toString());
+        var events = prepared.events().collectList().block();
+        assertEquals(List.of("accepted", "error"), events.stream().map(ServerSentEvent::event).toList());
+        ArgumentCaptor<PlaygroundTurnDO> turn = ArgumentCaptor.forClass(PlaygroundTurnDO.class);
+        verify(turnMapper).insert(turn.capture());
+        Long turnId = turn.getValue().getTurnId();
+        verify(finalizer).finish(2L, 7L, 11L, turnId, "", "FAILED");
+        JSONAssert.assertEquals("""
+                {"turnId":"%s","status":"FAILED","code":"%s","message":"%s"}
+                """.formatted(turnId, code.code(), code.message()), events.getLast().data(), true);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = CostBudgetErrorCodeEnum.class, names = {"LIMIT_EXCEEDED", "UNAVAILABLE"})
+    void lateBudgetFailurePreservesPartialReplyAndOnlySendsSafeRecoveryDetails(CostBudgetErrorCodeEnum code)
+            throws Exception {
+        givenOwnedSession();
+        String retryAt = "2026-11-08T00:00:00+08:00";
+        AbstractException failure = code == CostBudgetErrorCodeEnum.LIMIT_EXCEEDED
+                ? new CostLimitExceededException(new CostBudgetDecision(
+                        List.of(new Hit("TENANT", "DAY", retryAt)), false))
+                : new CostBudgetUnavailableException();
+        ServerSentEvent<String> delta = ServerSentEvent.<String>builder(
+                "{\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}").build();
+        when(forward.playgroundChatStream(any(), eq(9L), anyList(), anyString(), any()))
+                .thenReturn(Flux.just(delta).concatWith(Flux.error(failure)));
+
+        var prepared = service.prepareSend(actor, 2L, 11L, "new question", UUID.randomUUID().toString());
+        var events = prepared.events().collectList().block();
+
+        assertEquals(List.of("accepted", "delta", "error"), events.stream().map(ServerSentEvent::event).toList());
+        ArgumentCaptor<PlaygroundTurnDO> turn = ArgumentCaptor.forClass(PlaygroundTurnDO.class);
+        verify(turnMapper).insert(turn.capture());
+        Long turnId = turn.getValue().getTurnId();
+        verify(finalizer).finish(2L, 7L, 11L, turnId, "partial", "FAILED");
+        String data = code == CostBudgetErrorCodeEnum.LIMIT_EXCEEDED ? """
+                ,"data":{"scope":"TENANT","period":"DAY","retryAt":"%s","timezone":"Asia/Shanghai",
+                "limits":[{"scope":"TENANT","period":"DAY","periodEnd":"%s"}],"requestId":"%s"}
+                """.formatted(retryAt, retryAt, prepared.requestId()) : "";
+        JSONAssert.assertEquals("""
+                {"turnId":"%s","status":"FAILED","code":"%s","message":"%s"%s}
+                """.formatted(turnId, code.code(), failure.getErrorMessage(), data), events.getLast().data(), true);
+    }
+
+    private void givenOwnedSession() {
         PlaygroundSessionDO session = new PlaygroundSessionDO();
         session.setSessionId(11L);
         session.setTenantId(2L);
@@ -78,28 +188,6 @@ class PlaygroundServiceImplTest {
         model.setName("model");
         when(serviceMapper.selectOne(any())).thenReturn(model);
         when(capabilityMapper.selectOne(any())).thenReturn(new LlmServiceCapabilityDO());
-        when(turnMapper.selectList(any())).thenReturn(List.of(
-                turn("COMPLETED", "first", "answer"),
-                turn("STOPPED", "stopped", "partial"),
-                turn("FAILED", "failed", null)));
-        AtomicBoolean upstreamSubscribed = new AtomicBoolean(false);
-        when(forward.playgroundChatStream(any(), eq(9L), anyList(), anyString(), any()))
-                .thenReturn(Flux.just(ServerSentEvent.<String>builder(
-                                "{\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}").build())
-                        .doOnSubscribe(ignored -> upstreamSubscribed.set(true)));
-
-        var prepared = service.prepareSend(actor, 2L, 11L, "new question", UUID.randomUUID().toString());
-        var events = prepared.events().collectList().block();
-        assertTrue(upstreamSubscribed.get(), "SSE 订阅必须真正启动模型流");
-        assertEquals(List.of("accepted", "delta", "completed"),
-                events.stream().map(ServerSentEvent::event).toList());
-
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<ChatMessage>> messages = ArgumentCaptor.forClass(List.class);
-        verify(forward).playgroundChatStream(any(), eq(9L), messages.capture(), anyString(), any());
-        assertEquals(List.of(new ChatMessage("user", "first"),
-                new ChatMessage("assistant", "answer"), new ChatMessage("user", "new question")),
-                messages.getValue());
     }
 
     @Test
