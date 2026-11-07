@@ -18,6 +18,7 @@ import com.yonagi.verse.common.enums.InvocationSource;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.util.AesUtil;
+import com.yonagi.verse.common.util.JsonNumbers;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.mapper.LlmServiceMapper;
@@ -664,8 +665,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             if (value == null) continue;
             specified = true;
             // 同时检查两种 Chat 参数名，避免换字段名绕过 API 限额。
-            if (!(value instanceof Number number) || !Double.isFinite(number.doubleValue())
-                    || number.doubleValue() != number.longValue() || number.longValue() < 1 || number.longValue() > limit) {
+            if (!JsonNumbers.isPositiveInteger(value, limit)) {
                 throw new ClientException("参数 " + field + " 必须为正整数且不能超过 API 转发输出上限 " + limit,
                         LlmForwardErrorCodeEnum.OUTPUT_TOKEN_LIMIT_INVALID);
             }

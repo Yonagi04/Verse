@@ -5,9 +5,43 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.UpstreamProtocol;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import java.math.BigDecimal;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PlaygroundConfigurationTest {
+    @ParameterizedTest
+    @ValueSource(strings = {"1", "1.0", "1e0", "2147483647.0"})
+    void exactIntegerRepresentationsKeepVersionsAndPlaygroundLimits(String value) {
+        BigDecimal exact = new BigDecimal(value);
+        JSONObject versions = JSONObject.of("version", exact, "revision", exact);
+        PlaygroundConfiguration.fields(versions, "version", "revision");
+        assertEquals(exact.intValueExact(), versions.getIntValue("version"));
+        LlmServiceDO model = new LlmServiceDO();
+        model.setProviderSettings("{\"playground\":{\"maxTokens\":" + value + "}}");
+        JSONObject caps = PlaygroundConfiguration.capabilities(model, UpstreamProtocol.OPENAI_COMPAT);
+        assertEquals(exact.longValueExact(), caps.getLongValue("maxTokens"));
+        assertEquals(exact.longValueExact(), PlaygroundConfiguration.parameters(
+                JSONObject.of("maxTokens", exact), caps).getLongValue("max_tokens"));
+    }
+
+    @Test
+    void highPrecisionFractionsCannotBecomeVersionsOrTokenCounts() {
+        BigDecimal fraction = new BigDecimal("1.00000000000000000001");
+        for (String field : java.util.List.of("version", "revision")) {
+            assertThrows(ClientException.class,
+                    () -> PlaygroundConfiguration.fields(JSONObject.of(field, fraction), field));
+        }
+        JSONObject caps = JSONObject.of("system", true, "maxTokens", 1024);
+        assertThrows(ClientException.class,
+                () -> PlaygroundConfiguration.parameters(JSONObject.of("maxTokens", fraction), caps));
+        LlmServiceDO model = new LlmServiceDO();
+        model.setProviderSettings("{\"playground\":{\"maxTokens\":1.00000000000000000001}}");
+        assertFalse(PlaygroundConfiguration.capabilities(model, UpstreamProtocol.OPENAI_COMPAT)
+                .containsKey("maxTokens"));
+    }
+
     @Test void jacksonHttpMapsNormalizeLikeInternalJson() throws Exception {
         JSONObject body = new com.fasterxml.jackson.databind.ObjectMapper().readValue("{\"lanes\":[{\"laneId\":\"00000000-0000-0000-0000-000000000001\",\"serviceId\":\"9\",\"config\":{\"system\":\"中文\"}}],\"synced\":true}", JSONObject.class);
         JSONObject normalized = PlaygroundConfiguration.normalize(body);

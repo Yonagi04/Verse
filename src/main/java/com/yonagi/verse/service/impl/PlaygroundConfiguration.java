@@ -6,6 +6,7 @@ import com.alibaba.fastjson2.JSONObject;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.PlaygroundErrorCodeEnum;
 import com.yonagi.verse.common.enums.UpstreamProtocol;
+import com.yonagi.verse.common.util.JsonNumbers;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
 import java.util.HashSet;
 import java.util.Set;
@@ -55,6 +56,7 @@ public final class PlaygroundConfiguration {
         return result;
     }
 
+    /** 提取模型显式声明的工作台能力；非法历史 Token 上限不作为有效能力发布。 */
     public static JSONObject capabilities(LlmServiceDO service, UpstreamProtocol protocol) {
         JSONObject settings = service.getProviderSettings() == null ? null : JSON.parseObject(service.getProviderSettings());
         JSONObject explicit = settings == null ? null : settings.getJSONObject("playground");
@@ -69,13 +71,14 @@ public final class PlaygroundConfiguration {
             if (Double.isFinite(min) && Double.isFinite(max) && min <= max) caps.put(name, JSONObject.of("min", min, "max", max));
         }
         Number max = explicit.get("maxTokens") instanceof Number n ? n : null;
-        if (max != null && max.doubleValue() == max.longValue() && max.longValue() > 0 && max.longValue() <= Integer.MAX_VALUE) {
+        if (JsonNumbers.isPositiveInteger(max, Integer.MAX_VALUE)) {
             // PlayGround 与普通 API 转发使用独立输出限额，不受 maxOutputTokens 约束。
             caps.put("maxTokens", max.longValue());
         }
         return caps;
     }
 
+    /** 按工作台独立能力约束生成上游参数；小数或超限 Token 数抛出 INVALID_CONFIG。 */
     public static JSONObject parameters(JSONObject config, JSONObject caps) {
         JSONObject parameters = new JSONObject();
         if (!Boolean.TRUE.equals(caps.getBoolean("system")) && config.getString("system") != null && !config.getString("system").isBlank()) throw invalid();
@@ -87,10 +90,12 @@ public final class PlaygroundConfiguration {
             parameters.put(name.equals("topP") ? "top_p" : name, value);
         }
         if (config.get("maxTokens") != null) {
-            double value = config.getDoubleValue("maxTokens");
+            Object value = config.get("maxTokens");
             Long max = caps.getLong("maxTokens");
-            if (max == null || !Double.isFinite(value) || value != Math.floor(value) || value < 1 || value > max) throw invalid();
-            parameters.put("max_tokens", (long) value);
+            if (max == null || !JsonNumbers.isPositiveInteger(value, max)) {
+                throw invalid();
+            }
+            parameters.put("max_tokens", ((Number) value).longValue());
         } else if (caps.getLong("maxTokens") != null) {
             // 留空时使用 PlayGround 已配置上限，避免上游默认值绕过本入口限额。
             parameters.put("max_tokens", caps.getLong("maxTokens"));
@@ -98,13 +103,16 @@ public final class PlaygroundConfiguration {
         return parameters;
     }
 
+    /** 校验字段白名单及公共字段类型；版本和修订号必须是 int 范围内的精确正整数。 */
     public static void fields(JSONObject body, String... allowed) {
         if (body == null || !Set.of(allowed).containsAll(body.keySet())) throw invalid();
         for (String key : Set.of("title", "description", "prompt", "laneId", "attemptId")) {
             if (body.get(key) != null && !(body.get(key) instanceof String)) throw invalid();
         }
         for (String key : Set.of("revision", "version")) {
-            if (body.containsKey(key) && (!(body.get(key) instanceof Number n) || n.doubleValue() != n.intValue() || n.intValue() < 1)) throw invalid();
+            if (body.containsKey(key) && !JsonNumbers.isPositiveInteger(body.get(key), Integer.MAX_VALUE)) {
+                throw invalid();
+            }
         }
         if (body.containsKey("before") && !(body.get("before") instanceof Boolean)) throw invalid();
     }

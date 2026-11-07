@@ -4,6 +4,8 @@ import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.CredentialMode;
 import com.yonagi.verse.dto.req.CapabilityBindingReqDTO;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.List;
 import java.util.Map;
@@ -11,6 +13,25 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 
 class CapabilityConfigurationTest {
+    @ParameterizedTest
+    @ValueSource(strings = {"1.0", "1e0", "2147483647.0"})
+    void playgroundTokenCapabilityKeepsExactMathematicalIntegers(String value) {
+        assertEquals(CredentialMode.API_KEY, CapabilityConfiguration.validate(
+                "custom", "API_KEY", "https://example.invalid", "secret",
+                Map.of("playground", "{\"maxTokens\":" + value + "}"),
+                List.of(binding("CHAT_COMPLETIONS", "OPENAI_COMPAT"))));
+    }
+
+    @Test
+    void playgroundTokenCapabilityRejectsHighPrecisionFraction() {
+        ClientException error = assertThrows(ClientException.class, () -> CapabilityConfiguration.validate(
+                "custom", "API_KEY", "https://example.invalid", "secret",
+                Map.of("playground", "{\"maxTokens\":1.00000000000000000001}"),
+                List.of(binding("CHAT_COMPLETIONS", "OPENAI_COMPAT"))));
+        assertEquals(com.yonagi.verse.common.enums.LlmManageErrorCodeEnum.LLM_CAPABILITY_INVALID.code(),
+                error.getErrorCode());
+    }
+
     private CapabilityBindingReqDTO binding(String operation, String protocol) {
         CapabilityBindingReqDTO result = new CapabilityBindingReqDTO();
         result.setOperation(operation);

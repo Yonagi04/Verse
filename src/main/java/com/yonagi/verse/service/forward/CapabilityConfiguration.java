@@ -5,6 +5,7 @@ import com.yonagi.verse.common.enums.CredentialMode;
 import com.yonagi.verse.common.enums.LlmManageErrorCodeEnum;
 import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.common.enums.UpstreamProtocol;
+import com.yonagi.verse.common.util.JsonNumbers;
 import com.yonagi.verse.dto.req.CapabilityBindingReqDTO;
 import org.springframework.util.StringUtils;
 
@@ -137,8 +138,9 @@ public final class CapabilityConfiguration {
                 double min = range.getDoubleValue("min"), max = range.getDoubleValue("max");
                 if (!Double.isFinite(min) || !Double.isFinite(max) || min < 0 || max < min || max > (name.equals("topP") ? 1 : 2)) throw invalid();
             }
-            if (p.containsKey("maxTokens") && (!(p.get("maxTokens") instanceof Number n)
-                    || n.doubleValue() != n.longValue() || n.longValue() < 1 || n.longValue() > Integer.MAX_VALUE)) throw invalid();
+            if (p.containsKey("maxTokens") && !JsonNumbers.isPositiveInteger(p.get("maxTokens"), Integer.MAX_VALUE)) {
+                throw invalid();
+            }
         } catch (RuntimeException ex) { throw invalid(); }
     }
 }

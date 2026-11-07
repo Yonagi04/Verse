@@ -11,7 +11,17 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 
@@ -69,12 +79,17 @@ public class PlaygroundWorkbenchController {
     public Result<JSONObject> fork(@PathVariable Long tenantId, @PathVariable Long id, @RequestBody JSONObject body) {
         return Results.success(service.fork(UserContextHolder.get(), tenantId, id, body));
     }
+    /** 恢复本人预设的指定正整数版本；配置字段先通过统一精确整数校验。 */
     @PostMapping("/presets/{id}/restore")
-    public Result<JSONObject> restore(@PathVariable Long tenantId, @PathVariable Long id, @RequestBody JSONObject body) {
+    public Result<JSONObject> restore(@PathVariable Long tenantId, @PathVariable Long id,
+                                      @RequestBody JSONObject body) {
         PlaygroundConfiguration.fields(body, "version");
-        if (!(body.get("version") instanceof Number n) || n.doubleValue() != n.intValue()) throw PlaygroundConfiguration.invalid();
-        return Results.success(service.restore(UserContextHolder.get(), tenantId, id, n.intValue()));
+        if (!body.containsKey("version")) {
+            throw PlaygroundConfiguration.invalid();
+        }
+        return Results.success(service.restore(UserContextHolder.get(), tenantId, id, body.getIntValue("version")));
     }
+
     @ExceptionHandler(AbstractException.class)
     public ResponseEntity<Result<?>> handle(AbstractException error) { return PlaygroundController.failure(error); }
     private String type(String kind) { return kind.equals("groups") ? "GROUP" : "PRESET"; }
