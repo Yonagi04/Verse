@@ -2,15 +2,21 @@ package com.yonagi.verse.service.impl;
 
 import com.yonagi.verse.common.config.UsageReportingProperties;
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.*;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.dao.mapper.TokenUsageMapper;
+import com.yonagi.verse.dao.projection.UsageRawExportRow;
 import com.yonagi.verse.dto.resp.UsageBreakdownRespDTO;
 import com.yonagi.verse.dto.resp.UsageReportRespDTO;
 import com.yonagi.verse.service.UsageReportService;
 import com.yonagi.verse.service.reporting.UsageReportFilter;
+import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.mock.web.MockHttpServletResponse;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
@@ -26,6 +32,9 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class UsageExportServiceImplTest {
+    private static final LocalDateTime RAW_FROM = LocalDateTime.of(2026, 9, 1, 0, 0);
+    private static final LocalDateTime RAW_TO = RAW_FROM.plusDays(1);
+
     @Test
     void breakdownWorkbookNeutralizesFormulaTextAndKeepsPrecisionStrings() throws Exception {
         UsageReportService reportService=mock(UsageReportService.class);TokenUsageMapper mapper=mock(TokenUsageMapper.class);
@@ -88,6 +97,103 @@ class UsageExportServiceImplTest {
             assertTrue(headers.contains("请求时间")&&headers.contains("预估费用(分)"));
             assertFalse(headers.contains("usageDetailsJson"));assertFalse(headers.contains("apiKeyId"));
         }
+    }
+
+    @Test
+    void shortFinalBatchCannotTakeRawExportOverItsRowLimit() {
+        TokenUsageMapper mapper = mock(TokenUsageMapper.class);
+        UsageExportServiceImpl service = rawExportService(mapper, 4);
+        when(mapper.countRawExport(20L, 10L, 11L, 12L, RAW_FROM, RAW_TO)).thenReturn(4L);
+        when(mapper.selectRawExportBatch(eq(20L), eq(10L), eq(11L), eq(12L), eq(RAW_FROM), eq(RAW_TO),
+                any(), any(), anyInt()))
+                .thenReturn(List.of(rawRow(1L), rawRow(2L), rawRow(3L)), List.of(rawRow(4L), rawRow(5L)));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        ClientException failure = assertThrows(ClientException.class, () -> exportRaw(service, response));
+
+        assertEquals(UsageReportingErrorCodeEnum.EXPORT_TOO_LARGE.code(), failure.getErrorCode());
+        assertNoWorkbook(response);
+        verify(mapper).selectRawExportBatch(20L, 10L, 11L, 12L, RAW_FROM, RAW_TO, RAW_FROM, 3L, 2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {3, 4})
+    void rawExportAtExactLimitKeepsEveryRowInCursorOrder(int maxRows) throws Exception {
+        TokenUsageMapper mapper = mock(TokenUsageMapper.class);
+        UsageExportServiceImpl service = rawExportService(mapper, maxRows);
+        when(mapper.countRawExport(20L, 10L, 11L, 12L, RAW_FROM, RAW_TO)).thenReturn((long) maxRows);
+        List<UsageRawExportRow> tail = maxRows == 3 ? List.of() : List.of(rawRow(4L));
+        when(mapper.selectRawExportBatch(eq(20L), eq(10L), eq(11L), eq(12L), eq(RAW_FROM), eq(RAW_TO),
+                any(), any(), anyInt())).thenReturn(List.of(rawRow(1L), rawRow(2L), rawRow(3L)), tail);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        exportRaw(service, response);
+
+        assertTrue(response.getContentType().contains("spreadsheetml"));
+        assertTrue(response.containsHeader("Content-Disposition"));
+        try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(response.getContentAsByteArray()))) {
+            XSSFSheet sheet = workbook.getSheetAt(0);
+            assertEquals(maxRows + 1, sheet.getPhysicalNumberOfRows());
+            for (int index = 1; index <= maxRows; index++) {
+                assertEquals("request-" + index, sheet.getRow(index).getCell(1).getStringCellValue());
+            }
+        }
+        verify(mapper).selectRawExportBatch(20L, 10L, 11L, 12L, RAW_FROM, RAW_TO, null, null, 3);
+        verify(mapper).selectRawExportBatch(20L, 10L, 11L, 12L, RAW_FROM, RAW_TO, RAW_FROM, 3L, maxRows - 2);
+        verify(mapper, times(2)).selectRawExportBatch(anyLong(), any(), any(), any(), any(), any(),
+                any(), any(), anyInt());
+    }
+
+    @Test
+    void rawExportReadFailureDiscardsWorkbookAndAllowsAnotherExport() {
+        TokenUsageMapper mapper = mock(TokenUsageMapper.class);
+        UsageExportServiceImpl service = rawExportService(mapper, 4);
+        when(mapper.selectRawExportBatch(eq(20L), eq(10L), eq(11L), eq(12L), eq(RAW_FROM), eq(RAW_TO),
+                any(), any(), anyInt()))
+                .thenReturn(List.of(rawRow(1L), rawRow(2L), rawRow(3L)))
+                .thenThrow(new DataAccessResourceFailureException("fixture database failure"))
+                .thenReturn(List.of());
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        ServerException failure = assertThrows(ServerException.class, () -> exportRaw(service, response));
+
+        assertEquals(UsageReportingErrorCodeEnum.EXPORT_FAILED.code(), failure.getErrorCode());
+        assertNoWorkbook(response);
+        MockHttpServletResponse retry = new MockHttpServletResponse();
+        exportRaw(service, retry);
+        assertTrue(retry.getContentAsByteArray().length > 0);
+    }
+
+    private static UsageExportServiceImpl rawExportService(TokenUsageMapper mapper, int maxRows) {
+        UsageReportService reportService = mock(UsageReportService.class);
+        when(reportService.resolveFilter(any(), eq(20L), eq(UsageGranularity.DAY), eq(RAW_FROM), eq(RAW_TO),
+                eq(10L), eq(11L), eq(12L)))
+                .thenReturn(new UsageReportFilter(20L, 10L, 11L, 12L, RAW_FROM, RAW_TO, UsageGranularity.DAY, false));
+        UsageReportingProperties properties = new UsageReportingProperties();
+        properties.setExportMaxRows(maxRows);
+        properties.setExportBatchSize(3);
+        properties.setExportMaxConcurrency(1);
+        return new UsageExportServiceImpl(reportService, mapper, properties, new SimpleMeterRegistry());
+    }
+
+    private static void exportRaw(UsageExportServiceImpl service, MockHttpServletResponse response) {
+        service.export(response, new UserContext().setUserId(10L), 20L, UsageExportType.RAW, UsageGranularity.DAY,
+                RAW_FROM, RAW_TO, 10L, 11L, 12L, UsageBreakdownDimension.MODEL, UsageBreakdownOrder.TOTAL_TOKENS, 10);
+    }
+
+    private static UsageRawExportRow rawRow(long id) {
+        UsageRawExportRow row = new UsageRawExportRow();
+        row.setId(id);
+        row.setRequestStartedAt(RAW_FROM);
+        row.setRequestId("request-" + id);
+        return row;
+    }
+
+    private static void assertNoWorkbook(MockHttpServletResponse response) {
+        assertFalse(response.isCommitted());
+        assertFalse(response.containsHeader("Content-Disposition"));
+        assertNull(response.getContentType());
+        assertEquals(0, response.getContentAsByteArray().length);
     }
 
     @Test
