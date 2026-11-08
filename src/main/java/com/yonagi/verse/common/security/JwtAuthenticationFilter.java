@@ -3,6 +3,7 @@ package com.yonagi.verse.common.security;
 import com.alibaba.fastjson2.JSON;
 import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.enums.PermissionEnum;
@@ -10,12 +11,15 @@ import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.service.CurrentTenantStateService;
 import com.yonagi.verse.service.LoginSessionValidationService;
+import com.yonagi.verse.service.budget.CostReconciliationSessionService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -45,6 +49,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     private final LoginSessionValidationService sessions;
     private final CurrentTenantStateService currentTenantStateService;
+    private final CostReconciliationSessionService reconciliationSessions;
 
     @Override
     protected boolean shouldNotFilterAsyncDispatch() {
@@ -56,8 +61,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getServletPath();
         // /ws 走 WebSocket 握手认证；/api/v1/openai/** 走 API Key 认证（ApiKeyAuthenticationFilter）
-        return path.startsWith("/ws") || path.startsWith("/api/v1/openai/")
-                || "/api/v1/rerank".equals(path);
+        if (path.startsWith("/ws") || path.startsWith("/api/v1/openai/") || "/api/v1/rerank".equals(path)) {
+            String token = extractToken(request);
+            return token == null || !CostReconciliationSessionService.isScopedCredential(token);
+        }
+        return false;
     }
 
     @Override
@@ -65,6 +73,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String token = extractToken(request);
+        String path = request.getServletPath();
+        boolean handoff = CostReconciliationSessionRoutes.HANDOFF_PATH.equals(path);
+        boolean exchange = CostReconciliationSessionRoutes.EXCHANGE_PATH.equals(path);
+        if (handoff || exchange) {
+            response.setHeader(HttpHeaders.CACHE_CONTROL, "no-store");
+        }
 
         if (token == null) {
             // 无 Token → 放行，由 SecurityConfig 处理认证要求
@@ -73,20 +87,33 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         LoginSessionValidationService.Identity identity;
+        boolean scoped = CostReconciliationSessionService.isScopedCredential(token);
         try {
-            identity = sessions.authenticate(token);
+            identity = scoped ? reconciliationSessions.authenticate(token,
+                    CostReconciliationSessionRoutes.scopedBatch(request.getMethod(), path))
+                    : sessions.authenticate(token);
         } catch (ClientException e) {
-            writeErrorResponse(response, BaseErrorCode.TOKEN_EXPIRED.code().equals(e.getErrorCode())
+            writeErrorResponse(response, HttpServletResponse.SC_UNAUTHORIZED,
+                    BaseErrorCode.TOKEN_EXPIRED.code().equals(e.getErrorCode())
                     ? BaseErrorCode.TOKEN_EXPIRED : BaseErrorCode.TOKEN_INVALID);
+            return;
+        } catch (DataAccessException | ServerException e) {
+            if (!scoped && !handoff) {
+                throw e;
+            }
+            log.warn("补账会话认证依赖不可用: type={}", e.getClass().getSimpleName());
+            writeErrorResponse(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, BaseErrorCode.SERVICE_ERROR);
             return;
         }
 
         try {
             Long userId = identity.userId();
             // 每次请求均以数据库状态服务为权威来源，切换租户后无需重新签发 JWT。
-            boolean accountScoped = request.getServletPath().equals("/api/v1/skills")
-                    || request.getServletPath().startsWith("/api/v1/skills/")
-                    || request.getServletPath().startsWith("/api/v1/cost-reconciliation-batches/");
+            boolean accountScoped = path.equals("/api/v1/skills") || path.startsWith("/api/v1/skills/")
+                    || path.startsWith(CostReconciliationSessionRoutes.BATCHES_PREFIX) || handoff;
+            if (handoff && !scoped) {
+                request.setAttribute(CostReconciliationSessionRoutes.PARENT_IDENTITY_ATTRIBUTE, identity);
+            }
             CurrentTenantState tenantState = accountScoped ? new CurrentTenantState()
                     : currentTenantStateService.resolveCurrentTenant(userId);
             Long activeTenantId = tenantState.getTenantId();
@@ -144,8 +171,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return null;
     }
 
-    private void writeErrorResponse(HttpServletResponse response, BaseErrorCode errorCode) throws IOException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+    private void writeErrorResponse(HttpServletResponse response, int status, BaseErrorCode errorCode)
+            throws IOException {
+        response.setStatus(status);
         response.setContentType("application/json;charset=UTF-8");
         Result<Void> result = Results.failure(errorCode.code(), errorCode.message());
         response.getWriter().write(JSON.toJSONString(result));

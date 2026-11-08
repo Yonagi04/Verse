@@ -7,6 +7,7 @@ import com.yonagi.verse.dto.resp.SkillPageRespDTO;
 import java.util.List;
 import com.yonagi.verse.service.CurrentTenantStateService;
 import com.yonagi.verse.service.LoginSessionValidationService;
+import com.yonagi.verse.service.budget.CostReconciliationSessionService;
 import java.util.Date;
 import com.yonagi.verse.service.skillhub.SkillDraftService;
 import com.yonagi.verse.service.skillhub.SkillImportTaskService;
@@ -60,7 +61,8 @@ class SkillAuthenticationContractTest {
                 mock(SkillZipUploadReceiver.class));
         mvc = MockMvcBuilders.standaloneSetup(controller).setControllerAdvice(new SkillExceptionAdvice())
                 .addFilters(new JwtAuthenticationFilter(
-                        new LoginSessionValidationService(jwt, redis, accounts), tenants))
+                        new LoginSessionValidationService(jwt, redis, accounts), tenants,
+                        mock(CostReconciliationSessionService.class)))
                 .build();
     }
 
