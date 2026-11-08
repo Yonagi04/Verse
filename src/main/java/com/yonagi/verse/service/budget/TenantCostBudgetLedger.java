@@ -25,6 +25,12 @@ public class TenantCostBudgetLedger {
     private final UsageOutboxProperties outbox;
     private final LlmCostAlertCaptureService alerts;
     @Value("${verse.llm.costing.enabled:true}") private boolean costingEnabled;
+    private CostReconciliationBudgetRead reconciledBudgets;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReconciledBudgets(CostReconciliationBudgetRead read) {
+        this.reconciledBudgets = read;
+    }
 
     public TenantCostBudgetDO lock(Long tenantId) {
         var row = budgets.lock(tenantId);
@@ -39,6 +45,9 @@ public class TenantCostBudgetLedger {
     }
     public boolean ready(TenantCostBudgetDO config, Instant now) {
         if (!costingEnabled || !outbox.isEnabled() || config.getCostDataReason() != null) return false;
+        if (reconciledBudgets != null && reconciledBudgets.enabled()) {
+            return true;
+        }
         var pending = invocations.tenantUnfinished(config.getTenantId(), time.earliest(now));
         return pending.size() <= 1000 && pending.stream().allMatch(row -> "RUNNING".equals(row.getState()))
                 && registry.confirmed(pending).size() == pending.size();
@@ -48,24 +57,32 @@ public class TenantCostBudgetLedger {
         var state = snapshot(config, null);
         return new CostBudgetDecision(state.limits(), "UNKNOWN".equals(state.budgetState()));
     }
-    /** 确认预览只聚合已应用事实，不重建 period、不触发任何写入。 */
+    /** 确认预览只读费用事实，不重建 period、不触发写入。 */
     public CostBudgetDecision preview(TenantCostBudgetDO config) {
         if (!Boolean.TRUE.equals(config.getCostLimitEnabled())) return new CostBudgetDecision(List.of(), false);
-        if (!ready(config, time.now())) return new CostBudgetDecision(List.of(), true);
+        var now = time.now();
+        if (!ready(config, now)) return new CostBudgetDecision(List.of(), true);
+        var staged = stagedCosts(config.getTenantId(), now);
+        if (!staged.available()) return new CostBudgetDecision(List.of(), true);
         List<ApiKeyCostStatusRespDTO.Hit> hits = new ArrayList<>();
-        for (var p : time.resolve(time.now())) {
-            var row = aggregate(config, p); var limit = limit(config, p.type());
+        for (var p : time.resolve(now)) {
+            var row = staged.include(aggregate(config, p), p, null, null);
+            var limit = limit(config, p.type());
             if (limit != null && row.getUsedCostFen().compareTo(limit) >= 0)
                 hits.add(new ApiKeyCostStatusRespDTO.Hit("TENANT", p.type(), time.iso(p.end())));
         }
         return new CostBudgetDecision(hits, false);
     }
     public TenantCostStatusRespDTO.Full snapshot(TenantCostBudgetDO config, String settingsVersion) {
-        var now = time.now(); boolean available = ready(config, now), enabled = Boolean.TRUE.equals(config.getCostLimitEnabled());
+        var now = time.now();
+        boolean ready = ready(config, now);
+        var staged = ready ? stagedCosts(config.getTenantId(), now) : CostReconciliationBudgetRead.StagedCosts.EMPTY;
+        boolean available = ready && staged.available(), enabled = Boolean.TRUE.equals(config.getCostLimitEnabled());
         List<ApiKeyCostStatusRespDTO.PeriodStatus> details = new ArrayList<>();
         List<ApiKeyCostStatusRespDTO.Hit> hits = new ArrayList<>();
         for (var p : time.resolve(now)) {
-            var limit = limit(config, p.type()); var row = available ? load(config, p) : null;
+            var limit = limit(config, p.type());
+            var row = available ? staged.include(load(config, p), p, null, null) : null;
             Boolean exceeded = row == null ? null : limit != null && row.getUsedCostFen().compareTo(limit) >= 0;
             boolean effective = enabled && Boolean.TRUE.equals(exceeded);
             if (effective) hits.add(new ApiKeyCostStatusRespDTO.Hit("TENANT", p.type(), time.iso(p.end())));
@@ -77,7 +94,9 @@ public class TenantCostBudgetLedger {
         var decision = new CostBudgetDecision(hits, enabled && !available);
         return new TenantCostStatusRespDTO.Full(String.valueOf(config.getTenantId()), "FULL", settingsVersion, config(config), warning(config),
                 "CNY", "Asia/Shanghai", List.of("API_KEY", "PLAYGROUND"), time.iso(time.local(now)), available ? "READY" : "UNAVAILABLE",
-                !enabled ? "DISABLED" : !available ? "UNKNOWN" : hits.isEmpty() ? "AVAILABLE" : "LIMITED", decision.retryAt(), details, decision.limits());
+                !enabled ? "DISABLED" : !available ? "UNKNOWN" : hits.isEmpty() ? "AVAILABLE" : "LIMITED",
+                decision.retryAt(), details, decision.limits(),
+                reconciledBudgets != null && reconciledBudgets.enabled() ? reconciledBudgets.summary(config.getTenantId(), now) : null);
     }
     public CostBudgetPeriodDO load(TenantCostBudgetDO config, BudgetPeriodResolver.Period period) {
         var row = periods.lockScope(config.getTenantId(), "TENANT", config.getTenantId(), period.type(), period.start());
@@ -89,15 +108,11 @@ public class TenantCostBudgetLedger {
         row.setScopeType("TENANT"); row.setScopeId(config.getTenantId()); row.setPeriodType(period.type());
         row.setPeriodStart(period.start()); row.setPeriodEnd(period.end());
         row.setRebuildVersion(0L); row.setUpdateTime(time.local(time.now()));
-        var totals = settlements.aggregateTenant(config.getTenantId(), period.start(), period.end());
-        if (totals.getInvalidCount().signum() != 0) throw new IllegalStateException("invalid budget settlement");
-        var used = totals.getUsedCostFen();
-        if (used.precision() - used.scale() > 47 || used.scale() > 18) throw new IllegalStateException("budget overflow");
-        row.setUsedCostFen(used);
-        row.setCalculatedCount(totals.getCalculatedCount().longValueExact());
-        row.setUnpricedCount(totals.getUnpricedCount().longValueExact());
-        row.setUncalculableCount(totals.getUncalculableCount().longValueExact());
-        row.setNotChargeableCount(totals.getNotChargeableCount().longValueExact());
+        if (reconciledBudgets != null && reconciledBudgets.enabled()) {
+            reconciledBudgets.rebuild(row, null, null);
+        } else {
+            CostReconciliationBudgetRead.populate(row, settlements.aggregateTenant(config.getTenantId(), period.start(), period.end()));
+        }
         return row;
     }
     public void apply(TenantCostBudgetDO config, CostBudgetSettlementDO fact) {
@@ -106,8 +121,21 @@ public class TenantCostBudgetLedger {
         }
     }
     public void capture(TenantCostBudgetDO config) {
-        if (Boolean.TRUE.equals(config.getCostLimitEnabled()) && ready(config, time.now()))
-            alerts.capture(config, time.resolve(time.now()).stream().map(p -> load(config, p)).toList());
+        var now = time.now();
+        if (!Boolean.TRUE.equals(config.getCostLimitEnabled()) || !ready(config, now)) {
+            return;
+        }
+        capture(config, now, stagedCosts(config.getTenantId(), now));
+    }
+
+    void capture(TenantCostBudgetDO config, Instant now, CostReconciliationBudgetRead.StagedCosts staged) {
+        if (staged.available()) {
+            alerts.capture(config, time.resolve(now).stream().map(p -> staged.include(load(config, p), p, null, null)).toList());
+        }
+    }
+
+    CostReconciliationBudgetRead.StagedCosts stagedCosts(Long tenantId, Instant now) {
+        return CostReconciliationBudgetRead.stagedWhenEnabled(reconciledBudgets, tenantId, now);
     }
     public void unavailable(TenantCostBudgetDO config, String reason) {
         config.setCostDataReason(reason); budgets.updateById(config);

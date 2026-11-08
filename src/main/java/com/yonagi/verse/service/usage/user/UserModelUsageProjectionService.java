@@ -6,6 +6,8 @@ import com.yonagi.verse.common.config.UserModelUsageProperties;
 import com.yonagi.verse.dao.entity.*;
 import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.service.budget.BudgetPeriodResolver;
+import com.yonagi.verse.service.budget.CostReconciliationTracking;
+import com.yonagi.verse.common.convention.exception.ClientException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.*;
@@ -23,6 +25,12 @@ public class UserModelUsageProjectionService {
     private final UserModelUsageDailyMapper daily;
     private final UserCostAlertTriggerService capture;
     private final BudgetPeriodResolver time;
+    private CostReconciliationTracking reconciliation;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReconciliationTracking(CostReconciliationTracking tracking) {
+        this.reconciliation = tracking;
+    }
 
     @Transactional(propagation=Propagation.MANDATORY,rollbackFor=Exception.class)
     public void enqueue(Long userId,Long usageId) {
@@ -59,6 +67,14 @@ public class UserModelUsageProjectionService {
             var first=find(userId,row.getCanonicalUsageId());
             if (first==null || !"APPLIED".equals(first.getStatus())) throw new IllegalStateException("CANONICAL_PENDING");
             row.setStatus("DUPLICATE");
+        } else if (reconciliation != null && reconciliation.enabled()
+                && daily.hasCorrections(userId, usage.getRequestStartedAt().toLocalDate().atStartOfDay(),
+                usage.getRequestStartedAt().toLocalDate().plusDays(1).atStartOfDay())) {
+            row.setStatus("APPLIED");
+            row.setProjectedAt(time.local(time.now()));
+            work.finish(row);
+            rebuildDay(userId, usage.getRequestStartedAt().toLocalDate());
+            return;
         } else {
             var contribution=UserModelUsageContributionPolicy.contribution(usage,cost);
             var existing=daily.selectOne(Wrappers.lambdaQuery(UserModelUsageDailyDO.class).eq(UserModelUsageDailyDO::getUserId,userId)
@@ -70,6 +86,25 @@ public class UserModelUsageProjectionService {
             day.setUpdatedAt(time.local(time.now())); daily.contribute(day); row.setStatus("APPLIED");
         }
         row.setProjectedAt(time.local(time.now())); work.finish(row);
+        capture.capture(userId);
+    }
+
+    /** 重放或乱序事件均从原始事实与当前更正重算，避免重复写入个人金额。 */
+    @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
+    public void correctedDay(Long userId, LocalDate day) {
+        if (!properties.isProjectionEnabled()) {
+            return;
+        }
+        try {
+            access.lock(userId);
+        } catch (ClientException closed) {
+            return;
+        }
+        rebuildDay(userId, day);
+    }
+
+    private void rebuildDay(Long userId, LocalDate day) {
+        daily.rebuildEffectiveDay(userId, day.atStartOfDay(), day.plusDays(1).atStartOfDay(), time.local(time.now()));
         capture.capture(userId);
     }
     @Transactional(rollbackFor=Exception.class,isolation=Isolation.READ_COMMITTED)

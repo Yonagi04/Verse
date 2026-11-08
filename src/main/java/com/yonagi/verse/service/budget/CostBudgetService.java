@@ -36,6 +36,18 @@ public class CostBudgetService {
     private io.micrometer.core.instrument.MeterRegistry metrics;
     @org.springframework.beans.factory.annotation.Autowired
     public void setMetrics(io.micrometer.core.instrument.MeterRegistry registry) { this.metrics = registry; }
+    private CostReconciliationTracking reconciliation;
+    private CostReconciliationBudgetRead reconciledBudgets;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReconciliationTracking(CostReconciliationTracking tracking) {
+        this.reconciliation = tracking;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReconciledBudgets(CostReconciliationBudgetRead read) {
+        this.reconciledBudgets = read;
+    }
     private final ApiKeyMapper keys;
     private final CostBudgetInvocationMapper invocations;
     private final CostBudgetSettlementMapper settlements;
@@ -132,6 +144,9 @@ public class CostBudgetService {
     private CostBudgetDecision joint(TenantCostBudgetDO tenant, ApiKeyDO key, LlmCostBudgetDO model) {
         long started = System.nanoTime();
         try {
+            if (reconciledBudgets != null && reconciledBudgets.enabled()) {
+                return confirmedDecision(tenant, key, model);
+            }
             var tenantDecision = tenantBudgets.decision(tenant);
             List<ApiKeyCostStatusRespDTO.Hit> hits = new ArrayList<>(tenantDecision.limits()); boolean unknown = tenantDecision.unavailable();
             if (key != null && Boolean.TRUE.equals(key.getCostLimitEnabled())) {
@@ -149,6 +164,49 @@ public class CostBudgetService {
             if (metrics != null) metrics.timer("verse.cost.budget.check.latency").record(System.nanoTime()-started, java.util.concurrent.TimeUnit.NANOSECONDS);
         }
     }
+
+    private CostBudgetDecision confirmedDecision(TenantCostBudgetDO tenant, ApiKeyDO key, LlmCostBudgetDO model) {
+        boolean tenantEnabled = Boolean.TRUE.equals(tenant.getCostLimitEnabled());
+        boolean modelEnabled = Boolean.TRUE.equals(model.getCostLimitEnabled());
+        boolean keyEnabled = key != null && Boolean.TRUE.equals(key.getCostLimitEnabled());
+        if (!tenantEnabled && !modelEnabled && !keyEnabled) {
+            return new CostBudgetDecision(List.of(), false);
+        }
+        Instant now = time.now();
+        boolean unavailable = tenantEnabled && !tenantBudgets.ready(tenant, now)
+                || modelEnabled && !llmBudgets.ready(model, now)
+                || keyEnabled && (key.getCostDataReason() != null || !costingEnabled || !outboxProperties.isEnabled());
+        if (unavailable) {
+            return new CostBudgetDecision(List.of(), true);
+        }
+        var staged = reconciledBudgets.staged(tenant.getTenantId(), now);
+        if (!staged.available()) {
+            return new CostBudgetDecision(List.of(), true);
+        }
+        List<ApiKeyCostStatusRespDTO.Hit> hits = new ArrayList<>();
+        for (var period : time.resolve(now)) {
+            if (tenantEnabled) {
+                confirmedHit(hits, "TENANT", period, TenantCostBudgetLedger.limit(tenant, period.type()),
+                        staged.include(tenantBudgets.load(tenant, period), period, null, null).getUsedCostFen());
+            }
+            if (modelEnabled) {
+                confirmedHit(hits, "LLM", period, LlmCostBudgetLedger.limit(model, period.type()),
+                        staged.include(llmBudgets.load(model, period), period, null, model.getServiceId()).getUsedCostFen());
+            }
+            if (keyEnabled) {
+                confirmedHit(hits, "API_KEY", period, limit(key, period.type()),
+                        staged.include(loadPeriod(key, period), period, key.getApiKeyId(), null).getUsedCostFen());
+            }
+        }
+        return new CostBudgetDecision(hits, false);
+    }
+
+    private void confirmedHit(List<ApiKeyCostStatusRespDTO.Hit> hits, String scope, BudgetPeriodResolver.Period period,
+                              BigDecimal limit, BigDecimal confirmed) {
+        if (limit != null && confirmed.compareTo(limit) >= 0) {
+            hits.add(new ApiKeyCostStatusRespDTO.Hit(scope, period.type(), time.iso(period.end())));
+        }
+    }
     public void begin(UserContext ctx, Long serviceId, String requestId, Instant started) {
         begin(ctx, serviceId, requestId, started, BudgetInvocationMode.SYNC);
     }
@@ -162,12 +220,17 @@ public class CostBudgetService {
                 var model = llmBudgets.lock(ctx.getCurrentTenantId(), serviceId); joint(tenant, key, model).enforce();
                 var row = new CostBudgetInvocationDO(); row.setId(SnowflakeIdUtil.nextId()); row.setTenantId(ctx.getCurrentTenantId());
                 row.setApiKeyId(ctx.getApiKeyId()); row.setSource(ctx.getApiKeyId() == null ? "PLAYGROUND" : "API_KEY");
-                row.setRequestId(requestId); row.setEventId(eventId); row.setRequestStartedAt(time.local(started));
+                row.setRequestId(requestId); row.setEventId(eventId);
+                row.setRequestStartedAt(time.local(Instant.ofEpochMilli(started.toEpochMilli())));
                 row.setOwnerId(registry.owner()); row.setOwnerGeneration(registry.generation()); row.setState("RUNNING");
                 row.setUpdateTime(time.local(time.now())); row.setLastHeartbeatAt(row.getUpdateTime()); row.setLeaseUntil(row.getUpdateTime().plusSeconds(30));
                 try {
                     if (invocations.lockRequest(requestId) != null) throw new CostBudgetUnavailableException();
-                    invocations.insert(row); llmBudgets.register(ctx.getCurrentTenantId(), requestId, serviceId); }
+                    invocations.insert(row); llmBudgets.register(ctx.getCurrentTenantId(), requestId, serviceId);
+                    if (reconciliation != null) {
+                        reconciliation.register(row, ctx.getUserId());
+                    }
+                }
                 catch (RuntimeException storageFailure) {
                     if (storageFailure instanceof CostBudgetUnavailableException) throw storageFailure;
                     if (Boolean.TRUE.equals(tenant.getCostLimitEnabled()) || Boolean.TRUE.equals(model.getCostLimitEnabled()) || key != null && Boolean.TRUE.equals(key.getCostLimitEnabled())) throw storageFailure;
@@ -229,6 +292,38 @@ public class CostBudgetService {
 
     public void sent(String requestId) { registry.sent(requestId); }
     public void subscribe(String requestId) { registry.subscribe(requestId); registry.sent(requestId); }
+
+    /** 传输入口在调用适配器之前提交本次发送意图。 */
+    public Long recordUpstreamIntent(Long tenantId, String requestId, Long serviceId, String provider,
+                                    ModelOperation operation) {
+        if (reconciliation == null || untrackedRequests.contains(requestId)) {
+            return null;
+        }
+        return reconciliation.intent(tenantId, requestId, serviceId, provider, operation);
+    }
+
+    public void recordUpstreamRejection(Long attemptId, UpstreamExecutionOutcome outcome) {
+        if (reconciliation != null) {
+            reconciliation.recordRejection(attemptId, outcome);
+        }
+    }
+
+    /** 通用拒绝不能证明上游未计费，启用后不据此重试或切备用。 */
+    public boolean blocksAmbiguousRetry(UpstreamExecutionOutcome outcome) {
+        return outcome == UpstreamExecutionOutcome.REJECTED && reconciliation != null && reconciliation.enabled();
+    }
+
+    /** 证据落库失败时原终态路径仍会接管，上游成功响应不受旁路失败影响。 */
+    public void recordUpstreamCompletion(Long attemptId, String requestId, com.yonagi.verse.service.usage.UsageBreakdown usage) {
+        if (reconciliation != null && attemptId != null) {
+            try {
+                reconciliation.completeAttempt(attemptId, requestId, usage);
+            } catch (RuntimeException failure) {
+                log.warn("[cost-budget] 上游终态证据待原结算接管: requestId={}", requestId, failure);
+            }
+        }
+    }
+
     public void finalizing(String requestId) { registry.finalizing(requestId); }
     public boolean hasUpstream(String requestId) { return registry.executed(requestId); }
     public UpstreamExecutionOutcome outcome(String requestId) {
@@ -260,6 +355,9 @@ public class CostBudgetService {
                 if (settlements.lockRequest(row.getTenantId(), requestId) != null) return false;
                 row.setState("NO_UPSTREAM"); copyFailure(row);
                 row.setUpdateTime(time.local(time.now())); invocations.updateById(row);
+                if (reconciliation != null) {
+                    reconciliation.abandoned(row);
+                }
                 return true;
             });
             if (cleaned) { registry.remove(requestId); untrackedRequests.remove(requestId); }
@@ -282,6 +380,9 @@ public class CostBudgetService {
     }
 
     private boolean complete(ApiKeyDO key, Instant now) {
+        if (reconciledBudgets != null && reconciledBudgets.enabled()) {
+            return true;
+        }
         var unfinished = invocations.unfinished(key.getTenantId(), key.getApiKeyId(), time.earliest(now));
         if (unfinished.size() > 1000) return false;
         if (unfinished.stream().anyMatch(row -> !"RUNNING".equals(row.getState()))) return false;
@@ -294,12 +395,18 @@ public class CostBudgetService {
         if ("READY".equals(availability) && (!costingEnabled || !outboxProperties.isEnabled() || !complete(key, now))) {
             availability = "UNAVAILABLE";
         }
+        var staged = "READY".equals(availability)
+                ? CostReconciliationBudgetRead.stagedWhenEnabled(reconciledBudgets, key.getTenantId(), now)
+                : CostReconciliationBudgetRead.StagedCosts.EMPTY;
+        if (!staged.available()) {
+            availability = "UNAVAILABLE";
+        }
         boolean ready = "READY".equals(availability);
         List<ApiKeyCostStatusRespDTO.PeriodStatus> details = new ArrayList<>();
         List<ApiKeyCostStatusRespDTO.Hit> hits = new ArrayList<>();
         for (BudgetPeriodResolver.Period period : time.resolve(now)) {
             BigDecimal limit = limit(key, period.type());
-            CostBudgetPeriodDO row = ready ? loadPeriod(key, period) : null;
+            CostBudgetPeriodDO row = ready ? staged.include(loadPeriod(key, period), period, key.getApiKeyId(), null) : null;
             Boolean exceeded = row == null ? null : limit != null && row.getUsedCostFen().compareTo(limit) >= 0;
             boolean effective = enabled && Boolean.TRUE.equals(exceeded);
             if (effective) hits.add(new ApiKeyCostStatusRespDTO.Hit("API_KEY", period.type(), time.iso(period.end())));
@@ -324,8 +431,14 @@ public class CostBudgetService {
         CostBudgetPeriodDO row = periods.lockPeriod(key.getTenantId(), key.getApiKeyId(), period.type(), period.start());
         if (row != null) return row;
         row = emptyPeriod(key, period);
-        for (CostBudgetSettlementDO fact : settlements.history(key.getTenantId(), key.getApiKeyId(), period.start())) {
-            if (Boolean.TRUE.equals(fact.getBudgetApplied()) && fact.getRequestStartedAt().isBefore(period.end())) add(row, fact);
+        if (reconciledBudgets != null && reconciledBudgets.enabled()) {
+            reconciledBudgets.rebuild(row, key.getApiKeyId(), null);
+        } else {
+            for (CostBudgetSettlementDO fact : settlements.history(key.getTenantId(), key.getApiKeyId(), period.start())) {
+                if (Boolean.TRUE.equals(fact.getBudgetApplied()) && fact.getRequestStartedAt().isBefore(period.end())) {
+                    add(row, fact);
+                }
+            }
         }
         periods.insert(row);
         return row;
@@ -385,12 +498,19 @@ public class CostBudgetService {
             event.setEventId(DigestUtil.sha256Hex(event.getSource() + ":" + event.getTenantId() + ":" + event.getRequestId()));
             event.setKey(event.getEventId());
         }
+        CostBudgetSettlementDO existing = settlements.lockEvent(event.getEventId());
+        if (reconciliation != null) {
+            reconciliation.prepareTerminal(event, invocation, existing);
+        }
         CostBudgetSnapshot.validate(event);
         String payload = JSON.toJSONString(event);
         String hash = CostBudgetSnapshot.fingerprint(event);
-        CostBudgetSettlementDO existing = settlements.lockEvent(event.getEventId());
         if (existing != null) {
-            if (!hash.equals(existing.getPayloadHash())) throw new CostBudgetSnapshot.ConflictException();
+            if (!hash.equals(existing.getPayloadHash())
+                    && (reconciliation == null || !reconciliation.retainCorrectedConflict(invocation)
+                    && !reconciliation.retainsVerifiedAutomaticEvidence(invocation, existing))) {
+                throw new CostBudgetSnapshot.ConflictException();
+            }
             return existing.getEventId();
         }
         if (invocation != null && "NO_UPSTREAM".equals(invocation.getState())) throw new CostBudgetSnapshot.ConflictException();
@@ -405,14 +525,28 @@ public class CostBudgetService {
         if (invocation != null) {
             copyFailure(invocation);
             invocation.setState("FINALIZING"); invocation.setUpdateTime(row.getCreateTime()); invocations.updateById(invocation);
+            if (reconciliation != null) {
+                reconciliation.staged(invocation, event);
+            }
         }
         return row.getEventId();
     }
 
     public void apply(String eventId) {
+        apply(eventId, null, 0);
+    }
+
+    public void applyReconciliationReplay(String eventId, Long caseId, long expectedVersion) {
+        apply(eventId, Objects.requireNonNull(caseId, "caseId"), expectedVersion);
+    }
+
+    private void apply(String eventId, Long caseId, long expectedVersion) {
         CostBudgetSettlementDO lookup = settlements.selectOne(Wrappers.lambdaQuery(CostBudgetSettlementDO.class)
                 .eq(CostBudgetSettlementDO::getEventId, eventId));
         if (lookup == null) return;
+        boolean active = reconciledBudgets != null && reconciledBudgets.enabled();
+        boolean stagedAlertChecked = !active || Boolean.TRUE.equals(lookup.getBudgetApplied())
+                || !CostStatus.CALCULATED.name().equals(lookup.getCostStatus()) || tryCaptureConfirmedAlerts(lookup);
         shortTransactionVoid(ignored -> {
             users.lockResourceOwner(lookup.getUserId());
             var tenant = tenantBudgets.lock(lookup.getTenantId());
@@ -420,43 +554,160 @@ public class CostBudgetService {
             var models = llmBudgets.lockForRequest(lookup.getTenantId(), lookup.getRequestId(), lookup.getServiceId());
             CostBudgetInvocationDO invocation = invocations.lockRequest(lookup.getRequestId());
             llmBudgets.verifyParticipants(lookup.getRequestId(), models);
+            if (caseId != null && (reconciliation == null
+                    || !reconciliation.acceptsReplay(invocation, caseId, expectedVersion))) {
+                return;
+            }
             CostBudgetSettlementDO row = settlements.lockEvent(eventId);
             if (Boolean.TRUE.equals(row.getBudgetApplied())) return;
             if (invocation != null && "NO_UPSTREAM".equals(invocation.getState())) throw new CostBudgetSnapshot.ConflictException();
             Instant started = row.getRequestStartedAt().atZone(BudgetPeriodResolver.ZONE).toInstant();
-            tenantBudgets.apply(tenant, row);
-            if (key != null) for (BudgetPeriodResolver.Period period : time.resolve(started)) {
-                CostBudgetPeriodDO cumulative = loadPeriod(key, period);
-                add(cumulative, row); cumulative.setUpdateTime(time.local(time.now())); periods.updateById(cumulative);
+            boolean alreadyCorrected = reconciliation != null && reconciliation.hasAdjustment(invocation);
+            if (!alreadyCorrected) {
+                tenantBudgets.apply(tenant, row);
+                if (key != null) {
+                    for (BudgetPeriodResolver.Period period : time.resolve(started)) {
+                        CostBudgetPeriodDO cumulative = loadPeriod(key, period);
+                        add(cumulative, row);
+                        cumulative.setUpdateTime(time.local(time.now()));
+                        periods.updateById(cumulative);
+                    }
+                }
             }
             TokenUsageEvent event = JSON.parseObject(row.getEventPayloadJson(), TokenUsageEvent.class);
             if (invocation != null) {
                 // 已持久化未知费用不代表上游未收费；保留预算栅栏，禁止用零金额放行。
-                boolean unknownExecution = event.getExecutionOutcome() == UpstreamExecutionOutcome.UNKNOWN;
+                boolean unknownExecution = !alreadyCorrected && (reconciliation != null && reconciliation.activeRequest(invocation)
+                        ? CostStatus.UNCALCULABLE.name().equals(row.getCostStatus())
+                        : event.getExecutionOutcome() == UpstreamExecutionOutcome.UNKNOWN);
                 invocation.setState(unknownExecution ? "UNKNOWN" : "SETTLED");
                 if (unknownExecution && invocation.getLastErrorCode() == null) invocation.setLastErrorCode("UPSTREAM_RESULT_UNKNOWN");
                 copyFailure(invocation);
                 invocation.setUpdateTime(time.local(time.now())); invocations.updateById(invocation);
             }
-            llmBudgets.apply(models.stream().filter(model -> row.getServiceId().equals(model.getServiceId())).findFirst().orElseThrow(), row);
-            tenantBudgets.capture(tenant);
+            if (reconciliation != null) {
+                reconciliation.applied(invocation, CostStatus.valueOf(row.getCostStatus()));
+                if (alreadyCorrected) {
+                    reconciliation.reviewLateConflict(invocation, row);
+                } else {
+                    reconciliation.resolveFromOriginal(invocation, CostStatus.valueOf(row.getCostStatus()));
+                }
+            }
+            if (!alreadyCorrected) {
+                var model = models.stream().filter(candidate -> row.getServiceId().equals(candidate.getServiceId())).findFirst().orElseThrow();
+                llmBudgets.apply(model, row);
+                if (!active) {
+                    llmBudgets.capture(model);
+                    tenantBudgets.capture(tenant);
+                }
+            }
             if ("LIVE".equals(row.getOrigin())) outbox.stage(event, row.getEventPayloadJson(), time.local(time.now()));
             row.setBudgetApplied(true); row.setAppliedAt(time.local(time.now())); settlements.updateById(row);
 
         });
+        if (!stagedAlertChecked) {
+            tryCaptureConfirmedAlerts(lookup);
+        }
+    }
+
+    private boolean tryCaptureConfirmedAlerts(CostBudgetSettlementDO fact) {
+        try {
+            return captureConfirmedAlerts(fact.getTenantId(), fact.getServiceId(), fact.getRequestStartedAt());
+        } catch (RuntimeException failure) {
+            log.warn("[cost-budget] 阈值告警待后续复核 eventId={}", fact.getEventId(), failure);
+            return false;
+        }
+    }
+
+    /** 原账已提交。告警评估使用独立事务，故障不回滚暂存或费用更正。 */
+    public boolean captureConfirmedAlerts(Long tenantId, Long serviceId, LocalDateTime requestedAt) {
+        Instant now = time.now();
+        if (reconciledBudgets == null || time.resolve(now).stream()
+                .noneMatch(period -> !requestedAt.isBefore(period.start()) && requestedAt.isBefore(period.end()))) {
+            return true;
+        }
+        return shortTransaction(ignored -> {
+            var tenant = tenantBudgets.lock(tenantId);
+            var model = llmBudgets.lock(tenantId, serviceId);
+            boolean tenantReady = Boolean.TRUE.equals(tenant.getCostLimitEnabled()) && tenantBudgets.ready(tenant, now);
+            boolean modelReady = Boolean.TRUE.equals(model.getCostLimitEnabled()) && llmBudgets.ready(model, now);
+            if (!tenantReady && !modelReady) {
+                return true;
+            }
+            var staged = reconciledBudgets.staged(tenantId, now);
+            if (!staged.available()) {
+                return false;
+            }
+            if (tenantReady) {
+                tenantBudgets.capture(tenant, now, staged);
+            }
+            if (modelReady) {
+                llmBudgets.capture(model, now, staged);
+            }
+            return true;
+        });
     }
 
     static void add(CostBudgetPeriodDO row, CostBudgetSettlementDO fact) {
+        change(row, fact, 1);
+    }
+
+    static void replace(CostBudgetPeriodDO row, CostBudgetSettlementDO previous, CostBudgetSettlementDO next) {
+        if (previous != null) {
+            change(row, previous, -1);
+        }
+        if (next != null) {
+            change(row, next, 1);
+        }
+    }
+
+    private static void change(CostBudgetPeriodDO row, CostBudgetSettlementDO fact, int direction) {
         switch (CostStatus.valueOf(fact.getCostStatus())) {
             case CALCULATED -> {
-                BigDecimal used = row.getUsedCostFen().add(fact.getEstimatedCostFen());
-                if (used.precision() - used.scale() > 47 || used.scale() > 18) throw new IllegalStateException("budget overflow");
-                row.setUsedCostFen(used); row.setCalculatedCount(Math.addExact(row.getCalculatedCount(), 1));
+                BigDecimal used = row.getUsedCostFen().add(fact.getEstimatedCostFen().multiply(BigDecimal.valueOf(direction)));
+                if (used.signum() < 0 || used.precision() - used.scale() > 47 || used.scale() > 18) {
+                    throw new IllegalStateException("invalid budget amount");
+                }
+                row.setUsedCostFen(used);
+                row.setCalculatedCount(adjustCount(row.getCalculatedCount(), direction));
             }
-            case UNPRICED -> row.setUnpricedCount(Math.addExact(row.getUnpricedCount(), 1));
-            case UNCALCULABLE -> row.setUncalculableCount(Math.addExact(row.getUncalculableCount(), 1));
-            case NOT_CHARGEABLE -> row.setNotChargeableCount(Math.addExact(row.getNotChargeableCount(), 1));
+            case UNPRICED -> row.setUnpricedCount(adjustCount(row.getUnpricedCount(), direction));
+            case UNCALCULABLE -> row.setUncalculableCount(adjustCount(row.getUncalculableCount(), direction));
+            case NOT_CHARGEABLE -> row.setNotChargeableCount(adjustCount(row.getNotChargeableCount(), direction));
         }
+    }
+
+    private static long adjustCount(long current, int direction) {
+        long updated = Math.addExact(current, direction);
+        if (updated < 0) {
+            throw new IllegalStateException("invalid budget count");
+        }
+        return updated;
+    }
+
+    /** 调用方已锁定预算和原请求。必须在插入更正事实之前加载旧累计。 */
+    void adjustContribution(TenantCostBudgetDO tenant, ApiKeyDO key, List<LlmCostBudgetDO> models,
+                            CostBudgetSettlementDO previous, CostBudgetSettlementDO next) {
+        var started = next.getRequestStartedAt().atZone(BudgetPeriodResolver.ZONE).toInstant();
+        for (var period : time.resolve(started)) {
+            updateContribution(tenantBudgets.load(tenant, period), previous, next);
+            if (key != null) {
+                updateContribution(loadPeriod(key, period), previous, next);
+            }
+            for (var model : models) {
+                boolean remove = previous != null && Objects.equals(model.getServiceId(), previous.getServiceId());
+                boolean insert = Objects.equals(model.getServiceId(), next.getServiceId());
+                if (remove || insert) {
+                    updateContribution(llmBudgets.load(model, period), remove ? previous : null, insert ? next : null);
+                }
+            }
+        }
+    }
+
+    private void updateContribution(CostBudgetPeriodDO row, CostBudgetSettlementDO previous, CostBudgetSettlementDO next) {
+        replace(row, previous, next);
+        row.setUpdateTime(time.local(time.now()));
+        periods.updateById(row);
     }
     public void markUnknown(Long tenantId, Long keyId, String requestId, String reason) {
         registry.fail(requestId, "SETTLEMENT", reason);
@@ -488,13 +739,17 @@ public class CostBudgetService {
         shortTransactionVoid(ignored -> {
             ApiKeyDO key = lockKey(tenantId, keyId);
             Instant now = time.now();
-            var facts = settlements.history(tenantId, keyId, time.earliest(now));
+            boolean active = reconciledBudgets != null && reconciledBudgets.enabled();
+            var facts = active ? List.<CostBudgetSettlementDO>of() : settlements.history(tenantId, keyId, time.earliest(now));
             if (!complete(key, now) || facts.stream().anyMatch(row -> !Boolean.TRUE.equals(row.getBudgetApplied()))) {
                 throw new IllegalStateException("unfinished cost snapshot");
             }
             for (var period : time.resolve(now)) {
                 CostBudgetPeriodDO current = periods.lockPeriod(tenantId, keyId, period.type(), period.start());
                 CostBudgetPeriodDO rebuilt = emptyPeriod(key, period);
+                if (active) {
+                    reconciledBudgets.rebuild(rebuilt, keyId, null);
+                }
                 for (var fact : facts) {
                     if (!fact.getRequestStartedAt().isBefore(period.start()) && fact.getRequestStartedAt().isBefore(period.end())) {
                         add(rebuilt, fact);

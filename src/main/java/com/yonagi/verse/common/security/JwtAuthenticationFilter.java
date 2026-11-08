@@ -85,7 +85,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             Long userId = identity.userId();
             // 每次请求均以数据库状态服务为权威来源，切换租户后无需重新签发 JWT。
             boolean accountScoped = request.getServletPath().equals("/api/v1/skills")
-                    || request.getServletPath().startsWith("/api/v1/skills/");
+                    || request.getServletPath().startsWith("/api/v1/skills/")
+                    || request.getServletPath().startsWith("/api/v1/cost-reconciliation-batches/");
             CurrentTenantState tenantState = accountScoped ? new CurrentTenantState()
                     : currentTenantStateService.resolveCurrentTenant(userId);
             Long activeTenantId = tenantState.getTenantId();

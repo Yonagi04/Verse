@@ -10,6 +10,7 @@ import java.time.LocalDateTime;
 @Data
 public class UsageRawExportRow {
     /** 用量事实主键，仅作为分页游标，不导出。 */ @ExcelIgnore private Long id;
+    /** 更正前后使用同一逻辑事件键分页，不导出。 */ @ExcelIgnore private String eventCursor;
     /** 请求开始时间。 */ @ExcelProperty("请求时间") private LocalDateTime requestStartedAt;
     /** 请求追踪 ID。 */ @ExcelProperty("请求ID") private String requestId;
     /** 成员显示名。 */ @ExcelProperty("成员") private String memberLabel;

@@ -90,6 +90,41 @@ class TenantCostBudgetLedgerTest {
         }
         verify(periods,times(3)).insert(any(CostBudgetPeriodDO.class));
     }
+
+    @Test void snapshotPreviewAndAlertCaptureIncludeConfirmedStagingWithoutPersistingIt() {
+        var reader = mock(CostReconciliationBudgetRead.class);
+        ledger.setReconciledBudgets(reader);
+        when(reader.enabled()).thenReturn(true);
+        when(reader.staged(eq(2L), any())).thenReturn(new CostReconciliationBudgetRead.StagedCosts(
+                true, List.of(fact("CALCULATED", "60"))));
+        when(reader.summary(eq(2L), any())).thenReturn(new com.yonagi.verse.dto.resp.TenantCostStatusRespDTO.Reconciliation(0, "0"));
+        var committed = new ArrayList<CostBudgetPeriodDO>();
+        when(periods.lockScope(eq(2L), eq("TENANT"), eq(2L), any(), any())).thenAnswer(invocation -> {
+            var period = time.resolve(time.now()).stream().filter(p -> p.type().equals(invocation.getArgument(3))).findFirst().orElseThrow();
+            var row = new CostBudgetPeriodDO();
+            row.setPeriodType(period.type());
+            row.setPeriodStart(period.start());
+            row.setPeriodEnd(period.end());
+            CostReconciliationBudgetRead.populate(row, totals("40", 1, 0, 0, 0));
+            committed.add(row);
+            return row;
+        });
+        doAnswer(invocation -> {
+            CostReconciliationBudgetRead.populate(invocation.getArgument(0), totals("40", 1, 0, 0, 0));
+            return null;
+        }).when(reader).rebuild(any(), isNull(), isNull());
+
+        var status = ledger.snapshot(config, "7");
+        assertEquals("LIMITED", status.budgetState());
+        assertTrue(status.periods().stream().allMatch(period -> "100".equals(period.usedCostFen()) && "2".equals(period.calculatedCount())));
+        assertEquals(3, ledger.preview(config).limits().size());
+        ledger.capture(config);
+
+        verify(alerts).capture(eq(config), argThat(rows -> rows.size() == 3
+                && rows.stream().allMatch(row -> row.getUsedCostFen().compareTo(new BigDecimal("100")) == 0)));
+        assertTrue(committed.stream().allMatch(row -> new BigDecimal("40").equals(row.getUsedCostFen())));
+        verify(periods, never()).updateById(any());
+    }
     @Test void invalidHistoryCannotBecomeZeroConsumptionOrRebuildAPeriod() {
         var invalid = totals("0",0,0,0,0); invalid.setInvalidCount(BigDecimal.ONE);
         when(facts.aggregateTenant(eq(2L),any(),any())).thenReturn(invalid);

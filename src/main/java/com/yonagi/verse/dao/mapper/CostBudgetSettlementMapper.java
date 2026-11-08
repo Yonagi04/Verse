@@ -2,6 +2,7 @@ package com.yonagi.verse.dao.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.yonagi.verse.dao.entity.CostBudgetSettlementDO;
+import com.yonagi.verse.dao.projection.EffectiveCostContribution;
 import com.yonagi.verse.dao.projection.TenantCostBudgetAggregate;
 import org.apache.ibatis.annotations.*;
 import java.time.LocalDateTime;
@@ -9,6 +10,17 @@ import java.util.List;
 
 @Mapper
 public interface CostBudgetSettlementMapper extends BaseMapper<CostBudgetSettlementDO> {
+    /**
+     * 在原调用的半开时间范围内读取最多 500 条有效费用事实。Key、模型及翻页游标可空。
+     * 未应用的原始事实保留原标记。需要跨页保持一致时，调用方须在同一快照或预算锁内读取。
+     */
+    List<EffectiveCostContribution> pageEffectiveContributions(@Param("tenantId") Long tenantId,
+            @Param("start") LocalDateTime start, @Param("end") LocalDateTime end, @Param("keyId") Long keyId,
+            @Param("serviceId") Long serviceId, @Param("after") EffectiveCostContribution.Cursor after);
+
+    TenantCostBudgetAggregate aggregateEffective(@Param("tenantId") Long tenantId, @Param("start") LocalDateTime start,
+            @Param("end") LocalDateTime end, @Param("keyId") Long keyId, @Param("serviceId") Long serviceId);
+
     @Select("SELECT * FROM t_cost_budget_settlement WHERE event_id=#{eventId} FOR UPDATE")
     CostBudgetSettlementDO lockEvent(@Param("eventId") String eventId);
     // 覆盖快照契约的两个合法来源，利用 tenant/source/request 唯一索引，避免按租户扫描并锁住整段账本。

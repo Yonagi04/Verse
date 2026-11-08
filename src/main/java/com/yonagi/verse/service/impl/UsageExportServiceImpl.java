@@ -20,6 +20,7 @@ import com.yonagi.verse.dto.resp.UsageBreakdownRespDTO;
 import com.yonagi.verse.dto.resp.UsageReportRespDTO;
 import com.yonagi.verse.service.UsageExportService;
 import com.yonagi.verse.service.UsageReportService;
+import com.yonagi.verse.service.budget.CostReconciliationTracking;
 import com.yonagi.verse.service.reporting.UsageExportTarget;
 import com.yonagi.verse.service.reporting.UsageReportAccessPolicy;
 import com.yonagi.verse.service.reporting.UsageReportFilter;
@@ -47,6 +48,12 @@ public class UsageExportServiceImpl implements UsageExportService {
     private final UsageReportingProperties properties;
     private final MeterRegistry meterRegistry;
     private final Semaphore permits;
+    private CostReconciliationTracking reconciliation;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setReconciliationTracking(CostReconciliationTracking tracking) {
+        this.reconciliation = tracking;
+    }
 
     public UsageExportServiceImpl(UsageReportService reportService, UsageReportAccessPolicy reportAccess,
                                   TokenUsageMapper tokenUsageMapper,
@@ -130,7 +137,9 @@ public class UsageExportServiceImpl implements UsageExportService {
 
     private void writeRaw(UsageExportTarget target, UsageReportFilter filter) throws IOException {
         int maxRows = properties.getExportMaxRows();
-        long count = tokenUsageMapper.countRawExport(filter.tenantId(), filter.userId(), filter.apiKeyId(),
+        boolean corrected = reconciliation != null && reconciliation.enabled();
+        long count = corrected ? tokenUsageMapper.countEffectiveRawExport(filter.tenantId(), filter.userId(), filter.apiKeyId(),
+                filter.serviceId(), filter.from(), filter.to()) : tokenUsageMapper.countRawExport(filter.tenantId(), filter.userId(), filter.apiKeyId(),
                 filter.serviceId(), filter.from(), filter.to());
         if (count > maxRows) {
             throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_TOO_LARGE);
@@ -140,22 +149,25 @@ public class UsageExportServiceImpl implements UsageExportService {
                 .autoCloseStream(false).writeExcelOnException(false).build();
         // 正常 finish 才会发送文件。失败时清理未完成的工作簿，响应仍可返回业务错误。
         try (Closeable discardWorkbook = () -> writer.writeContext().finish(true)) {
-            writeRawRows(writer, filter, maxRows);
+            writeRawRows(writer, filter, maxRows, corrected);
             target.prepare(filename("usage-raw"));
             writer.finish();
         }
     }
 
-    private void writeRawRows(ExcelWriter writer, UsageReportFilter filter, int maxRows) {
+    private void writeRawRows(ExcelWriter writer, UsageReportFilter filter, int maxRows, boolean corrected) {
         WriteSheet sheet = EasyExcel.writerSheet("逐请求明细").build();
         int batchSize = properties.getExportBatchSize();
         int remainingRows = maxRows;
         LocalDateTime afterTime = null;
         Long afterId = null;
+        String afterEvent = null;
         while (true) {
             // 计数后可能有新用量入库，多读一行可区分恰好到上限与超限。
             int limit = (int) Math.min(batchSize, remainingRows + 1L);
-            List<UsageRawExportRow> rows = tokenUsageMapper.selectRawExportBatch(filter.tenantId(), filter.userId(),
+            List<UsageRawExportRow> rows = corrected ? tokenUsageMapper.selectEffectiveRawExport(filter.tenantId(), filter.userId(),
+                    filter.apiKeyId(), filter.serviceId(), filter.from(), filter.to(), afterTime, afterEvent, limit)
+                    : tokenUsageMapper.selectRawExportBatch(filter.tenantId(), filter.userId(),
                     filter.apiKeyId(), filter.serviceId(), filter.from(), filter.to(), afterTime, afterId, limit);
             if (rows.size() > remainingRows) {
                 throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_TOO_LARGE);
@@ -175,6 +187,7 @@ public class UsageExportServiceImpl implements UsageExportService {
             UsageRawExportRow last = rows.getLast();
             afterTime = last.getRequestStartedAt();
             afterId = last.getId();
+            afterEvent = last.getEventCursor();
         }
     }
 

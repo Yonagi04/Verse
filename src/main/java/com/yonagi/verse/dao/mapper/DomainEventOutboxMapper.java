@@ -15,6 +15,11 @@ public interface DomainEventOutboxMapper extends BaseMapper<DomainEventOutboxDO>
     @Update("UPDATE t_domain_event_outbox SET reconciled_at=COALESCE(reconciled_at,#{now}),update_time=#{now} "
             + "WHERE event_id=#{eventId} AND event_type='USER_CLOSED'")
     int reconcileUserCleanup(@Param("eventId") String eventId, @Param("now") LocalDateTime now);
+
+    /** 业务副作用完成后确认，允许消费者先于 Relay 标记发布。 */
+    @Update("UPDATE t_domain_event_outbox SET reconciled_at=COALESCE(reconciled_at,#{now}),update_time=#{now} "
+            + "WHERE event_id=#{eventId} AND event_type='COST_RECONCILIATION'")
+    int reconcileCostReconciliation(@Param("eventId") String eventId, @Param("now") LocalDateTime now);
     @Select("""
             SELECT * FROM t_domain_event_outbox
             WHERE ((status IN ('PENDING','RETRY') AND next_retry_at <= #{now})

@@ -331,6 +331,26 @@ class LlmForwardUsagePublicationTest {
         assertEquals("COMPLETED", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void chatErrorFollowedByDoneCannotCreateFixedPriceCompletionEvidence(boolean namedError) {
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), eq(ModelOperation.CHAT_COMPLETIONS)))
+                .thenReturn(42L);
+        when(pricingResolver.resolve(anyLong(), anyLong(), any())).thenReturn(new PricingSnapshot(
+                99L, BillingMode.REQUEST, "CNY", PricePeriodType.BASE, null,
+                null, null, null, new BigDecimal("600"), Instant.EPOCH, null));
+        var error = namedError ? ServerSentEvent.builder("provider failure").event("error").build()
+                : ServerSentEvent.builder("{\"error\":{\"message\":\"provider failure\"}}").build();
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(error, ServerSentEvent.builder("[DONE]").build()));
+
+        var forwarded = stream(ModelOperation.CHAT_COMPLETIONS, "error-then-done").collectList().block();
+
+        assertNotNull(forwarded);
+        assertEquals(List.of(error.data(), "[DONE]"), forwarded.stream().map(ServerSentEvent::data).toList());
+        verify(budgets, never()).recordUpstreamCompletion(any(), any(), any());
+        assertUnknownTerminal("FAIL");
+    }
+
     private Flux<ServerSentEvent<String>> stream(ModelOperation operation, String id) {
         return operation == ModelOperation.RESPONSES
                 ? service.responsesStream(context, "{\"model\":\"alias\",\"stream\":true}", id, Instant.now())

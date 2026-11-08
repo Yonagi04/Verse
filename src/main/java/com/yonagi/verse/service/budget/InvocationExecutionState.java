@@ -38,7 +38,11 @@ public final class InvocationExecutionState {
     }
 
     public synchronized boolean expireWaiting(Instant now) {
-        return phase == Phase.WAITING_SUBSCRIPTION && !waitingSince.plusSeconds(30).isAfter(now) && noUpstream();
+        return waitingExpired(now) && noUpstream();
+    }
+
+    synchronized boolean waitingExpired(Instant now) {
+        return phase == Phase.WAITING_SUBSCRIPTION && !waitingSince.plusSeconds(30).isAfter(now);
     }
 
     public synchronized boolean active() {

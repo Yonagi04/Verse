@@ -88,8 +88,12 @@ public class BudgetExecutionRegistry {
     }
     public LocalInvocation local(String requestId) { return executions.get(requestId); }
     public List<LocalInvocation> pendingCleanup(Instant now) {
-        return executions.values().stream().filter(row -> row.tenantId() != null && row.state().cleanupPending(now))
-                .sorted(Comparator.comparing(row -> row.state().cleanupDue())).limit(100).toList();
+        return executions.values().stream()
+                .filter(row -> row.tenantId() != null && (row.state().cleanupPending(now) || row.state().waitingExpired(now)))
+                .sorted(Comparator.comparing(row -> row.state().cleanupDue()))
+                .limit(100)
+                .filter(row -> row.state().cleanupPending(now) || row.state().expireWaiting(now))
+                .toList();
     }
     public void fail(String requestId, String stage, String code) {
         var execution = executions.get(requestId);

@@ -28,17 +28,24 @@ public class CostAlertDeliveryGuard implements MessageSendEligibility {
             java.util.function.Function<BudgetPeriodResolver.Period,CostBudgetPeriodDO> load,
             java.util.function.Supplier<CostBudgetDecision> decision) { }
     public State lockState(LlmCostAlertEventDO event) {
+        var now = time.now();
         if ("TENANT".equals(event.getScopeType())) {
             var c = tenantLedger.lock(event.getTenantId());
-            return new State(Boolean.TRUE.equals(c.getCostLimitEnabled()), tenantLedger.ready(c,time.now()),
+            boolean ready = tenantLedger.ready(c, now);
+            var staged = ready ? tenantLedger.stagedCosts(c.getTenantId(), now) : CostReconciliationBudgetRead.StagedCosts.EMPTY;
+            return new State(Boolean.TRUE.equals(c.getCostLimitEnabled()), ready && staged.available(),
                     Boolean.TRUE.equals(c.getWarningEnabled()), c.getWarningThresholdPercent(), TenantCostBudgetLedger.channels(c),
-                    p -> TenantCostBudgetLedger.limit(c,p), p -> tenantLedger.load(c,p), () -> tenantLedger.decision(c));
+                    p -> TenantCostBudgetLedger.limit(c,p), p -> staged.include(tenantLedger.load(c,p), p, null, null),
+                    () -> tenantLedger.decision(c));
         }
         if (event.getScopeType() != null && !"LLM".equals(event.getScopeType())) throw new CostBudgetUnavailableException();
         var c = ledger.lock(event.getTenantId(),event.getServiceId());
-        return new State(Boolean.TRUE.equals(c.getCostLimitEnabled()), ledger.ready(c,time.now()),
+        boolean ready = ledger.ready(c, now);
+        var staged = ready ? ledger.stagedCosts(c.getTenantId(), now) : CostReconciliationBudgetRead.StagedCosts.EMPTY;
+        return new State(Boolean.TRUE.equals(c.getCostLimitEnabled()), ready && staged.available(),
                 Boolean.TRUE.equals(c.getWarningEnabled()), c.getWarningThresholdPercent(), LlmCostBudgetLedger.channels(c),
-                p -> LlmCostBudgetLedger.limit(c,p), p -> ledger.load(c,p), () -> ledger.decision(c));
+                p -> LlmCostBudgetLedger.limit(c,p), p -> staged.include(ledger.load(c,p), p, null, c.getServiceId()),
+                () -> ledger.decision(c));
     }
     @Override @Transactional(rollbackFor = Exception.class, isolation = Isolation.READ_COMMITTED)
     public MessageSubmissionRespDTO verify(String scene, String requestId) {

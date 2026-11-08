@@ -6,4 +6,7 @@ import java.time.LocalDateTime;
 public interface UsageProjectionService {
     /** 重建半开时间窗内的小时投影。 */
     void rebuild(LocalDateTime from, LocalDateTime to);
+
+    /** 费用更正仅重建该租户的原请求小时。 */
+    void rebuildTenantHour(Long tenantId, LocalDateTime hour);
 }

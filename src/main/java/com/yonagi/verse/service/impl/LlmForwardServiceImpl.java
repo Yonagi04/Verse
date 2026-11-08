@@ -156,7 +156,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         try {
             response = forwardWithResilience(primary, primaryCtx, body, operation, ctx, requestId);
         } catch (UpstreamFailureException e) {
-            if (!UpstreamRetryPolicy.canRetry(operation, e)) {
+            if (!UpstreamRetryPolicy.canRetry(operation, e) || costBudgetService.blocksAmbiguousRetry(e.getExecutionOutcome())) {
                 publishFailureUsage(ctx, tenant, primary, requestId, start, operation, e);
                 publishAudit(ctx, tenant, primary, body, null, requestId, start,
                         LlmAuditEvent.STATUS_FAIL, e.getErrorCode(), operation);
@@ -376,23 +376,36 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             long start = requestStartedAt.toEpochMilli();
             AtomicBoolean firstChunk = new AtomicBoolean(false);
             AtomicBoolean finalized = new AtomicBoolean(false);
+            AtomicBoolean evidenceRecorded = new AtomicBoolean();
+            AtomicReference<Long> attemptId = new AtomicReference<>();
             StreamResponseAccumulator accumulator = new StreamResponseAccumulator(auditEnabled);
 
             // 惰性 Flux：订阅时才连上游；流式无重试/降级，仅 pre-flight + 首字节前失败记录
-            return Flux.defer(() -> providerAdapter.stream(forwardContext))
+            return Flux.defer(() -> {
+                        attemptId.set(costBudgetService.recordUpstreamIntent(tenant.getTenantId(), requestId, service.getServiceId(),
+                                service.getProvider(), ModelOperation.CHAT_COMPLETIONS));
+                        return finalized.get() ? Flux.empty() : providerAdapter.stream(forwardContext);
+                    })
+                    .subscribeOn(Schedulers.boundedElastic())
                     .timeout(Duration.ofMillis(streamIdleTimeoutMs))
                     // 先保存收到的证据，再异步交付，取消不能丢掉 publishOn 队列内的终态用量。
-                    .doOnNext(sse -> accumulator.accept(sse.data()))
-                    .concatWith(Flux.defer(() -> accumulator.completed()
+                    .doOnNext(sse -> accumulator.accept(sse.event(), sse.data()))
+                    .concatWith(Flux.defer(() -> accumulator.protocolEnded()
                             ? Flux.empty() : Flux.error(UpstreamErrors.incompleteStream())))
                     .publishOn(Schedulers.boundedElastic())
                     .doOnNext(sse -> {
+                        if (attemptId.get() != null && accumulator.completed() && evidenceRecorded.compareAndSet(false, true)) {
+                            costBudgetService.recordUpstreamCompletion(attemptId.get(), requestId,
+                                    usageNormalizerRegistry.normalize(service.getProvider(), accumulator.snapshot().envelope()));
+                        }
                         if (firstChunk.compareAndSet(false, true)) {
                             circuitBreaker.recordSuccess(serviceId);
                         }
                     })
                     .doOnComplete(() -> finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, requestBody,
-                            requestId, start, accumulator, LlmAuditEvent.STATUS_SUCCESS, null, source, UpstreamExecutionOutcome.UNKNOWN))
+                            requestId, start, accumulator, accumulator.failed() ? LlmAuditEvent.STATUS_FAIL : LlmAuditEvent.STATUS_SUCCESS,
+                            accumulator.failed() ? LlmForwardErrorCodeEnum.FORWARD_FAILED.code() : null, source,
+                            UpstreamExecutionOutcome.UNKNOWN))
                     .doOnCancel(() -> finalizeStreamOnce(finalized, ctx, tenant, service, rateCtx, requestBody,
                             requestId, start, accumulator, LlmAuditEvent.STATUS_ABORTED, null, source, UpstreamExecutionOutcome.UNKNOWN))
                     .doOnError(e -> {
@@ -451,10 +464,17 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             AtomicBoolean firstEvent = new AtomicBoolean();
             AtomicBoolean receivedEvent = new AtomicBoolean();
             AtomicBoolean finalized = new AtomicBoolean();
+            AtomicBoolean evidenceRecorded = new AtomicBoolean();
+            AtomicReference<Long> attemptId = new AtomicReference<>();
             AtomicReference<JSONObject> terminal = new AtomicReference<>();
             AtomicReference<String> terminalStatus = new AtomicReference<>(LlmAuditEvent.STATUS_ABORTED);
             long start = requestStartedAt.toEpochMilli();
-            return Flux.defer(() -> providerAdapter.stream(forwardContext))
+            return Flux.defer(() -> {
+                        attemptId.set(costBudgetService.recordUpstreamIntent(tenant.getTenantId(), requestId, service.getServiceId(),
+                                service.getProvider(), ModelOperation.RESPONSES));
+                        return finalized.get() ? Flux.empty() : providerAdapter.stream(forwardContext);
+                    })
+                    .subscribeOn(Schedulers.boundedElastic())
                     .timeout(Duration.ofMillis(streamIdleTimeoutMs))
                     .doOnNext(event -> {
                         receivedEvent.set(true);
@@ -477,6 +497,11 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                     })
                     .publishOn(Schedulers.boundedElastic())
                     .doOnNext(event -> {
+                        if (attemptId.get() != null && "response.completed".equals(event.event())
+                                && terminal.get() != null && evidenceRecorded.compareAndSet(false, true)) {
+                            costBudgetService.recordUpstreamCompletion(attemptId.get(), requestId,
+                                    usageNormalizerRegistry.normalize(service.getProvider(), terminal.get()));
+                        }
                         if (firstEvent.compareAndSet(false, true)) {
                             circuitBreaker.recordSuccess(serviceId);
                         }
@@ -530,6 +555,8 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             costBudgetService.noteFailure(requestId, "BUDGET_CHECK", errorCode(rejection));
             costBudgetService.abandon(ctx, requestId); throw rejection;
         }
+        Long attemptId = costBudgetService.recordUpstreamIntent(tenant.getTenantId(), requestId, service.getServiceId(),
+                service.getProvider(), operation);
         try {
             AdapterExchange.Result result = mediaAdapter.invoke(context, request);
             costBudgetService.finalizing(requestId);
@@ -542,6 +569,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 envelope.put("verse_audio_duration_ms", result.usage().audioDurationMs());
             }
             UsageBreakdown normalized = usageNormalizerRegistry.normalize(service.getProvider(), envelope);
+            costBudgetService.recordUpstreamCompletion(attemptId, requestId, normalized);
             settleRateLimitSafely(rateCtx, safeTokenCount(normalized.totalTokens()));
             publishTokenUsage(ctx, tenant.getTenantId(), service, envelope, requestId,
                     LlmAuditEvent.STATUS_SUCCESS, start, operation);
@@ -550,6 +578,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                     LlmAuditEvent.STATUS_SUCCESS, null, operation);
             return result;
         } catch (UpstreamFailureException e) {
+            costBudgetService.recordUpstreamRejection(attemptId, e.getExecutionOutcome());
             if (e.isUpstreamHealthFailure()) {
                 circuitBreaker.recordFailure(serviceId);
             }
@@ -657,11 +686,16 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 rateLimiter.check(rateCtx);
             }
             var control = costBudgetService.attempt(requestId);
+            var recordedAttempt = new AtomicReference<Long>();
             try {
                 String response = timeLimiter.execute(control, () -> {
                     costBudgetService.permit(ctx, service.getServiceId(), requestId, control);
+                    recordedAttempt.set(costBudgetService.recordUpstreamIntent(ctx.getCurrentTenantId(), requestId,
+                            service.getServiceId(), service.getProvider(), operation));
+                    control.checkActive();
                     String result = providerAdapter.forward(forwardContext);
                     control.complete(UpstreamExecutionOutcome.COMPLETED);
+                    recordSynchronousEvidence(recordedAttempt.get(), requestId, service, operation, result);
                     return result;
                 });
                 costBudgetService.finalizing(requestId);
@@ -669,6 +703,7 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 return response;
             } catch (UpstreamFailureException e) {
                 control.complete(e.getExecutionOutcome());
+                costBudgetService.recordUpstreamRejection(recordedAttempt.get(), e.getExecutionOutcome());
                 if (e.getExecutionOutcome() == UpstreamExecutionOutcome.NOT_SENT
                         && LlmForwardErrorCodeEnum.UPSTREAM_TIMEOUT.code().equals(e.getErrorCode())
                         && !costBudgetService.hasUpstream(requestId)) {
@@ -677,7 +712,8 @@ public class LlmForwardServiceImpl implements LlmForwardService {
                 if (e.isUpstreamHealthFailure()) {
                     circuitBreaker.recordFailure(serviceId);
                 }
-                if (!UpstreamRetryPolicy.canRetry(operation, e) || attempt >= maxAttempts) {
+                if (!UpstreamRetryPolicy.canRetry(operation, e) || attempt >= maxAttempts
+                        || costBudgetService.blocksAmbiguousRetry(e.getExecutionOutcome())) {
                     throw e;
                 }
                 log.warn("[llm-forward] 上游调用失败，第 {} 次重试: serviceId={}, reason={}",
@@ -687,6 +723,31 @@ public class LlmForwardServiceImpl implements LlmForwardService {
         // 理论不可达：循环内每次失败要么重试、要么抛出
         throw new UpstreamFailureException(LlmForwardErrorCodeEnum.FORWARD_FAILED.message(),
                 LlmForwardErrorCodeEnum.FORWARD_FAILED, true);
+    }
+
+    private void recordSynchronousEvidence(Long attemptId, String requestId, LlmServiceDO service,
+                                           ModelOperation operation, String response) {
+        if (attemptId == null) {
+            return;
+        }
+        try {
+            var envelope = JSON.parseObject(response);
+            if (envelope == null || envelope.containsKey("error")) {
+                return;
+            }
+            boolean complete = switch (operation) {
+                case CHAT_COMPLETIONS -> envelope.getJSONArray("choices") != null && !envelope.getJSONArray("choices").isEmpty();
+                case RESPONSES -> "completed".equals(envelope.getString("status"));
+                case EMBEDDINGS, IMAGE_GENERATION -> envelope.getJSONArray("data") != null && !envelope.getJSONArray("data").isEmpty();
+                case RERANK -> envelope.getJSONArray("results") != null && !envelope.getJSONArray("results").isEmpty();
+                default -> false;
+            };
+            if (complete) {
+                costBudgetService.recordUpstreamCompletion(attemptId, requestId, usageNormalizerRegistry.normalize(service.getProvider(), envelope));
+            }
+        } catch (RuntimeException invalid) {
+            log.debug("[llm-cost] 上游响应缺少可提前持久化的结算证据: requestId={}", requestId);
+        }
     }
 
     /** 普通文本生成 API 的输出限额；未配置时保留原请求与上游默认行为。 */

@@ -219,6 +219,7 @@ CREATE TABLE IF NOT EXISTS `t_token_usage` (
     KEY `idx_user_tenant_time` (`user_id`, `tenant_id`, `create_time`),
     KEY `idx_usage_user_cleanup` (`user_id`,`id`),
     KEY `idx_tenant_time` (`tenant_id`, `create_time`),
+    KEY `idx_usage_tenant_started` (`tenant_id`, `request_started_at`),
     KEY `idx_usage_tenant_cost_started` (`tenant_id`, `cost_status`, `request_started_at`),
     KEY `idx_usage_tenant_user_cost_started` (`tenant_id`, `user_id`, `cost_status`, `request_started_at`),
     KEY `idx_usage_personal_started`(user_id,request_started_at,id),
@@ -1336,3 +1337,120 @@ CREATE TABLE IF NOT EXISTS t_skill_comment_reaction (
     UNIQUE KEY uk_skill_comment_reaction (comment_id,user_id),
     CONSTRAINT chk_skill_comment_reaction CHECK (reaction IN ('LIKE','DISLIKE'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='每用户每评论的当前反应';
+
+-- 成本对账与自助补账
+CREATE TABLE IF NOT EXISTS t_cost_reconciliation_scan (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '扫描记录标识',
+    state VARCHAR(12) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '启用标记或扫描轮次状态',
+    generation BIGINT NOT NULL DEFAULT 0 COMMENT '零表示只记录影子证据',
+    cutoff_at DATETIME(6) NULL COMMENT '本轮到期范围上界，启用标记为空',
+    sealed_at DATETIME(6) NULL COMMENT '归属封存时间',
+    guard_slot TINYINT GENERATED ALWAYS AS (
+        CASE
+            WHEN state='ACTIVATION' THEN 1
+            WHEN state IN ('OPEN','CLOSING') THEN 2
+            ELSE NULL
+        END
+    ) STORED COMMENT '唯一启用标记和未封存轮次分别占用一个槽',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_reconciliation_scan_guard (guard_slot),
+    CONSTRAINT ck_reconciliation_scan_state CHECK (
+        (state='ACTIVATION' AND generation >= 0 AND cutoff_at IS NULL AND sealed_at IS NULL)
+        OR (state IN ('OPEN','CLOSING') AND generation > 0 AND cutoff_at IS NOT NULL AND sealed_at IS NULL)
+        OR (state='SEALED' AND generation > 0 AND cutoff_at IS NOT NULL AND sealed_at IS NOT NULL)
+    )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='成本对账启用标记和发现轮次';
+
+INSERT INTO t_cost_reconciliation_scan (state, generation) VALUES ('ACTIVATION', 0)
+ON DUPLICATE KEY UPDATE id=id;
+
+CREATE TABLE IF NOT EXISTS t_cost_reconciliation_work (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '恢复工作主键',
+    request_id VARCHAR(64) NOT NULL COMMENT '原调用标识',
+    tenant_id BIGINT NOT NULL COMMENT '原调用租户',
+    user_id BIGINT NOT NULL COMMENT '原调用用户',
+    generation BIGINT NOT NULL COMMENT '登记时的启用代次',
+    next_action_at DATETIME(6) NOT NULL COMMENT '下次检查或认领过期时间',
+    scan_id BIGINT NULL COMMENT '尚未完成首次分类的扫描轮次',
+    claim_version BIGINT NOT NULL DEFAULT 0 COMMENT '认领版本',
+    auto_queued TINYINT NOT NULL DEFAULT 0 COMMENT '首次分类结束并已可靠提交自动工作',
+    pending_confirmed TINYINT NOT NULL DEFAULT 0 COMMENT '暂存确认费用待应用',
+    request_started_at DATETIME(6) NOT NULL COMMENT '原调用开始时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_reconciliation_work_request (request_id),
+    KEY idx_reconciliation_work_due (generation, scan_id, auto_queued, next_action_at, id),
+    KEY idx_reconciliation_work_confirmed (tenant_id, pending_confirmed, request_started_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动对账工作队列';
+
+CREATE TABLE IF NOT EXISTS t_cost_reconciliation_attempt (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '物理尝试标识',
+    request_id VARCHAR(64) NOT NULL COMMENT '原调用标识',
+    attempt_no INT NOT NULL COMMENT '调用内物理尝试序号',
+    service_id BIGINT NOT NULL COMMENT '实际参与的模型标识',
+    provider VARCHAR(64) NOT NULL COMMENT '供应商',
+    operation VARCHAR(40) NOT NULL COMMENT '上游操作',
+    pricing_json VARCHAR(2048) NOT NULL COMMENT '请求开始时的价格快照',
+    outcome VARCHAR(24) NOT NULL COMMENT '发送意图或已证明的执行结果',
+    usage_json VARCHAR(512) NULL COMMENT '校验后的分类用量',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_reconciliation_attempt (request_id, attempt_no)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='请求物理尝试证据';
+
+CREATE TABLE IF NOT EXISTS t_cost_reconciliation_batch (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '租户扫描批次',
+    scan_id BIGINT NOT NULL COMMENT '首次发现轮次',
+    tenant_id BIGINT NOT NULL COMMENT '案件所属租户',
+    code CHAR(8) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '区分大小写的登录后定位码',
+    notified_at DATETIME(6) NULL COMMENT '租户通知事件提交时间',
+    recipients_json LONGTEXT NULL COMMENT '固定收件组、加密联系方式和模板渲染输入',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_reconciliation_batch_tenant (scan_id, tenant_id),
+    UNIQUE KEY uk_reconciliation_batch_code (code),
+    KEY idx_reconciliation_batch_notify (notified_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='单轮按租户归档的补账批次';
+
+CREATE TABLE IF NOT EXISTS t_cost_reconciliation_case (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '对账案件标识',
+    batch_id BIGINT NOT NULL COMMENT '首次发现所属批次',
+    tenant_id BIGINT NOT NULL COMMENT '原调用租户',
+    request_id VARCHAR(64) NOT NULL COMMENT '原调用标识',
+    event_id VARCHAR(64) NOT NULL COMMENT '原调用的用量事件标识',
+    api_key_id BIGINT NULL COMMENT '原调用 Key，Playground 为空',
+    source VARCHAR(16) NOT NULL COMMENT '原调用来源',
+    request_started_at DATETIME(6) NOT NULL COMMENT '原调用开始时间，决定账务周期',
+    attempt_id BIGINT NULL COMMENT '计费证据指向的物理尝试',
+    user_id BIGINT NOT NULL COMMENT '原调用用户',
+    state VARCHAR(24) NOT NULL COMMENT 'PENDING、RESOLVED 或 REVIEW',
+    reason VARCHAR(40) NOT NULL COMMENT '发现差异的原因',
+    version BIGINT NOT NULL DEFAULT 0 COMMENT '当前案件版本',
+    estimated_cost_fen DECIMAL(38,18) NULL COMMENT '按次的待确认估计',
+    review_required TINYINT NOT NULL DEFAULT 0 COMMENT '迟到权威证据与已生效结论冲突',
+    resolved_at DATETIME(6) NULL COMMENT '案件结案时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_reconciliation_case_request (tenant_id, request_id),
+    UNIQUE KEY uk_reconciliation_case_event (event_id),
+    KEY idx_reconciliation_case_batch (batch_id, state, id),
+    KEY idx_reconciliation_case_period (tenant_id, request_started_at, id),
+    KEY idx_reconciliation_case_personal (user_id, request_started_at, id),
+    KEY idx_reconciliation_case_reporting (source, request_started_at, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='对账差异及当前状态';
+
+CREATE TABLE IF NOT EXISTS t_cost_reconciliation_adjustment (
+    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '更正事实标识',
+    case_id BIGINT NOT NULL COMMENT '原对账案件',
+    attempt_id BIGINT NOT NULL COMMENT '该版本确认的物理尝试',
+    service_id BIGINT NOT NULL COMMENT '该物理尝试的实际计费模型',
+    operation VARCHAR(40) NOT NULL COMMENT '该物理尝试的上游操作',
+    version BIGINT NOT NULL COMMENT '生效案件版本',
+    submission_key VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '本次幂等提交标识',
+    fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL COMMENT '规范化提交摘要',
+    actor_id BIGINT NULL COMMENT '空表示系统自动处理',
+    cost_status VARCHAR(24) NOT NULL COMMENT '更正后费用状态',
+    cost_fen DECIMAL(38,18) NULL COMMENT '按原价计算的确认费用',
+    usage_json VARCHAR(512) NULL COMMENT '确认的分类用量',
+    created_at DATETIME(6) NOT NULL COMMENT '更正事实创建时间',
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_reconciliation_adjustment_version (case_id, version),
+    UNIQUE KEY uk_reconciliation_adjustment_submission (case_id, submission_key),
+    CONSTRAINT ck_reconciliation_adjustment_version CHECK (version > 0)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='不可变费用更正事实';

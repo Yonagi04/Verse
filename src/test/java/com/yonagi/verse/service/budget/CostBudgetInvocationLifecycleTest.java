@@ -90,6 +90,27 @@ class CostBudgetInvocationLifecycleTest {
         assertThrows(CostBudgetUnavailableException.class,()->service.subscribe("request"));
     }
 
+    @Test void activeReconciliationStillCleansUpUnsubscribedStreamsOnTheLocalDeadline() {
+        var tracking = mock(CostReconciliationTracking.class);
+        when(tracking.enabled()).thenReturn(true);
+        service.setReconciliationTracking(tracking);
+        var job = new CostBudgetRecoveryJob(service, settlements, invocations, tracking);
+        begin(BudgetInvocationMode.STREAM);
+        service.prepareStream(actor, 10L, "request");
+
+        when(clock.instant()).thenReturn(now.plusSeconds(29));
+        job.recover();
+        assertEquals("RUNNING", row.getState());
+
+        when(clock.instant()).thenReturn(now.plusSeconds(30));
+        job.recover();
+        assertEquals("NO_UPSTREAM", row.getState());
+        assertNull(registry.local("request"));
+        assertThrows(CostBudgetUnavailableException.class, () -> service.subscribe("request"));
+        verify(tracking).abandoned(row);
+        verify(invocations, never()).recoverable();
+    }
+
     @Test void failedCleanupRetainsProofAndOriginalOwnerCanClearRecoveryUnknown() {
         begin(BudgetInvocationMode.SYNC); var attempt=service.attempt("request");
         var tenant=tenants.lock(2L);
