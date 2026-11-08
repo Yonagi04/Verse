@@ -2,6 +2,7 @@ package com.yonagi.verse.common.security;
 
 import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.service.CurrentTenantStateService;
+import com.yonagi.verse.service.LoginSessionValidationService;
 import com.yonagi.verse.service.user.AccountAvailabilityService;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.DispatcherType;
@@ -14,6 +15,7 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.context.SecurityContextHolder;
 
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.Date;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -96,13 +98,17 @@ class JwtAuthenticationFilterTest {
         Claims claims = mock(Claims.class);
         when(claims.getSubject()).thenReturn("10");
         when(claims.get("username", String.class)).thenReturn("yonagi");
+        when(claims.getId()).thenReturn("session-id");
+        when(claims.getExpiration()).thenReturn(new Date(System.currentTimeMillis() + 60_000));
         when(jwtUtil.parseToken("token")).thenReturn(claims);
         StringRedisTemplate redis = mock(StringRedisTemplate.class);
         ValueOperations<String, String> operations = mock(ValueOperations.class);
         when(redis.opsForValue()).thenReturn(operations);
         when(operations.get(anyString())).thenReturn("10");
-        return new Fixture(new JwtAuthenticationFilter(jwtUtil, redis, stateService,
-                mock(AccountAvailabilityService.class)));
+        AccountAvailabilityService accounts = mock(AccountAvailabilityService.class);
+        when(accounts.isAccountActive(10L)).thenReturn(true);
+        return new Fixture(new JwtAuthenticationFilter(new LoginSessionValidationService(jwtUtil, redis, accounts),
+                stateService));
     }
 
     private static CurrentTenantState state(Long tenantId, String role) {

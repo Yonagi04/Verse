@@ -1,6 +1,7 @@
 package com.yonagi.verse.controller;
 
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.enums.UsageGranularity;
@@ -18,6 +19,7 @@ import com.yonagi.verse.service.UsageReportService;
 import com.yonagi.verse.service.UsageExportService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
@@ -27,6 +29,7 @@ import java.time.LocalDateTime;
 @RestController
 @RequestMapping("/api/v1/usage/{tenantId}")
 @RequiredArgsConstructor
+@Slf4j
 @ConditionalOnProperty(prefix = "verse.llm.usage-reporting", name = "enabled", havingValue = "true", matchIfMissing = true)
 public class UsageReportController {
     private final UsageReportService service;
@@ -98,10 +101,24 @@ public class UsageReportController {
         @RequestParam(defaultValue="totalTokens") String orderBy,
         @RequestParam(defaultValue="100") int limit) {
         UsageExportType exportType;
-        try { exportType=UsageExportType.parse(type); }
-        catch (IllegalArgumentException e) { throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_INVALID); }
-        exportService.export(response,context,tenantId,exportType,parseGranularity(granularity),from,to,userId,apiKeyId,
-                serviceId,parseDimension(dimension),parseOrder(orderBy),limit);
+        try {
+            exportType = UsageExportType.parse(type);
+        } catch (IllegalArgumentException exception) {
+            throw new ClientException(UsageReportingErrorCodeEnum.EXPORT_INVALID);
+        }
+        UsageExportResponse target = new UsageExportResponse(response);
+        try {
+            exportService.export(target, context, tenantId, exportType, parseGranularity(granularity), from, to,
+                    userId, apiKeyId, serviceId, parseDimension(dimension), parseOrder(orderBy), limit);
+        } catch (ServerException exception) {
+            if (response.isCommitted()) {
+                log.warn("usage_export_interrupted tenantId={} userId={} type={} code={}",
+                        tenantId, context.getUserId(), exportType, exception.getErrorCode());
+                return;
+            }
+            target.discardUncommittedFile();
+            throw exception;
+        }
     }
 
     private UsageGranularity parseGranularity(String value) {

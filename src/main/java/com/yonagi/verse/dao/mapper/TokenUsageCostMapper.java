@@ -13,7 +13,4 @@ public interface TokenUsageCostMapper extends BaseMapper<TokenUsageCostDO> {
     @Select("SELECT COUNT(*) FROM t_token_usage_cost WHERE usage_id=#{usageId}")
     long countByUsageId(@Param("usageId") Long usageId);
 
-    /** 查询指定租户缺少费用行的用量事实数。 */
-    @Select("SELECT COUNT(*) FROM t_token_usage u LEFT JOIN t_token_usage_cost c ON c.usage_id=u.id WHERE u.tenant_id=#{tenantId} AND c.usage_id IS NULL")
-    long countMissingByTenantId(@Param("tenantId") Long tenantId);
 }

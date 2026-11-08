@@ -6,15 +6,15 @@ import com.yonagi.verse.service.playground.PlaygroundQueryAccess;
 
 import com.yonagi.verse.common.cache.QueryCached;
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONArray;
-import com.alibaba.fastjson2.JSONObject;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.common.enums.PlaygroundErrorCodeEnum;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
+import com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory;
 import com.yonagi.verse.dao.entity.LlmServiceDO;
 import com.yonagi.verse.dao.entity.LlmServiceCapabilityDO;
 import com.yonagi.verse.dao.entity.PlaygroundSessionDO;
@@ -27,11 +27,15 @@ import com.yonagi.verse.dao.mapper.PlaygroundTurnMapper;
 import com.yonagi.verse.dao.mapper.TenantMapper;
 import com.yonagi.verse.dao.mapper.UserTenantMapper;
 import com.yonagi.verse.dto.resp.PlaygroundDtos;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.ErrorDataVO;
 import com.yonagi.verse.resilience.impl.PlaygroundRateLimiter;
 import com.yonagi.verse.service.LlmForwardService;
 import com.yonagi.verse.service.PlaygroundService;
+import com.yonagi.verse.service.budget.CostLimitExceededException;
 import com.yonagi.verse.service.forward.ModelResolver;
 import com.yonagi.verse.service.forward.ChatMessage;
+import com.yonagi.verse.service.playground.PlaygroundCostError;
+import com.yonagi.verse.service.playground.PlaygroundChatDeltaReader;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.stereotype.Service;
@@ -139,7 +143,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                 .eq(PlaygroundSessionDO::getTenantId, tenantId)
                 .eq(PlaygroundSessionDO::getOwnerUserId, actor.getUserId())
                 .eq(PlaygroundSessionDO::getDelFlag, 0);
-        if (keyword != null && !keyword.isBlank()) query.like(PlaygroundSessionDO::getTitle, keyword.trim());
+        if (keyword != null && !keyword.isBlank()) {
+            query.like(PlaygroundSessionDO::getTitle, keyword.trim());
+        }
         query.orderByDesc(PlaygroundSessionDO::getUpdateTime, PlaygroundSessionDO::getSessionId);
         Page<PlaygroundSessionDO> page = sessionMapper.selectPage(new Page<>(pageNum, pageSize), query);
         return new PlaygroundDtos.Sessions(page.getRecords().stream().map(this::summary).toList(),
@@ -175,7 +181,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                 .set(PlaygroundSessionDO::getServiceId, serviceId)
                 .set(PlaygroundSessionDO::getModelName, service.getName())
                 .set(PlaygroundSessionDO::getUpdateTime, LocalDateTime.now(ZONE)));
-        if (updated != 1) throw new ClientException(PlaygroundErrorCodeEnum.MODEL_LOCKED);
+        if (updated != 1) {
+            throw new ClientException(PlaygroundErrorCodeEnum.MODEL_LOCKED);
+        }
         return summary(requireSession(actor, tenantId, sessionId));
     }
 
@@ -191,7 +199,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                 .eq(PlaygroundSessionDO::getDelFlag, 0)
                 .eq(PlaygroundSessionDO::getGenerating, 0)
                 .set(PlaygroundSessionDO::getDelFlag, 1));
-        if (updated != 1) throw new ClientException(PlaygroundErrorCodeEnum.GENERATING);
+        if (updated != 1) {
+            throw new ClientException(PlaygroundErrorCodeEnum.GENERATING);
+        }
         return true;
     }
 
@@ -215,7 +225,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                 .eq(PlaygroundTurnDO::getTenantId, tenantId)
                 .eq(PlaygroundTurnDO::getOwnerUserId, actor.getUserId())
                 .eq(PlaygroundTurnDO::getIdempotencyKey, idempotencyKey));
-        if (existing != null) throw new DuplicateSendException(existing);
+        if (existing != null) {
+            throw new DuplicateSendException(existing);
+        }
         PlaygroundSessionDO session = requireSession(actor, tenantId, sessionId);
         LlmServiceDO service = requireChatService(tenantId, session.getServiceId());
         List<ChatMessage> messages = new ArrayList<>();
@@ -233,7 +245,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                     .eq(PlaygroundTurnDO::getTenantId, tenantId)
                     .eq(PlaygroundTurnDO::getOwnerUserId, actor.getUserId())
                     .eq(PlaygroundTurnDO::getIdempotencyKey, idempotencyKey));
-            if (acceptedTurn != null) throw new DuplicateSendException(acceptedTurn);
+            if (acceptedTurn != null) {
+                throw new DuplicateSendException(acceptedTurn);
+            }
             throw new ClientException(PlaygroundErrorCodeEnum.GENERATING);
         }
         playgroundRateLimiter.check(tenantId, service.getServiceId());
@@ -255,9 +269,13 @@ public class PlaygroundServiceImpl implements PlaygroundService {
             upstream = llmForwardService.playgroundChatStream(actor, service.getServiceId(), messages,
                     requestId, java.time.Instant.now());
         } catch (com.yonagi.verse.service.budget.CostLimitExceededException | com.yonagi.verse.service.budget.CostBudgetUnavailableException rejected) {
-            if (rejected instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) budget.requestId(requestId);
+            if (rejected instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget) {
+                budget.requestId(requestId);
+            }
             turn.setStatus("FAILED"); turn.setFinishedAt(LocalDateTime.now(ZONE)); turnMapper.insert(turn);
-            if (sessionMapper.release(tenantId, actor.getUserId(), sessionId) != 1) throw new IllegalStateException("PlayGround 拒绝后生成锁释放失败");
+            if (sessionMapper.release(tenantId, actor.getUserId(), sessionId) != 1) {
+                throw new IllegalStateException("PlayGround 拒绝后生成锁释放失败");
+            }
             throw rejected;
         } catch (ClientException ex) {
             if ("A000802".equals(ex.getErrorCode())) {
@@ -284,35 +302,13 @@ public class PlaygroundServiceImpl implements PlaygroundService {
         AtomicInteger sequence = new AtomicInteger();
         long[] lastSaved = {System.currentTimeMillis()};
         String turnId = id(turn.getTurnId());
-        ServerSentEvent<String> accepted = event("accepted", JSONObject.of(
-                "sessionId", id(turn.getSessionId()), "turnId", turnId,
-                "requestId", turn.getRequestId(), "status", "PENDING"));
+        ServerSentEvent<String> accepted = event("accepted", new PlaygroundDtos.AcceptedVO(
+                id(turn.getSessionId()), turnId, turn.getRequestId(), "PENDING"));
         Flux<ServerSentEvent<String>> deltas = upstream.handle((chunk, sink) -> {
-            String data = chunk.data();
-            if (data == null || "[DONE]".equals(data.trim())) return;
-            JSONObject envelope = JSON.parseObject(data);
-            if (envelope == null) return;
-            if (envelope.containsKey("error")) {
-                sink.error(new ClientException(PlaygroundErrorCodeEnum.UPSTREAM_ERROR));
+            String text = PlaygroundChatDeltaReader.text(chunk.data());
+            if (text == null || text.isEmpty()) {
                 return;
             }
-            JSONArray choices = envelope.getJSONArray("choices");
-            if (choices == null || choices.isEmpty()) return;
-            JSONObject choice = choices.getJSONObject(0);
-            if (choice != null && ("tool_calls".equals(choice.getString("finish_reason"))
-                    || "function_call".equals(choice.getString("finish_reason")))) {
-                sink.error(new ClientException(PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE));
-                return;
-            }
-            JSONObject delta = choice == null ? null : choice.getJSONObject("delta");
-            if (delta == null) return;
-            if (delta.containsKey("tool_calls") || delta.containsKey("function_call")
-                    || (delta.containsKey("content") && !(delta.get("content") instanceof String))) {
-                sink.error(new ClientException(PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE));
-                return;
-            }
-            String text = delta.getString("content");
-            if (text == null || text.isEmpty()) return;
             synchronized (reply) {
                 reply.append(text);
                 if (System.currentTimeMillis() - lastSaved[0] >= 250) {
@@ -321,26 +317,25 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                     lastSaved[0] = System.currentTimeMillis();
                 }
             }
-            sink.next(event("delta", JSONObject.of("turnId", turnId,
-                    "seq", sequence.incrementAndGet(), "text", text)));
+            sink.next(event("delta", new PlaygroundDtos.DeltaVO(turnId, sequence.incrementAndGet(), text)));
         });
         Flux<ServerSentEvent<String>> completed = deltas.concatWith(Mono.fromSupplier(() -> {
             String full = reply.toString();
             finish(actor, turn, full, "COMPLETED", finished);
-            return event("completed", JSONObject.of("turnId", turnId, "status", "COMPLETED", "reply", full));
+            return event("completed", new PlaygroundDtos.CompletedVO(turnId, "COMPLETED", full));
         })).onErrorResume(error -> {
             finish(actor, turn, reply.toString(), "FAILED", finished);
             PlaygroundErrorCodeEnum code = error instanceof ClientException client
                     && PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE.code().equals(client.getErrorCode())
                     ? PlaygroundErrorCodeEnum.UNSUPPORTED_RESPONSE : PlaygroundErrorCodeEnum.UPSTREAM_ERROR;
-            JSONObject payload = JSONObject.of("turnId", turnId, "status", "FAILED", "code", code.code(), "message", code.message());
-            if (error instanceof com.yonagi.verse.common.convention.exception.AbstractException business
-                    && com.yonagi.verse.common.web.OpenAiCostErrorResponseFactory.supports(business)) {
-                payload.put("code", business.getErrorCode()); payload.put("message", business.getErrorMessage());
-                if (business instanceof com.yonagi.verse.service.budget.CostLimitExceededException budget)
-                    payload.put("data", com.yonagi.verse.common.web.PlaygroundCostError.data(budget, turn.getRequestId()));
+            if (error instanceof AbstractException business && OpenAiCostErrorResponseFactory.supports(business)) {
+                ErrorDataVO data = business instanceof CostLimitExceededException budget
+                        ? PlaygroundCostError.data(budget, turn.getRequestId()) : null;
+                return Mono.just(event("error", new PlaygroundDtos.FailedVO(turnId, "FAILED",
+                        business.getErrorCode(), business.getErrorMessage(), data)));
             }
-            return Mono.just(event("error", payload));
+            return Mono.just(event("error", new PlaygroundDtos.FailedVO(turnId, "FAILED",
+                    code.code(), code.message(), null)));
         });
         return Flux.just(accepted).concatWith(completed)
                 .doOnCancel(() -> finish(actor, turn, reply.toString(), "STOPPED", finished));
@@ -348,7 +343,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
 
     private void finish(UserContext actor, PlaygroundTurnDO turn, String reply, String status,
                         AtomicBoolean finished) {
-        if (!finished.compareAndSet(false, true)) return;
+        if (!finished.compareAndSet(false, true)) {
+            return;
+        }
         try {
             finalizer.finish(turn.getTenantId(), actor.getUserId(), turn.getSessionId(),
                     turn.getTurnId(), reply, status);
@@ -358,8 +355,8 @@ public class PlaygroundServiceImpl implements PlaygroundService {
         }
     }
 
-    private ServerSentEvent<String> event(String name, JSONObject data) {
-        return ServerSentEvent.<String>builder().event(name).data(data.toJSONString()).build();
+    private ServerSentEvent<String> event(String name, PlaygroundDtos.TurnEventVO data) {
+        return ServerSentEvent.<String>builder().event(name).data(JSON.toJSONString(data)).build();
     }
 
     /** 重复发送返回原轮次，控制器据此响应 HTTP 409。 */
@@ -381,7 +378,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
     }
 
     private LlmServiceDO loadService(Long tenantId, Long serviceId) {
-        if (serviceId == null) return null;
+        if (serviceId == null) {
+            return null;
+        }
         return serviceMapper.selectOne(Wrappers.lambdaQuery(LlmServiceDO.class)
                 .eq(LlmServiceDO::getTenantId, tenantId)
                 .eq(LlmServiceDO::getServiceId, serviceId)
@@ -390,13 +389,17 @@ public class PlaygroundServiceImpl implements PlaygroundService {
     }
 
     private boolean chatAvailable(LlmServiceDO service) {
-        if (service == null) return false;
+        if (service == null) {
+            return false;
+        }
         LlmServiceCapabilityDO binding = capabilityMapper.selectOne(
                 Wrappers.lambdaQuery(LlmServiceCapabilityDO.class)
                         .eq(LlmServiceCapabilityDO::getServiceId, service.getServiceId())
                         .eq(LlmServiceCapabilityDO::getOperation, ModelOperation.CHAT_COMPLETIONS.name())
                         .eq(LlmServiceCapabilityDO::getEnabled, 1));
-        if (binding == null) return false;
+        if (binding == null) {
+            return false;
+        }
         try {
             modelResolver.requireBinding(service, ModelOperation.CHAT_COMPLETIONS);
             return true;
@@ -407,7 +410,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
 
     private LlmServiceDO requireChatService(Long tenantId, Long serviceId) {
         LlmServiceDO service = loadService(tenantId, serviceId);
-        if (!chatAvailable(service)) throw new ClientException(PlaygroundErrorCodeEnum.MODEL_UNAVAILABLE);
+        if (!chatAvailable(service)) {
+            throw new ClientException(PlaygroundErrorCodeEnum.MODEL_UNAVAILABLE);
+        }
         return service;
     }
 
@@ -418,7 +423,9 @@ public class PlaygroundServiceImpl implements PlaygroundService {
                         .eq(PlaygroundSessionDO::getOwnerUserId, actor.getUserId())
                         .eq(PlaygroundSessionDO::getSessionId, sessionId)
                         .eq(PlaygroundSessionDO::getDelFlag, 0));
-        if (session == null) throw new ClientException(PlaygroundErrorCodeEnum.SESSION_NOT_FOUND);
+        if (session == null) {
+            throw new ClientException(PlaygroundErrorCodeEnum.SESSION_NOT_FOUND);
+        }
         return session;
     }
 

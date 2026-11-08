@@ -1,20 +1,39 @@
 package com.yonagi.verse.common.web;
 
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
 import com.yonagi.verse.common.convention.exception.AbstractException;
-import com.yonagi.verse.service.budget.*;
-import org.springframework.http.*;
-import java.time.*;
+import com.yonagi.verse.dto.resp.ApiKeyCostStatusRespDTO;
+import com.yonagi.verse.dto.resp.OpenAiCostErrorDetailDTO;
+import com.yonagi.verse.dto.resp.OpenAiErrorRespDTO;
+import com.yonagi.verse.service.budget.CostBudgetDecision;
+import com.yonagi.verse.service.budget.CostBudgetUnavailableException;
+import com.yonagi.verse.service.budget.CostLimitExceededException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.util.List;
 
 /** 成本错误统一用于 JSON、二进制及 Rerank，不暴露金额或 Key 标识。 */
 public final class OpenAiCostErrorResponseFactory {
+    private static final String BUDGET_TIMEZONE = "Asia/Shanghai";
+
     private OpenAiCostErrorResponseFactory() { }
+
+    /** 判断是否使用预算拒绝的专用错误契约。 */
     public static boolean supports(AbstractException error) {
         return error instanceof CostLimitExceededException || error instanceof CostBudgetUnavailableException;
     }
+
+    /** 限额拒绝提供重试提示，预算不可用时无法给出恢复时间。 */
     public static ResponseEntity.BodyBuilder headers(AbstractException error, String requestId, Instant now) {
-        ResponseEntity.BodyBuilder builder = ResponseEntity.status(error instanceof CostLimitExceededException ? 429 : 503)
+        HttpStatus status = error instanceof CostLimitExceededException
+                ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.SERVICE_UNAVAILABLE;
+        ResponseEntity.BodyBuilder builder = ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_JSON).header("x-request-id", requestId);
         if (error instanceof CostLimitExceededException exceeded) {
             Duration until = Duration.between(now, OffsetDateTime.parse(exceeded.getStatus().retryAt()).toInstant());
@@ -23,20 +42,23 @@ public final class OpenAiCostErrorResponseFactory {
         }
         return builder;
     }
+
+    /** 仅写出对客户端公开的预算状态，避免序列化内部费用快照。 */
     public static String body(AbstractException exception, String requestId) {
-        JSONObject error = new JSONObject();
-        error.put("message", exception.getErrorMessage()); error.put("business_code", exception.getErrorCode());
-        error.put("request_id", requestId);
+        OpenAiCostErrorDetailDTO error;
         if (exception instanceof CostLimitExceededException exceeded) {
-            var status = exceeded.getStatus(); var primary = status.limits().getFirst();
-            error.put("type", "rate_limit_error"); error.put("code", "cost_limit_exceeded");
-            error.put("scope", primary.scope()); error.put("period", primary.period());
-            error.put("retry_at", status.retryAt()); error.put("timezone", "Asia/Shanghai");
-            error.put("limits", status.limits().stream().map(hit -> {
-                JSONObject item = new JSONObject(); item.put("scope", hit.scope()); item.put("period", hit.period());
-                item.put("period_end", hit.periodEnd()); return item;
-            }).toList());
-        } else { error.put("type", "server_error"); error.put("code", "cost_budget_unavailable"); }
-        JSONObject envelope = new JSONObject(); envelope.put("error", error); return JSON.toJSONString(envelope);
+            CostBudgetDecision status = exceeded.getStatus();
+            ApiKeyCostStatusRespDTO.Hit primary = status.limits().getFirst();
+            List<OpenAiCostErrorDetailDTO.LimitDTO> limits = status.limits().stream()
+                    .map(hit -> new OpenAiCostErrorDetailDTO.LimitDTO(hit.scope(), hit.period(), hit.periodEnd()))
+                    .toList();
+            error = new OpenAiCostErrorDetailDTO(exception.getErrorMessage(), exception.getErrorCode(), requestId,
+                    "rate_limit_error", "cost_limit_exceeded", primary.scope(), primary.period(), status.retryAt(),
+                    BUDGET_TIMEZONE, limits);
+        } else {
+            error = new OpenAiCostErrorDetailDTO(exception.getErrorMessage(), exception.getErrorCode(), requestId,
+                    "server_error", "cost_budget_unavailable", null, null, null, null, null);
+        }
+        return JSON.toJSONString(new OpenAiErrorRespDTO<>(error));
     }
 }

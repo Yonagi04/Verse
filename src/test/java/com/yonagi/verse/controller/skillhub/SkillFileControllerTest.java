@@ -23,7 +23,6 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -69,14 +68,14 @@ class SkillFileControllerTest {
         when(service.files(20L, 70L)).thenReturn(new SkillFilesRespDTO("70", "package", 1048576,
                 List.of(new SkillFileRespDTO("a.txt", 2L, "hash"))));
         mvc.perform(get(BASE).header("X-Test-Identity", "JWT-user"))
-                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code").value("0")).andExpect(jsonPath("$.data.versionId").value("70"))
                 .andExpect(jsonPath("$.data.items[0].relativePath").value("a.txt"))
                 .andExpect(jsonPath("$.data.archiveKey").doesNotExist());
         when(service.content(20L, 70L, "a.txt")).thenReturn(new SkillFileContentRespDTO(
                 "70", "a.txt", 2L, "hash", "TEXT", null, "READY", "hi"));
         mvc.perform(get(BASE + "/content").param("path", "a.txt").header("X-Test-Identity", "JWT-user"))
-                .andExpect(status().isOk()).andExpect(header().string("Cache-Control", "no-store"))
+                .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.content").value("hi")).andExpect(jsonPath("$.data.status").value("READY"));
     }
 

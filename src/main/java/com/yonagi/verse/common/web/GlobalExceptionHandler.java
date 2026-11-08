@@ -1,18 +1,14 @@
 package com.yonagi.verse.common.web;
 
-import cn.hutool.core.collection.CollectionUtil;
-import cn.hutool.core.util.StrUtil;
 import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import jakarta.servlet.http.HttpServletRequest;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.stereotype.Component;
-import org.springframework.util.StringUtils;
 import org.springframework.validation.BindingResult;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -20,7 +16,9 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.HandlerMapping;
 
+import java.util.Arrays;
 import java.util.Optional;
 
 /**
@@ -34,6 +32,9 @@ import java.util.Optional;
 @Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
+
+    private static final int MAX_LOG_STACK_FRAMES = 12;
+
     /** 精确金额解码失败仍返回管理接口业务错误，不能落入未知服务异常。 */
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public Result<?> unreadable(org.springframework.http.converter.HttpMessageNotReadableException exception) {
@@ -51,38 +52,27 @@ public class GlobalExceptionHandler {
                 Results.failure(BaseErrorCode.CLIENT_ERROR.code(), ex.getReason()));
     }
 
-    /**
-     * 拦截参数不合法异常
-     * @param request
-     * @param ex
-     * @return
-     */
-    @SneakyThrows
+    /** 返回首个字段校验提示，日志只记录校验错误数量。 */
     @ExceptionHandler(value = MethodArgumentNotValidException.class)
-    public Result validExceptionHandler(HttpServletRequest request, MethodArgumentNotValidException ex) {
+    public Result<Void> validExceptionHandler(HttpServletRequest request, MethodArgumentNotValidException ex) {
         BindingResult bindingResult = ex.getBindingResult();
-        FieldError firstError = CollectionUtil.getFirst(bindingResult.getFieldErrors());
-        String exceptionMessage = Optional.ofNullable(firstError)
+        String exceptionMessage = Optional.ofNullable(bindingResult.getFieldError())
                 .map(FieldError::getDefaultMessage)
-                .orElse(StrUtil.EMPTY);
-        log.error("[{}] {} [ex] {}", request.getMethod(), getUrl(request), exceptionMessage);
+                .orElse("");
+        log.error("[{}] {} 参数校验失败: errorCount={}", request.getMethod(), routePattern(request),
+                bindingResult.getErrorCount());
         return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), exceptionMessage);
     }
 
-    /**
-     * 拦截业务异常
-     * @param request
-     * @param ex
-     * @return
-     */
+    /** 保留领域错误响应，日志以错误码定位业务失败。 */
     @ExceptionHandler(value = {AbstractException.class})
-    public Result abstractException(HttpServletRequest request, AbstractException ex) {
+    public Result<Void> abstractException(HttpServletRequest request, AbstractException ex) {
         if (ex.getCause() != null) {
-            log.error("[{}] {} [ex] {}", request.getMethod(), request.getRequestURL().toString(), ex.toString(), ex.getCause());
-            return Results.failure(ex);
+            logFailure(request, ex.getErrorCode(), ex);
+        } else {
+            log.error("[{}] {} 业务请求失败: code={}, type={}", request.getMethod(), routePattern(request),
+                    ex.getErrorCode(), ex.getClass().getSimpleName());
         }
-
-        log.error("[{}] {} [ex] {}", request.getMethod(), request.getRequestURL().toString(), ex.toString());
         return Results.failure(ex);
     }
 
@@ -90,8 +80,9 @@ public class GlobalExceptionHandler {
      * 拦截认证异常
      */
     @ExceptionHandler(value = {AuthenticationException.class})
-    public Result handleAuthenticationException(HttpServletRequest request, AuthenticationException ex) {
-        log.warn("[{}] {} 认证失败: {}", request.getMethod(), getUrl(request), ex.getMessage());
+    public Result<Void> handleAuthenticationException(HttpServletRequest request, AuthenticationException ex) {
+        log.warn("[{}] {} 认证失败: type={}", request.getMethod(), routePattern(request),
+                ex.getClass().getSimpleName());
         return Results.failure(BaseErrorCode.TOKEN_INVALID.code(), "认证失败");
     }
 
@@ -99,8 +90,8 @@ public class GlobalExceptionHandler {
      * 拦截权限不足异常
      */
     @ExceptionHandler(value = {AccessDeniedException.class})
-    public Result handleAccessDeniedException(HttpServletRequest request, AccessDeniedException ex) {
-        log.warn("[{}] {} 权限不足", request.getMethod(), getUrl(request));
+    public Result<Void> handleAccessDeniedException(HttpServletRequest request, AccessDeniedException ex) {
+        log.warn("[{}] {} 权限不足", request.getMethod(), routePattern(request));
         return Results.failure(BaseErrorCode.TOKEN_INVALID.code(), "权限不足");
     }
 
@@ -111,7 +102,7 @@ public class GlobalExceptionHandler {
     public Result<Void> typeMismatchExceptionHandler(HttpServletRequest request,
                                                       MethodArgumentTypeMismatchException ex) {
         String message = "请求参数格式不正确";
-        log.warn("[{}] {} [parameter] {}", request.getMethod(), getUrl(request), ex.getName());
+        log.warn("[{}] {} [parameter] {}", request.getMethod(), routePattern(request), ex.getName());
         return Results.failure(BaseErrorCode.CLIENT_ERROR.code(), message);
     }
 
@@ -122,28 +113,31 @@ public class GlobalExceptionHandler {
     public Result<Void> handleMaxUploadSizeExceededException(HttpServletRequest request,
                                                               MaxUploadSizeExceededException ex) {
         log.warn("[{}] {} 图片大小超过上传上限: maxUploadSize={}",
-                request.getMethod(), getUrl(request), ex.getMaxUploadSize());
+                request.getMethod(), routePattern(request), ex.getMaxUploadSize());
         return Results.failure(BaseErrorCode.UPLOAD_FILE_SIZE_EXCEED.code(),
                 BaseErrorCode.UPLOAD_FILE_SIZE_EXCEED.message());
     }
 
-    /**
-     * 拦截其他异常
-     * @param request
-     * @param throwable
-     * @return
-     */
+    /** 将可处理的未知异常转换为通用失败，致命错误继续传播。 */
     @ExceptionHandler(value = {Throwable.class})
-    public Result throwableException(HttpServletRequest request, Throwable throwable) {
-        log.error("[{}] {} ", request.getMethod(), getUrl(request), throwable);
+    public Result<Void> throwableException(HttpServletRequest request, Throwable throwable) {
+        FatalErrors.rethrowIfFatal(throwable);
+        logFailure(request, BaseErrorCode.SERVICE_ERROR.code(), throwable);
         return Results.failure();
     }
 
-    private String getUrl(HttpServletRequest request) {
-        if (request.getRequestURI().startsWith("/api/v1/auth/external")) return request.getRequestURL().toString();
-        if (!StringUtils.hasLength(request.getQueryString())) {
-            return request.getRequestURL().toString();
-        }
-        return request.getRequestURL().toString() + "?" + request.getQueryString();
+    private void logFailure(HttpServletRequest request, String errorCode, Throwable failure) {
+        Throwable cause = failure.getCause();
+        Throwable diagnostic = cause == null ? failure : cause;
+        // 异常消息可能回显请求值或依赖响应，只保留异常类型和有限的调用位置。
+        log.error("[{}] {} 请求失败: code={}, type={}, diagnosticType={}, stack={}",
+                request.getMethod(), routePattern(request), errorCode, failure.getClass().getSimpleName(),
+                diagnostic.getClass().getSimpleName(),
+                Arrays.stream(diagnostic.getStackTrace()).limit(MAX_LOG_STACK_FRAMES).toList());
+    }
+
+    private String routePattern(HttpServletRequest request) {
+        Object pattern = request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE);
+        return pattern instanceof String route ? route : "<unmatched>";
     }
 }

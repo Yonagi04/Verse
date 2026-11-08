@@ -204,7 +204,6 @@ public class SkillZipUploadReceiver {
             response.setStatus(status);
             response.setContentType("application/json");
             response.setCharacterEncoding("UTF-8");
-            response.setHeader("Cache-Control", "no-store");
             objectMapper.writeValue(response.getOutputStream(), body);
         } catch (IOException | IllegalStateException exception) {
             log.debug("Skill上传响应连接已结束: type={}", exception.getClass().getSimpleName());

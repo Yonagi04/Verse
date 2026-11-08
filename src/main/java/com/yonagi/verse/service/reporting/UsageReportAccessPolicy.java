@@ -28,6 +28,17 @@ public class UsageReportAccessPolicy implements QueryAccessPolicy {
 
     public UsageReportFilter resolveFilter(UserContext context, Long tenantId, UsageGranularity granularity,
         LocalDateTime from, LocalDateTime to, Long requestedUserId, Long apiKeyId, Long serviceId) {
+        return resolveFilter(context, tenantId, granularity, from, to, requestedUserId, apiKeyId, serviceId, false);
+    }
+
+    public UsageReportFilter resolveExportFilter(UserContext context, Long tenantId, UsageGranularity granularity,
+        LocalDateTime from, LocalDateTime to, Long requestedUserId, Long apiKeyId, Long serviceId, UsageExportType type) {
+        return resolveFilter(context, tenantId, granularity, from, to, requestedUserId, apiKeyId, serviceId,
+                type == UsageExportType.RAW);
+    }
+
+    private UsageReportFilter resolveFilter(UserContext context, Long tenantId, UsageGranularity granularity,
+        LocalDateTime from, LocalDateTime to, Long requestedUserId, Long apiKeyId, Long serviceId, boolean rawExport) {
         RoleEnum role = requireRole(context, tenantId);
         boolean canReadAll = role.isAdmin();
         if (requestedUserId!=null && !canReadAll && !Objects.equals(requestedUserId,context.getUserId()))
@@ -42,7 +53,7 @@ public class UsageReportAccessPolicy implements QueryAccessPolicy {
         }
         if (serviceId!=null && !llmServiceMapper.exists(Wrappers.lambdaQuery(LlmServiceDO.class).eq(LlmServiceDO::getTenantId,tenantId).eq(LlmServiceDO::getServiceId,serviceId).eq(LlmServiceDO::getDelFlag,0)))
             throw new ClientException(UsageReportingErrorCodeEnum.FILTER_INVALID);
-        Range range=resolveRange(granularity,from,to);
+        Range range = resolveRange(granularity, from, to, rawExport);
         return new UsageReportFilter(tenantId,effectiveUserId,apiKeyId,serviceId,range.from,range.to,granularity,canReadAll);
     }
 
@@ -74,7 +85,7 @@ public class UsageReportAccessPolicy implements QueryAccessPolicy {
         if (args.length == 11) checkBreakdown(filter, (UsageBreakdownDimension) args[8], (Integer) args[10]);
     }
 
-    private Range resolveRange(UsageGranularity granularity, LocalDateTime from, LocalDateTime to) {
+    private Range resolveRange(UsageGranularity granularity, LocalDateTime from, LocalDateTime to, boolean rawExport) {
         LocalDateTime now = LocalDateTime.now(SHANGHAI);
         if (to == null) to = switch (granularity) {
             case HOUR -> now.truncatedTo(ChronoUnit.HOURS).plusHours(1);
@@ -86,8 +97,20 @@ public class UsageReportAccessPolicy implements QueryAccessPolicy {
             case HOUR -> to.minusHours(24); case DAY -> to.minusDays(7);
             case WEEK -> to.minusWeeks(8); case MONTH -> to.minusMonths(6);
         };
-        if (!from.isBefore(to) || Duration.between(from, to).toDays() > properties.getMaxRangeDays())
+        if (!from.isBefore(to)) {
             throw new ClientException(UsageReportingErrorCodeEnum.RANGE_INVALID);
+        }
+        Duration requestedRange = Duration.between(from, to);
+        if (rawExport) {
+            int maxRangeDays = properties.getRawExportMaxRangeDays();
+            if (requestedRange.compareTo(Duration.ofDays(maxRangeDays)) > 0) {
+                throw new ClientException("导出统计报表的天数范围不能超过 " + maxRangeDays + " 天",
+                        UsageReportingErrorCodeEnum.EXPORT_INVALID);
+            }
+        }
+        if (requestedRange.toDays() > properties.getMaxRangeDays()) {
+            throw new ClientException(UsageReportingErrorCodeEnum.RANGE_INVALID);
+        }
         return new Range(from, to);
     }
     private record Range(LocalDateTime from, LocalDateTime to) { }

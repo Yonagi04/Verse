@@ -3,8 +3,10 @@ package com.yonagi.verse.service.impl;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
 import com.yonagi.verse.service.tenant.TenantActivityAccessPolicy;
 
+import com.alibaba.fastjson2.JSON;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.TenantErrorCodeEnum;
@@ -21,7 +23,9 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.util.Base64;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -124,9 +128,12 @@ class TenantActivityQueryServiceImplTest {
                 first.getItems().stream().map(item -> item.getEventId()).toList());
         assertTrue(first.getHasMore());
         assertTrue(first.getNextCursor() != null && !first.getNextCursor().isBlank());
+        String previousCursor = Base64.getUrlEncoder().withoutPadding().encodeToString(
+                "{\"occurredAt\":\"2026-09-19T12:00\",\"id\":29}".getBytes(StandardCharsets.UTF_8));
+        assertEquals(previousCursor, first.getNextCursor());
 
         TenantActivityListRespDTO second = fixture.service.listActivities(
-                10L, 20L, 2, first.getNextCursor());
+                10L, 20L, 2, previousCursor);
         assertEquals(List.of("event-28"),
                 second.getItems().stream().map(item -> item.getEventId()).toList());
         assertFalse(second.getHasMore());
@@ -151,6 +158,17 @@ class TenantActivityQueryServiceImplTest {
                 () -> fixture.service.listActivities(10L, 20L, 30, "not-base64"));
         assertThrows(ClientException.class,
                 () -> fixture.service.listActivities(10L, 20L, 30, ""));
+        for (String json : List.of(
+                "{\"occurredAt\":\"2026-09-19T12:00\",\"id\":\"29\"}",
+                "{\"occurredAt\":\"2026-09-19T12:00\",\"id\":9223372036854775808}",
+                "{\"occurredAt\":\"2026-09-19T12:00\",\"id\":0}",
+                "{\"id\":29}",
+                "{\"occurredAt\":\"2026-09-19T12:00\"}",
+                "{\"occurredAt\":\"2026-09-19T12:00\",\"id\":29,\"extra\":true}")) {
+            String cursor = Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(json.getBytes(StandardCharsets.UTF_8));
+            assertThrows(ClientException.class, () -> fixture.service.listActivities(10L, 20L, 30, cursor));
+        }
 
         verify(fixture.activityLogMapper, never()).selectTimeline(anyLong(), any(), any(), anyInt());
     }
@@ -168,7 +186,9 @@ class TenantActivityQueryServiceImplTest {
         row.setTargetType("MEMBER");
         row.setTargetId("9007199254740995");
         row.setTargetName("已离开成员");
-        row.setDetailJson("{\"oldRole\":\"MEMBER\",\"newRole\":\"ADMIN\",\"secret\":\"hidden\"}");
+        row.setDetailJson("""
+                {"oldRole":"MEMBER","newRole":"ADMIN","modelName":"other-event-only","secret":"hidden"}
+                """);
         when(fixture.activityLogMapper.selectTimeline(anyLong(), isNull(), isNull(), anyInt()))
                 .thenReturn(List.of(row));
 
@@ -176,12 +196,32 @@ class TenantActivityQueryServiceImplTest {
 
         assertEquals("当前昵称", response.getItems().getFirst().getActorNickname());
         assertEquals("已离开成员", response.getItems().getFirst().getTargetName());
-        assertEquals(2, response.getItems().getFirst().getDetails().size());
-        assertTrue(response.getItems().getFirst().getDetails().keySet()
-                .containsAll(List.of("oldRole", "newRole")));
-        String json = new ObjectMapper().findAndRegisterModules().writeValueAsString(response);
-        assertTrue(json.contains("\"actorUserId\":\"9007199254740993\""));
-        assertFalse(json.contains("secret"));
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        JsonNode responseJson = mapper.valueToTree(response);
+        JsonNode item = responseJson.at("/items/0");
+        assertEquals("9007199254740993", item.path("actorUserId").textValue());
+        assertEquals(mapper.readTree("{\"oldRole\":\"MEMBER\",\"newRole\":\"ADMIN\"}"), item.path("details"));
+
+        String legacyJson = "{\"items\":[{\"details\":{\"oldRole\":\"MEMBER\",\"newRole\":\"ADMIN\"}}]}";
+        TenantActivityListRespDTO restored = JSON.parseObject(legacyJson, TenantActivityListRespDTO.class);
+        assertEquals("MEMBER", restored.getItems().getFirst().getDetails().getOldRole());
+        assertEquals("ADMIN", restored.getItems().getFirst().getDetails().getNewRole());
+    }
+
+    @Test
+    void invalidHistoricalDetailsRemainEmptyInsteadOfExposingAnUnexpectedShape() {
+        Fixture fixture = fixture(activeTenant(true), membership("MEMBER"));
+        TenantActivityLogDO row = row(9L, "event-9", LocalDateTime.of(2026, 9, 19, 8, 30));
+        row.setActivityType("MEMBER_ROLE_CHANGED");
+        row.setDetailJson("{\"oldRole\":{\"secret\":\"hidden\"}}");
+        when(fixture.activityLogMapper.selectTimeline(anyLong(), isNull(), isNull(), anyInt()))
+                .thenReturn(List.of(row));
+
+        TenantActivityListRespDTO response = fixture.service.listActivities(10L, 20L, 30, null);
+
+        JsonNode item = new ObjectMapper().valueToTree(response.getItems().getFirst().getDetails());
+        assertTrue(item.isObject());
+        assertEquals(0, item.size());
     }
 
     @Test

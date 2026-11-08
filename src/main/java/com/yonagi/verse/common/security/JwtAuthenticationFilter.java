@@ -1,26 +1,21 @@
 package com.yonagi.verse.common.security;
 
 import com.alibaba.fastjson2.JSON;
-import cn.hutool.crypto.digest.DigestUtil;
-import com.yonagi.verse.common.constant.RedisKeyConstant;
 import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
+import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.enums.PermissionEnum;
 import com.yonagi.verse.common.enums.RoleEnum;
 import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.service.CurrentTenantStateService;
-import com.yonagi.verse.service.user.AccountAvailabilityService;
-import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.ExpiredJwtException;
-import io.jsonwebtoken.JwtException;
+import com.yonagi.verse.service.LoginSessionValidationService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -48,10 +43,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private static final String AUTH_HEADER = "Authorization";
     private static final String BEARER_PREFIX = "Bearer ";
 
-    private final JwtUtil jwtUtil;
-    private final StringRedisTemplate stringRedisTemplate;
+    private final LoginSessionValidationService sessions;
     private final CurrentTenantStateService currentTenantStateService;
-    private final AccountAvailabilityService accountAvailabilityService;
 
     @Override
     protected boolean shouldNotFilterAsyncDispatch() {
@@ -79,40 +72,20 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        Claims claims;
-        Long userId;
-        String username;
+        LoginSessionValidationService.Identity identity;
         try {
-            claims = jwtUtil.parseToken(token);
-            userId = Long.parseLong(claims.getSubject());
-            username = claims.get("username", String.class);
-        } catch (ExpiredJwtException e) {
-            log.debug("Token 已过期: {}", e.getMessage());
-            writeErrorResponse(response, BaseErrorCode.TOKEN_EXPIRED);
-            return;
-        } catch (JwtException | IllegalArgumentException e) {
-            log.debug("Token 无效: {}", e.getMessage());
-            writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
+            identity = sessions.authenticate(token);
+        } catch (ClientException e) {
+            writeErrorResponse(response, BaseErrorCode.TOKEN_EXPIRED.code().equals(e.getErrorCode())
+                    ? BaseErrorCode.TOKEN_EXPIRED : BaseErrorCode.TOKEN_INVALID);
             return;
         }
 
         try {
-            // 校验 Token 是否已被登出（从 Redis 反向索引中查询）
-            String tokenHash = DigestUtil.md5Hex(token);
-            String userIdFromRedis = stringRedisTemplate.opsForValue()
-                    .get(RedisKeyConstant.USER_LOGIN_TOKEN_KEY + tokenHash);
-            if (!userId.toString().equals(userIdFromRedis)) {
-                writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
-                return;
-            }
-
+            Long userId = identity.userId();
             // 每次请求均以数据库状态服务为权威来源，切换租户后无需重新签发 JWT。
             boolean accountScoped = request.getServletPath().equals("/api/v1/skills")
                     || request.getServletPath().startsWith("/api/v1/skills/");
-            if (accountScoped && !accountAvailabilityService.isAccountActive(userId)) {
-                writeErrorResponse(response, BaseErrorCode.TOKEN_INVALID);
-                return;
-            }
             CurrentTenantState tenantState = accountScoped ? new CurrentTenantState()
                     : currentTenantStateService.resolveCurrentTenant(userId);
             Long activeTenantId = tenantState.getTenantId();
@@ -124,8 +97,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // 构建 UserContext
             UserContext ctx = new UserContext()
                     .setUserId(userId)
-                    .setUsername(username)
-                    .setTokenHash(tokenHash)
+                    .setUsername(identity.username())
+                    .setTokenHash(identity.tokenHash())
                     .setCurrentTenantId(activeTenantId)
                     .setRole(role != null ? role.name() : null)
                     .setAuthorities(permissions.stream().map(PermissionEnum::getCode).toList());

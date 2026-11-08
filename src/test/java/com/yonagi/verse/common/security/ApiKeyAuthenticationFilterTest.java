@@ -3,10 +3,12 @@ package com.yonagi.verse.common.security;
 import com.yonagi.verse.dao.entity.ApiKeyDO;
 import com.yonagi.verse.common.cache.QueryCache;
 import com.yonagi.verse.common.convention.exception.ServerException;
+import com.yonagi.verse.common.enums.LlmForwardErrorCodeEnum;
 import com.yonagi.verse.dao.mapper.ApiKeyMapper;
 import com.yonagi.verse.service.impl.ApiKeyUsageRecorder;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.Test;
+import org.skyscreamer.jsonassert.JSONAssert;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -119,7 +121,10 @@ class ApiKeyAuthenticationFilterTest {
         });
 
         assertEquals(401, response.getStatus());
-        assertNotNull(response.getContentAsString());
+        assertEquals("application/json;charset=UTF-8", response.getContentType());
+        JSONAssert.assertEquals("""
+                {"error":{"message":"%s","type":"invalid_request_error","code":"invalid_api_key"}}
+                """.formatted(LlmForwardErrorCodeEnum.API_KEY_INVALID.message()), response.getContentAsString(), true);
         verifyNoInteractions(recorder);
     }
 
@@ -162,6 +167,11 @@ class ApiKeyAuthenticationFilterTest {
                     throw new AssertionError("unavailable cache reached controller");
                 });
         assertEquals(503, response.getStatus());
+        assertEquals("application/json;charset=UTF-8", response.getContentType());
+        JSONAssert.assertEquals("""
+                {"error":{"message":"Authentication temporarily unavailable",
+                "type":"server_error","code":"authentication_unavailable"}}
+                """, response.getContentAsString(), true);
         verifyNoInteractions(mapper);
     }
 

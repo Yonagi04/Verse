@@ -8,7 +8,6 @@ import com.yonagi.verse.dto.resp.SkillFilesRespDTO;
 import com.yonagi.verse.service.skillhub.SkillFileQueryService;
 import com.yonagi.verse.service.skillhub.port.SkillPublicQueryRateLimiter;
 import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
@@ -33,8 +32,7 @@ public class SkillFileController {
     @GetMapping
     public Result<SkillFilesRespDTO> files(@PathVariable @Positive Long skillId,
                                           @PathVariable @Positive Long versionId,
-                                          HttpServletRequest request, HttpServletResponse response) {
-        response.setHeader("Cache-Control", "no-store");
+                                          HttpServletRequest request) {
         rateLimiter.check(DigestUtil.sha256Hex(request.getRemoteAddr()));
         return Results.success(files.files(skillId, versionId));
     }
@@ -44,8 +42,7 @@ public class SkillFileController {
     public Result<SkillFileContentRespDTO> content(@PathVariable @Positive Long skillId,
                                                   @PathVariable @Positive Long versionId,
                                                   @RequestParam @NotBlank @Size(max = 512) String path,
-                                                  HttpServletRequest request, HttpServletResponse response) {
-        response.setHeader("Cache-Control", "no-store");
+                                                  HttpServletRequest request) {
         rateLimiter.check(DigestUtil.sha256Hex(request.getRemoteAddr()));
         return Results.success(files.content(skillId, versionId, path));
     }

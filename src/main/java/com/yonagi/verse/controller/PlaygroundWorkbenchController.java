@@ -1,17 +1,34 @@
 package com.yonagi.verse.controller;
 
-import com.alibaba.fastjson2.JSONObject;
 import com.yonagi.verse.common.convention.exception.AbstractException;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.UserContextHolder;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.AttemptVO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.ModelVO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.RoundVO;
+import com.yonagi.verse.dto.playground.WorkbenchTypes.WorkspaceVO;
+import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.CreateReqDTO;
+import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.ForkReqDTO;
+import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.RestoreReqDTO;
+import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.RoundReqDTO;
+import com.yonagi.verse.dto.req.WorkbenchRequestsDTO.UpdateReqDTO;
 import com.yonagi.verse.service.PlaygroundWorkbenchService;
-import com.yonagi.verse.service.impl.PlaygroundConfiguration;
-import jakarta.servlet.http.HttpServletResponse;
+import com.yonagi.verse.service.playground.PlaygroundConfiguration;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.util.List;
 
@@ -23,22 +40,29 @@ public class PlaygroundWorkbenchController {
     private final PlaygroundWorkbenchService service;
 
     @GetMapping("/models")
-    public Result<List<JSONObject>> models(@PathVariable Long tenantId) { return Results.success(service.models(UserContextHolder.get(), tenantId)); }
+    public Result<List<ModelVO>> models(@PathVariable Long tenantId) {
+        return Results.success(service.models(UserContextHolder.get(), tenantId));
+    }
 
     @GetMapping("/{kind:groups|presets}")
-    public Result<List<JSONObject>> list(@PathVariable Long tenantId, @PathVariable String kind, @RequestParam(required = false) String keyword) {
+    public Result<List<WorkspaceVO>> list(@PathVariable Long tenantId, @PathVariable String kind,
+                                          @RequestParam(required = false) String keyword) {
         return Results.success(service.list(UserContextHolder.get(), tenantId, type(kind), keyword));
     }
     @PostMapping("/{kind:groups|presets}")
-    public Result<JSONObject> create(@PathVariable Long tenantId, @PathVariable String kind, @RequestBody JSONObject body) {
+    public Result<WorkspaceVO> create(@PathVariable Long tenantId, @PathVariable String kind,
+                                      @RequestBody CreateReqDTO body) {
         return Results.success(service.create(UserContextHolder.get(), tenantId, type(kind), body));
     }
     @GetMapping("/{kind:groups|presets}/{id}")
-    public Result<JSONObject> detail(@PathVariable Long tenantId, @PathVariable String kind, @PathVariable Long id) {
-        JSONObject result = service.detail(UserContextHolder.get(), tenantId, id); requireKind(kind, result); return Results.success(result);
+    public Result<WorkspaceVO> detail(@PathVariable Long tenantId, @PathVariable String kind, @PathVariable Long id) {
+        WorkspaceVO result = service.detail(UserContextHolder.get(), tenantId, id);
+        requireKind(kind, result);
+        return Results.success(result);
     }
     @PutMapping("/{kind:groups|presets}/{id}")
-    public Result<JSONObject> update(@PathVariable Long tenantId, @PathVariable String kind, @PathVariable Long id, @RequestBody JSONObject body) {
+    public Result<WorkspaceVO> update(@PathVariable Long tenantId, @PathVariable String kind, @PathVariable Long id,
+                                      @RequestBody UpdateReqDTO body) {
         requireKind(kind, service.detail(UserContextHolder.get(), tenantId, id));
         return Results.success(service.update(UserContextHolder.get(), tenantId, id, body));
     }
@@ -48,35 +72,40 @@ public class PlaygroundWorkbenchController {
         return Results.success(service.delete(UserContextHolder.get(), tenantId, id));
     }
     @PostMapping("/groups/{id}/rounds")
-    public Result<JSONObject> round(@PathVariable Long tenantId, @PathVariable Long id, @RequestHeader("Idempotency-Key") String key, @RequestBody JSONObject body) {
-        PlaygroundConfiguration.fields(body, "prompt");
-        if (!(body.get("prompt") instanceof String)) throw PlaygroundConfiguration.invalid();
-        return Results.success(service.round(UserContextHolder.get(), tenantId, id, body.getString("prompt"), key));
+    public Result<RoundVO> round(@PathVariable Long tenantId, @PathVariable Long id,
+                                @RequestHeader("Idempotency-Key") String key, @RequestBody RoundReqDTO body) {
+        return Results.success(service.round(UserContextHolder.get(), tenantId, id, body.getPrompt(), key));
     }
-    @PostMapping(value = "/attempts/{id}/stream", produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
-    public SseEmitter stream(@PathVariable Long tenantId, @PathVariable Long id, HttpServletResponse response) {
-        var events = service.stream(UserContextHolder.get(), tenantId, id);
-        response.setContentType("text/event-stream;charset=UTF-8"); response.setHeader("Cache-Control", "no-cache");
-        return PlaygroundController.emitter(events);
+    @PostMapping(value = "/attempts/{id}/stream",
+            produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
+    public ResponseEntity<SseEmitter> stream(@PathVariable Long tenantId, @PathVariable Long id) {
+        SseEmitter emitter = PlaygroundController.emitter(service.stream(UserContextHolder.get(), tenantId, id));
+        return PlaygroundController.eventStreamResponse().body(emitter);
     }
     @PostMapping("/attempts/{id}/stop")
     public Result<Boolean> stop(@PathVariable Long tenantId, @PathVariable Long id) { return Results.success(service.stop(UserContextHolder.get(), tenantId, id)); }
     @PostMapping("/attempts/{id}/retry")
-    public Result<JSONObject> retry(@PathVariable Long tenantId, @PathVariable Long id, @RequestHeader("Idempotency-Key") String key) {
+    public Result<AttemptVO> retry(@PathVariable Long tenantId, @PathVariable Long id,
+                                  @RequestHeader("Idempotency-Key") String key) {
         return Results.success(service.retry(UserContextHolder.get(), tenantId, id, key));
     }
     @PostMapping("/groups/{id}/fork")
-    public Result<JSONObject> fork(@PathVariable Long tenantId, @PathVariable Long id, @RequestBody JSONObject body) {
+    public Result<WorkspaceVO> fork(@PathVariable Long tenantId, @PathVariable Long id, @RequestBody ForkReqDTO body) {
         return Results.success(service.fork(UserContextHolder.get(), tenantId, id, body));
     }
+    /** 恢复本人预设的指定正整数版本；配置字段先通过统一精确整数校验。 */
     @PostMapping("/presets/{id}/restore")
-    public Result<JSONObject> restore(@PathVariable Long tenantId, @PathVariable Long id, @RequestBody JSONObject body) {
-        PlaygroundConfiguration.fields(body, "version");
-        if (!(body.get("version") instanceof Number n) || n.doubleValue() != n.intValue()) throw PlaygroundConfiguration.invalid();
-        return Results.success(service.restore(UserContextHolder.get(), tenantId, id, n.intValue()));
+    public Result<WorkspaceVO> restore(@PathVariable Long tenantId, @PathVariable Long id,
+                                       @RequestBody RestoreReqDTO body) {
+        return Results.success(service.restore(UserContextHolder.get(), tenantId, id, body.getVersion().intValue()));
     }
+
     @ExceptionHandler(AbstractException.class)
     public ResponseEntity<Result<?>> handle(AbstractException error) { return PlaygroundController.failure(error); }
     private String type(String kind) { return kind.equals("groups") ? "GROUP" : "PRESET"; }
-    private void requireKind(String kind, JSONObject value) { if (!type(kind).equals(value.getString("kind"))) throw PlaygroundConfiguration.invalid(); }
+    private void requireKind(String kind, WorkspaceVO value) {
+        if (!type(kind).equals(value.getKind())) {
+            throw PlaygroundConfiguration.invalid();
+        }
+    }
 }

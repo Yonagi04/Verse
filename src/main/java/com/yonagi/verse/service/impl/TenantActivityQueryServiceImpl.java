@@ -1,14 +1,17 @@
 package com.yonagi.verse.service.impl;
 
 import com.yonagi.verse.service.tenant.TenantActivityAccessPolicy;
+import com.yonagi.verse.service.tenant.TenantActivityDetailsReader;
 import com.yonagi.verse.service.tenant.TenantQueryAccess;
 
 import com.yonagi.verse.common.cache.QueryCached;
 import com.alibaba.fastjson2.JSON;
-import com.alibaba.fastjson2.JSONObject;
+import com.alibaba.fastjson2.annotation.JSONField;
+import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import com.yonagi.verse.common.convention.exception.ClientException;
-import com.yonagi.verse.common.enums.TenantActivityType;
 import com.yonagi.verse.dao.entity.TenantActivityLogDO;
 import com.yonagi.verse.dao.entity.TenantDO;
 import com.yonagi.verse.dao.mapper.TenantActivityLogMapper;
@@ -21,14 +24,12 @@ import com.yonagi.verse.service.TenantActivityQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.Base64;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
 import static com.yonagi.verse.common.constant.RedisKeyConstant.*;
@@ -41,6 +42,8 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
     static final int DEFAULT_LIMIT = 30;
     static final int MIN_LIMIT = 1;
     static final int MAX_LIMIT = 50;
+    private static final int MAX_CURSOR_LENGTH = 512;
+    private static final JsonFactory JSON_FACTORY = new JsonFactory();
 
     private final TenantActivityAccessPolicy activityAccess;
     private final TenantMapper tenantMapper;
@@ -98,42 +101,47 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
         if (encodedCursor == null) {
             return null;
         }
-        if (encodedCursor.isBlank() || encodedCursor.length() > 512) {
+        if (encodedCursor.isBlank() || encodedCursor.length() > MAX_CURSOR_LENGTH) {
             throw invalidParameter("动态查询游标无效");
         }
         try {
             String json = new String(Base64.getUrlDecoder().decode(encodedCursor), StandardCharsets.UTF_8);
-            JSONObject object = JSON.parseObject(json);
-            if (object == null || object.size() != 2
-                    || !object.containsKey("occurredAt") || !object.containsKey("id")) {
-                throw invalidParameter("动态查询游标无效");
-            }
-            Object occurredAtValue = object.get("occurredAt");
-            Object idValue = object.get("id");
-            if (!(occurredAtValue instanceof String occurredAtText)
-                    || occurredAtText.isBlank()
-                    || (!(idValue instanceof Long) && !(idValue instanceof Integer))) {
-                throw invalidParameter("动态查询游标无效");
-            }
-            long id = ((Number) idValue).longValue();
-            if (id <= 0) {
-                throw invalidParameter("动态查询游标无效");
-            }
-            return new ActivityCursor(LocalDateTime.parse(occurredAtText), id);
-        } catch (ClientException exception) {
-            throw exception;
-        } catch (RuntimeException exception) {
+            return readCursor(json);
+        } catch (IOException | IllegalArgumentException | DateTimeParseException exception) {
             throw invalidParameter("动态查询游标无效");
         }
+    }
+
+    private ActivityCursor readCursor(String json) throws IOException {
+        String occurredAt = null;
+        Long id = null;
+        try (JsonParser parser = JSON_FACTORY.createParser(json)) {
+            if (parser.nextToken() == JsonToken.START_OBJECT) {
+                while (parser.nextToken() == JsonToken.FIELD_NAME) {
+                    String name = parser.currentName();
+                    JsonToken token = parser.nextToken();
+                    if ("occurredAt".equals(name) && token == JsonToken.VALUE_STRING) {
+                        occurredAt = parser.getText();
+                    } else if ("id".equals(name) && token == JsonToken.VALUE_NUMBER_INT) {
+                        id = parser.getLongValue();
+                    } else {
+                        throw invalidParameter("动态查询游标无效");
+                    }
+                }
+                if (parser.currentToken() == JsonToken.END_OBJECT && parser.nextToken() == null
+                        && occurredAt != null && !occurredAt.isBlank() && id != null && id > 0) {
+                    return new ActivityCursor(LocalDateTime.parse(occurredAt), id);
+                }
+            }
+        }
+        throw invalidParameter("动态查询游标无效");
     }
 
     private String encodeCursor(TenantActivityLogDO row) {
         if (row.getId() == null || row.getOccurredAt() == null) {
             throw new IllegalStateException("租户动态缺少稳定游标字段");
         }
-        Map<String, Object> value = new LinkedHashMap<>();
-        value.put("occurredAt", row.getOccurredAt().toString());
-        value.put("id", row.getId());
+        CursorDTO value = new CursorDTO(row.getOccurredAt().toString(), row.getId());
         return Base64.getUrlEncoder().withoutPadding().encodeToString(
                 JSON.toJSONString(value).getBytes(StandardCharsets.UTF_8));
     }
@@ -152,38 +160,9 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
         response.setTargetType(row.getTargetType());
         response.setTargetId(row.getTargetId());
         response.setTargetName(row.getTargetName());
-        response.setDetails(parseWhitelistedDetails(row.getActivityType(), row.getDetailJson()));
+        response.setDetails(TenantActivityDetailsReader.read(row.getActivityType(), row.getDetailJson()));
         response.setOccurredAt(row.getOccurredAt());
         return response;
-    }
-
-    private Map<String, Object> parseWhitelistedDetails(String activityType, String detailJson) {
-        if (activityType == null || detailJson == null || detailJson.isBlank()) {
-            return Collections.emptyMap();
-        }
-        final TenantActivityType type;
-        try {
-            type = TenantActivityType.valueOf(activityType);
-        } catch (IllegalArgumentException exception) {
-            return Collections.emptyMap();
-        }
-        JSONObject source;
-        try {
-            source = JSON.parseObject(detailJson);
-        } catch (RuntimeException exception) {
-            return Collections.emptyMap();
-        }
-        if (source == null || source.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Set<String> allowedKeys = type.allowedDetailKeys();
-        Map<String, Object> details = new LinkedHashMap<>();
-        for (String key : allowedKeys) {
-            if (source.containsKey(key)) {
-                details.put(key, source.get(key));
-            }
-        }
-        return details;
     }
 
     private ClientException invalidParameter(String message) {
@@ -192,4 +171,9 @@ public class TenantActivityQueryServiceImpl implements TenantActivityQueryServic
 
     private record ActivityCursor(LocalDateTime occurredAt, Long id) {
     }
+
+    /** Base64 游标的 JSON 表示，字段顺序沿用已发放的游标。 */
+    public record CursorDTO(
+            /** 排序元组中的业务发生时间。 */ @JSONField(ordinal = 1) String occurredAt,
+            /** 时间相同的事件使用行 ID 排序。 */ @JSONField(ordinal = 2) Long id) { }
 }

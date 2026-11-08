@@ -5,7 +5,8 @@ import com.yonagi.verse.common.security.CurrentUser;
 import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.ExternalAuthRespDTO.*;
 import com.yonagi.verse.service.external.ExternalAuthService;
-import jakarta.servlet.http.*;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -16,6 +17,8 @@ import java.util.List;
 @RequestMapping("/api/v1/users/me/external-accounts")
 public class UserExternalAccountController {
     private final ExternalAuthService service;
+    private final ExternalAuthResponse authResponse;
+
     @GetMapping
     public Result<List<BindingInfo>> list(@CurrentUser Long user,HttpServletRequest request) { return Results.success(service.list(user,request)); }
     @PostMapping("/reauth")
@@ -23,8 +26,9 @@ public class UserExternalAccountController {
         return Results.success(service.reauth(user,input,request));
     }
     @PostMapping("/flows")
-    public Result<Start> start(@CurrentUser Long user,@Valid @RequestBody ExternalFlowStartReqDTO input,HttpServletRequest request,HttpServletResponse response) {
-        return Results.success(service.start(input,user,request,response));
+    public Result<Start> start(@CurrentUser Long user, @Valid @RequestBody ExternalFlowStartReqDTO input,
+                               HttpServletRequest request, HttpServletResponse response) {
+        return Results.success(service.start(input, user, request, authResponse.cookies(response)));
     }
     @PostMapping("/flows/{id}/confirm")
     public Result<BindingResult> confirm(@CurrentUser Long user,@PathVariable String id,HttpServletRequest request) {

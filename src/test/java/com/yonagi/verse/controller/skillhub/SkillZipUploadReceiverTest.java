@@ -79,7 +79,7 @@ class SkillZipUploadReceiverTest {
             assertEquals(202, response.getStatus());
             assertEquals("QUEUED", new ObjectMapper().readTree(response.getContentAsByteArray())
                     .path("data").path("status").textValue());
-            assertEquals("no-store", response.getHeader("Cache-Control"));
+            assertEquals("application/json;charset=UTF-8", response.getContentType());
         }
         org.mockito.ArgumentCaptor<byte[]> captured = org.mockito.ArgumentCaptor.forClass(byte[].class);
         verify(imports, org.mockito.Mockito.times(3)).upload(eq(1L), eq(50L), captured.capture());
