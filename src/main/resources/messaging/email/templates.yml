@@ -1,0 +1,11 @@
+# 文字邮件模板：仅替换 ${变量名}，不执行表达式；启动加载，修改后需重启。
+templates:
+  COST_RECONCILIATION:
+    subject: "【Verse】${tenantName}有模型用量待补账"
+    content: |-
+      管理员您好！
+
+      Verse 在恢复后的核对中发现，租户「${tenantName}」本批次有 ${pendingCount} 笔模型调用费用仍待核对。请打开自助补账页面并登录：
+      ${reconciliationUrl}
+
+      页面仅展示本次扫描的待补账和已处理记录。待补账期间，模型调用按已确认费用判断限额。

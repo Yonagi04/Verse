@@ -70,6 +70,8 @@ public class MessagingProperties {
     @Data public static class Email {
         /** disabled、aliyun 或 mailpit。 */
         private String provider = "disabled";
+        /** 独立文字模板文件，支持 classpath: 与 file:，修改后需重启。 */
+        private String templatesLocation = "classpath:messaging/email/templates.yml";
         /** 阿里云审核通过的发信地址，模拟环境使用开发地址。 */
         private String accountName;
         /** 发信显示名称，保持阿里云长度限制。 */

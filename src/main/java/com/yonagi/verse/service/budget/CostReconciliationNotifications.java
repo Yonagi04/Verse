@@ -7,6 +7,7 @@ import com.yonagi.verse.common.config.MessagingProperties;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.enums.MessageChannel;
 import com.yonagi.verse.common.messaging.MessageRequestValidation;
+import com.yonagi.verse.common.messaging.EmailTemplateRenderer;
 import com.yonagi.verse.common.util.AesUtil;
 import com.yonagi.verse.dao.entity.CostReconciliationBatchDO;
 import com.yonagi.verse.dao.mapper.CostReconciliationBatchMapper;
@@ -51,6 +52,7 @@ public class CostReconciliationNotifications implements MessageSendEligibility {
     private final SendRecordStore records;
     private final SmsSendService sms;
     private final EmailSendService email;
+    private final EmailTemplateRenderer emailTemplates;
     private final AesUtil aes;
     private final MessagingProperties messaging;
     private final BudgetPeriodResolver time;
@@ -66,7 +68,8 @@ public class CostReconciliationNotifications implements MessageSendEligibility {
     public CostReconciliationNotifications(CostReconciliationBatchMapper batches, CostReconciliationCaseMapper cases,
                                            LlmCostAlertDeliveryMapper recipients, LlmCostBudgetMapper roles, UserMapper users,
                                            TenantAccessPolicy tenants, ReliableDomainEventPublisher events, SendRecordStore records,
-                                           SmsSendService sms, EmailSendService email, AesUtil aes, MessagingProperties messaging,
+                                           SmsSendService sms, EmailSendService email, EmailTemplateRenderer emailTemplates,
+                                           AesUtil aes, MessagingProperties messaging,
                                            BudgetPeriodResolver time, PlatformTransactionManager manager) {
         this.batches = batches;
         this.cases = cases;
@@ -78,6 +81,7 @@ public class CostReconciliationNotifications implements MessageSendEligibility {
         this.records = records;
         this.sms = sms;
         this.email = email;
+        this.emailTemplates = emailTemplates;
         this.aes = aes;
         this.messaging = messaging;
         this.time = time;
@@ -204,12 +208,11 @@ public class CostReconciliationNotifications implements MessageSendEligibility {
                 return;
             }
             String name = plan.tenantName().replaceAll("[\\r\\n]", " ");
-            String body = "管理员您好！\n\nVerse 在恢复后的核对中发现，租户「" + name + "」本批次有 "
-                    + plan.pending() + " 笔模型调用费用仍待核对。请打开自助补账页面并登录：\n"
-                    + link(batch.getCode()) + "\n\n页面仅展示本次扫描的待补账和已处理记录。"
-                    + "待补账期间，模型调用按已确认费用判断限额。";
+            EmailTemplateRenderer.RenderedEmail rendered = emailTemplates.render(SCENE,
+                    Map.of("tenantName", name, "pendingCount", String.valueOf(plan.pending()),
+                            "reconciliationUrl", link(batch.getCode())));
             email.send(new EmailSendReqDTO(group.requestId(), SCENE, userId, batch.getTenantId(), address,
-                    "【Verse】" + name + "有模型用量待补账", body, null));
+                    rendered.subject(), rendered.content(), null));
         }
     }
 
@@ -257,7 +260,7 @@ public class CostReconciliationNotifications implements MessageSendEligibility {
                 .filter(row -> row.requestId().equals(requestId) && row.channel() == attempt.channel()
                         && Objects.equals(row.hash(), attempt.recipientHash())).findFirst().orElse(null);
         if (group == null || !stillEligible(batch, group) || cases.lockPending(batchId) == null
-                || !records.lockAttempt(SCENE, requestId, group.userIds().getFirst(), attempt)) {
+                || !records.lockAttempt(SCENE, requestId, group.userIds().getFirst(), batch.getTenantId(), attempt)) {
             return MessageSubmissionRespDTO.rejected("RECONCILIATION_NOTICE_STALE");
         }
         return null;

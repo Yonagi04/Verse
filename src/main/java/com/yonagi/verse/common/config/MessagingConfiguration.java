@@ -4,6 +4,7 @@ import com.yonagi.verse.common.enums.MessagingErrorCode;
 import com.yonagi.verse.common.convention.exception.MessageSendException;
 import com.yonagi.verse.common.messaging.MessageRequestValidation;
 import com.yonagi.verse.common.messaging.SmsTemplateRenderer;
+import com.yonagi.verse.common.messaging.EmailTemplateRenderer;
 import com.yonagi.verse.dto.req.SmsSendReqDTO;
 import com.yonagi.verse.dto.req.EmailSendReqDTO;
 import com.yonagi.verse.dto.resp.MessageSubmissionRespDTO;
@@ -29,6 +30,15 @@ import java.util.Arrays;
 @Configuration(proxyBeanMethods = false)
 @EnableConfigurationProperties(MessagingProperties.class)
 public class MessagingConfiguration {
+    /** 邮件模板独立于 Provider，开发和生产使用同一文字内容。 */
+    @Bean
+    public EmailTemplateRenderer emailTemplateRenderer(MessagingProperties properties, ResourceLoader resources) {
+        String location = properties.getEmail().getTemplatesLocation();
+        check(location != null && (location.startsWith("classpath:") || location.startsWith("file:")),
+                "Invalid email template location");
+        return new EmailTemplateRenderer(resources.getResource(location));
+    }
+
     @Bean public SmsProvider smsProvider(MessagingProperties p, Environment environment, ResourceLoader resources) throws Exception {
         p.validateCommon();
         productionProvider(environment, p.getSms().getProvider(), "sms-dev");

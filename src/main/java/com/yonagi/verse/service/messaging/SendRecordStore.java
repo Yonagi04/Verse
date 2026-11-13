@@ -206,12 +206,23 @@ public class SendRecordStore {
 
     /** 参与领域许可事务；消息锁在用户、配置和个人任务锁之后取得。 */
     @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
-    public boolean lockAttempt(String scene,String requestId,Long userId,SendAttemptContext attempt) {
-        if (!MessageSendAttemptPolicy.hasRecordIdentity(attempt)) return false;
-        MessageSendRecordDO row=attempt.channel()==MessageChannel.SMS
-                ? sms.selectOne(Wrappers.lambdaQuery(SmsSendRecordDO.class).eq(MessageSendRecordDO::getId,attempt.sendRecordId()).last("FOR UPDATE"))
-                : emails.selectOne(Wrappers.lambdaQuery(EmailSendRecordDO.class).eq(MessageSendRecordDO::getId,attempt.sendRecordId()).last("FOR UPDATE"));
-        return MessageSendAttemptPolicy.matches(row,scene,requestId,userId,attempt,new Date());
+    public boolean lockAttempt(String scene, String requestId, Long userId, SendAttemptContext attempt) {
+        return lockAttempt(scene, requestId, userId, null, attempt);
+    }
+
+    /** 租户通知必须匹配业务提供的租户，不能放宽个人通知的空租户约束。 */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public boolean lockAttempt(String scene, String requestId, Long userId, Long expectedTenantId,
+                               SendAttemptContext attempt) {
+        if (!MessageSendAttemptPolicy.hasRecordIdentity(attempt)) {
+            return false;
+        }
+        MessageSendRecordDO row = attempt.channel() == MessageChannel.SMS
+                ? sms.selectOne(Wrappers.lambdaQuery(SmsSendRecordDO.class)
+                        .eq(MessageSendRecordDO::getId, attempt.sendRecordId()).last("FOR UPDATE"))
+                : emails.selectOne(Wrappers.lambdaQuery(EmailSendRecordDO.class)
+                        .eq(MessageSendRecordDO::getId, attempt.sendRecordId()).last("FOR UPDATE"));
+        return MessageSendAttemptPolicy.matches(row, scene, requestId, userId, expectedTenantId, attempt, new Date());
     }
     /** 保留 SUBMITTING 的处理中语义，业务镜像不能提前终结 UNKNOWN。 */
     public Optional<SubmissionSnapshot> findSubmission(MessageChannel channel,String requestId) {

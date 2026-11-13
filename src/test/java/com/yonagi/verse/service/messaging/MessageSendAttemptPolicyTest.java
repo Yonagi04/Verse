@@ -42,6 +42,22 @@ class MessageSendAttemptPolicyTest {
         assertFalse(MessageSendAttemptPolicy.hasRecordIdentity(new SendAttemptContext(MessageChannel.SMS,null,"token",2,"hash")));
     }
 
+    @Test
+    void reconciliationRequiresTheExactTenantForBothChannels() {
+        for (MessageChannel channel : MessageChannel.values()) {
+            SendAttemptContext attempt = new SendAttemptContext(channel, 8L, "token", 2, "hash");
+            MessageSendRecordDO row = current(channel);
+            row.setScene("COST_RECONCILIATION");
+            row.setTenantId(7L);
+            assertTrue(MessageSendAttemptPolicy.matches(row, "COST_RECONCILIATION", "r", 1L, 7L, attempt, now));
+            assertFalse(MessageSendAttemptPolicy.matches(row, "COST_RECONCILIATION", "r", 1L, 9L, attempt, now));
+            assertFalse(MessageSendAttemptPolicy.matches(row, "COST_RECONCILIATION", "r", 1L, null, attempt, now));
+            assertFalse(MessageSendAttemptPolicy.matches(row, "COST_RECONCILIATION", "r", 1L, attempt, now));
+            row.setTenantId(null);
+            assertFalse(MessageSendAttemptPolicy.matches(row, "COST_RECONCILIATION", "r", 1L, 7L, attempt, now));
+        }
+    }
+
     private MessageSendRecordDO current(MessageChannel channel) {
         MessageSendRecordDO row=channel==MessageChannel.SMS ? new SmsSendRecordDO() : new EmailSendRecordDO();
         row.setId(8L); row.setScene(scene); row.setRequestId("r"); row.setUserId(1L); row.setStatus("SUBMITTING"); row.setExecutionToken("token");
