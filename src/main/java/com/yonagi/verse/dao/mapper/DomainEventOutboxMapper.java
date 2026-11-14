@@ -8,6 +8,38 @@ import java.util.List;
 
 /** 通用可靠领域事件 Outbox Mapper。 */
 public interface DomainEventOutboxMapper extends BaseMapper<DomainEventOutboxDO> {
+    String COLUMNS = "id,event_id,tenant_id,event_type,message_key,payload_json,status,attempt_count,"
+            + "next_retry_at,claim_owner,claim_expires_at,last_error,published_at,reconciled_at,create_time,"
+            + "update_time,destination,delay_level,retry_until,payload_hash";
+
+    @Insert("""
+            INSERT INTO t_domain_event_outbox(event_id,tenant_id,event_type,message_key,payload_json,status,
+              attempt_count,next_retry_at,create_time,update_time,destination,delay_level,retry_until,payload_hash)
+            VALUES(#{eventId},#{tenantId},#{eventType},#{messageKey},#{payloadJson},#{status},#{attemptCount},
+              #{nextRetryAt},#{createTime},#{updateTime},#{destination},#{delayLevel},#{retryUntil},#{payloadHash})
+            ON DUPLICATE KEY UPDATE id=id
+            """)
+    int insertOnce(DomainEventOutboxDO row);
+
+    @Select("SELECT " + COLUMNS + " FROM t_domain_event_outbox WHERE event_id=#{eventId}")
+    DomainEventOutboxDO byEvent(@Param("eventId") String eventId);
+
+    @Select("SELECT " + COLUMNS + " FROM t_domain_event_outbox WHERE id=#{id} FOR UPDATE")
+    DomainEventOutboxDO lock(@Param("id") Long id);
+
+    @Select("SELECT " + COLUMNS + " FROM t_domain_event_outbox WHERE event_type=#{type} AND "
+            + "((status IN ('PENDING','RETRY') AND next_retry_at<=#{now}) "
+            + "OR (status='CLAIMED' AND claim_expires_at<=#{now})) "
+            + "ORDER BY next_retry_at,id LIMIT 1 FOR UPDATE SKIP LOCKED")
+    List<DomainEventOutboxDO> lockReconciliation(@Param("type") String type, @Param("now") LocalDateTime now);
+
+    @Select("SELECT EXISTS(SELECT 1 FROM t_domain_event_outbox WHERE id=#{id} AND status='CLAIMED' "
+            + "AND claim_owner=#{owner} AND claim_expires_at>#{now})")
+    boolean owns(@Param("id") Long id, @Param("owner") String owner, @Param("now") LocalDateTime now);
+
+    @Update("UPDATE t_domain_event_outbox SET reconciled_at=COALESCE(reconciled_at,#{now}),update_time=#{now} "
+            + "WHERE event_id=#{eventId} AND event_type IN ('COST_RECONCILIATION_TASK','COST_RECONCILIATION_CONTROL')")
+    int reconcileReconciliation(@Param("eventId") String eventId, @Param("now") LocalDateTime now);
     @Select("SELECT COUNT(*) FROM t_domain_event_outbox WHERE event_id=#{eventId}")
     int countEvent(@Param("eventId") String eventId);
 
@@ -21,8 +53,11 @@ public interface DomainEventOutboxMapper extends BaseMapper<DomainEventOutboxDO>
             + "WHERE event_id=#{eventId} AND event_type='COST_RECONCILIATION'")
     int reconcileCostReconciliation(@Param("eventId") String eventId, @Param("now") LocalDateTime now);
     @Select("""
-            SELECT * FROM t_domain_event_outbox
-            WHERE ((status IN ('PENDING','RETRY') AND next_retry_at <= #{now})
+            SELECT
+            """ + COLUMNS + """
+             FROM t_domain_event_outbox
+            WHERE event_type NOT IN ('COST_RECONCILIATION_TASK','COST_RECONCILIATION_CONTROL')
+              AND ((status IN ('PENDING','RETRY') AND next_retry_at <= #{now})
                 OR (status='CLAIMED' AND claim_expires_at <= #{now}))
             ORDER BY next_retry_at,id LIMIT #{limit} FOR UPDATE SKIP LOCKED
             """)
@@ -59,7 +94,9 @@ public interface DomainEventOutboxMapper extends BaseMapper<DomainEventOutboxDO>
             """)
     int reconcilePublished(@Param("now") LocalDateTime now);
 
-    @Delete("DELETE FROM t_domain_event_outbox WHERE status='PUBLISHED' AND reconciled_at IS NOT NULL AND reconciled_at < #{cutoff}")
+    @Delete("DELETE FROM t_domain_event_outbox WHERE status='PUBLISHED' AND reconciled_at IS NOT NULL "
+            + "AND reconciled_at < #{cutoff} "
+            + "AND event_type NOT IN ('COST_RECONCILIATION_TASK','COST_RECONCILIATION_CONTROL')")
     int deleteReconciledBefore(@Param("cutoff") LocalDateTime cutoff);
 
     @Update("""
@@ -72,6 +109,7 @@ public interface DomainEventOutboxMapper extends BaseMapper<DomainEventOutboxDO>
             UPDATE t_domain_event_outbox SET status='RETRY',attempt_count=0,next_retry_at=#{now},claim_owner=NULL,
             claim_expires_at=NULL,last_error=NULL,update_time=#{now}
             WHERE event_id=#{eventId} AND tenant_id=#{tenantId} AND status IN ('FAILED','PUBLISHED')
+              AND event_type NOT IN ('COST_RECONCILIATION_TASK','COST_RECONCILIATION_CONTROL')
               AND NOT EXISTS (SELECT 1 FROM t_tenant_activity_log a WHERE a.event_id=#{eventId})
             """)
     int resetForReplay(@Param("tenantId") Long tenantId, @Param("eventId") String eventId, @Param("now") LocalDateTime now);

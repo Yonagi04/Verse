@@ -1,9 +1,5 @@
 package com.yonagi.verse.service.budget;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.yonagi.verse.dao.entity.CostBudgetInvocationDO;
-import com.yonagi.verse.dao.entity.CostReconciliationWorkDO;
-import com.yonagi.verse.dao.mapper.CostBudgetInvocationMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,103 +10,81 @@ import org.springframework.core.task.TaskRejectedException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.List;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
-/** 启动仅唤醒有界 worker，HTTP 就绪不等待数据库扫描或通知。 */
+/** 只有启动与北京时间每天 08:00 可发现新候选，调度线程不等待数据库。 */
 @Slf4j
 @Component
 public class CostReconciliationJob {
-    private static final int MAX_BATCHES_PER_WAKE = 5;
     private final TaskExecutor executor;
     private final CostReconciliationTracking tracking;
-    private final CostReconciliationScanCoordinator coordinator;
-    private final CostReconciliationDiscovery discovery;
-    private final CostBudgetInvocationMapper invocations;
-    private final BudgetExecutionRegistry registry;
-    private final CostReconciliationNotifications notifications;
-    private final AtomicBoolean running = new AtomicBoolean();
+    private final CostReconciliationProducer producer;
+    private final CostReconciliationControlService controls;
+    private final AtomicBoolean bootRunning = new AtomicBoolean();
+    private final AtomicBoolean dailyRunning = new AtomicBoolean();
+    private final String bootId = UUID.randomUUID().toString();
     private volatile boolean ready;
     @Value("${verse.llm.cost-reconciliation.processing-enabled:true}")
     private boolean processingEnabled;
 
     public CostReconciliationJob(@Qualifier("costReconciliationExecutor") TaskExecutor executor,
-                                 CostReconciliationTracking tracking, CostReconciliationScanCoordinator coordinator,
-                                 CostReconciliationDiscovery discovery, CostBudgetInvocationMapper invocations,
-                                 BudgetExecutionRegistry registry, CostReconciliationNotifications notifications) {
+                                 CostReconciliationTracking tracking, CostReconciliationProducer producer,
+                                 CostReconciliationControlService controls) {
         this.executor = executor;
         this.tracking = tracking;
-        this.coordinator = coordinator;
-        this.discovery = discovery;
-        this.invocations = invocations;
-        this.registry = registry;
-        this.notifications = notifications;
+        this.producer = producer;
+        this.controls = controls;
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void applicationReady() {
         ready = true;
-        wake();
+        submit("BOOT:" + bootId, false);
     }
 
-    @Scheduled(fixedDelayString = "${verse.llm.cost-reconciliation.recovery-delay-ms:10000}")
-    public void wake() {
-        if (!ready || !running.compareAndSet(false, true)) {
+    @Scheduled(cron = "0 0 8 * * *", zone = "Asia/Shanghai", scheduler = "costReconciliationTaskScheduler")
+    public void daily() {
+        submit("DAILY:" + LocalDate.now(ZoneId.of("Asia/Shanghai")), true);
+    }
+
+    private void submit(String trigger, boolean daily) {
+        log.info("[reconciliation] 扫描触发 trigger={} source={}", trigger, daily ? "DAILY" : "BOOT");
+        AtomicBoolean running = daily ? dailyRunning : bootRunning;
+        if (!ready) {
+            log.info("[reconciliation] 扫描跳过 trigger={} reason=APPLICATION_NOT_READY", trigger);
+            return;
+        }
+        if (!processingEnabled) {
+            log.info("[reconciliation] 扫描跳过 trigger={} reason=PROCESSING_DISABLED", trigger);
+            return;
+        }
+        if (!running.compareAndSet(false, true)) {
+            log.info("[reconciliation] 扫描跳过 trigger={} reason=ALREADY_RUNNING", trigger);
             return;
         }
         try {
-            executor.execute(this::run);
+            executor.execute(() -> run(trigger, daily, running));
         } catch (TaskRejectedException busy) {
             running.set(false);
-            log.debug("[reconciliation] worker 暂不可用，等待下次唤醒");
+            log.warn("[reconciliation] 发现资源占满 trigger={}", trigger);
         }
     }
 
-    private void run() {
+    private void run(String trigger, boolean daily, AtomicBoolean running) {
         try {
-            if (!processingEnabled || !tracking.enabled()) {
-                return;
+            if (tracking.enabled()) {
+                controls.recoverAtLegalTrigger();
+                producer.discover(trigger, daily);
+            } else {
+                log.info("[reconciliation] 扫描跳过 trigger={} reason=CAPTURE_DISABLED", trigger);
             }
-            for (int index = 0; index < MAX_BATCHES_PER_WAKE; index++) {
-                var claims = coordinator.claim();
-                if (claims.isEmpty()) {
-                    break;
-                }
-                recoverBatch(claims);
-            }
-            for (var task : coordinator.expiredAutomatic()) {
-                try {
-                    discovery.expireAutomatic(task);
-                } catch (RuntimeException failure) {
-                    log.warn("[reconciliation] 自动任务超时转交待重试 requestId={}", task.getRequestId(), failure);
-                }
-            }
-            notifications.stageReadyBatches();
         } catch (RuntimeException failure) {
-            log.error("[reconciliation] 恢复轮次失败", failure);
+            log.error("[reconciliation] 合法发现触发失败 trigger={}", trigger, failure);
         } finally {
             running.set(false);
-        }
-    }
-
-    private void recoverBatch(List<CostReconciliationWorkDO> claims) {
-        var observed = invocations.selectList(Wrappers.lambdaQuery(CostBudgetInvocationDO.class)
-                .in(CostBudgetInvocationDO::getRequestId, claims.stream().map(CostReconciliationWorkDO::getRequestId).toList()));
-        var indexed = observed.stream().collect(Collectors.toMap(CostBudgetInvocationDO::getRequestId, Function.identity()));
-        var active = registry.confirmed(observed.stream().filter(row -> "RUNNING".equals(row.getState())).toList());
-        for (var claim : claims) {
-            recover(claim, indexed.get(claim.getRequestId()), active.contains(claim.getRequestId()));
-        }
-    }
-
-    private void recover(CostReconciliationWorkDO claim, CostBudgetInvocationDO invocation, boolean active) {
-        try {
-            discovery.classify(claim, invocation, active);
-        } catch (RuntimeException failure) {
-            log.warn("[reconciliation] 分类或结算待重试 requestId={}", claim.getRequestId(), failure);
-            coordinator.deferClassificationFailure(claim);
         }
     }
 }

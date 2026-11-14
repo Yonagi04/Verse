@@ -4,4 +4,7 @@ package com.yonagi.verse.async.api;
 public interface ReliableDomainEventPublisher {
     /** 在当前业务事务内暂存事件。 */
     void publish(DomainEvent event, Long tenantId);
+
+    /** 稳定身份下比较规范载荷；异载荷重复为冲突。 */
+    void enqueueOnce(DomainEvent event, Long tenantId, DomainEventDelivery delivery);
 }

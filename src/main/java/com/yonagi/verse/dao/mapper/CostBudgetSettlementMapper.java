@@ -10,6 +10,12 @@ import java.util.List;
 
 @Mapper
 public interface CostBudgetSettlementMapper extends BaseMapper<CostBudgetSettlementDO> {
+    /** 与既有epochMilli身份契约一致；只截断比较值，保留事实原精度；不可比较的历史日期明确拒绝。 */
+    String SAME_REQUEST_START_MILLISECOND = """
+            (TIMESTAMPADD(MICROSECOND,-MOD(MICROSECOND(i.request_started_at),1000),i.request_started_at)
+            = TIMESTAMPADD(MICROSECOND,-MOD(MICROSECOND(s.request_started_at),1000),s.request_started_at)) IS TRUE
+            """;
+
     /**
      * 在原调用的半开时间范围内读取最多 500 条有效费用事实。Key、模型及翻页游标可空。
      * 未应用的原始事实保留原标记。需要跨页保持一致时，调用方须在同一快照或预算锁内读取。
@@ -49,6 +55,53 @@ public interface CostBudgetSettlementMapper extends BaseMapper<CostBudgetSettlem
             @Param("start") LocalDateTime start, @Param("end") LocalDateTime end);
     @Select("SELECT * FROM t_cost_budget_settlement WHERE budget_applied=0 ORDER BY id LIMIT 100")
     List<CostBudgetSettlementDO> pending();
+
+    @Select("""
+            SELECT s.id,s.event_id,s.payload_hash,s.tenant_id,s.user_id,s.api_key_id,s.service_id,s.source,s.operation,
+                   s.request_id,s.request_started_at,s.cost_status,s.estimated_cost_fen,s.currency,s.event_payload_json,
+                   s.budget_applied,s.origin,s.create_time,s.applied_at
+            FROM t_cost_budget_settlement s
+            LEFT JOIN t_cost_budget_invocation i ON i.event_id=s.event_id
+            WHERE s.budget_applied=0 AND (i.id IS NULL OR i.reconciliation_generation=0)
+            ORDER BY s.id LIMIT 100
+            """)
+    List<CostBudgetSettlementDO> legacyPending();
+
+    /** 原身份和正代次决定准入费用；CASE 尚无更正时仍须计入。 */
+    @Select("""
+            SELECT s.id,s.event_id,s.tenant_id,s.user_id,s.api_key_id,s.service_id,s.source,s.operation,
+                   s.request_id,s.request_started_at,s.cost_status,s.estimated_cost_fen,s.budget_applied
+            FROM t_cost_budget_settlement s
+            JOIN t_cost_budget_invocation i ON i.event_id=s.event_id AND i.request_id=s.request_id
+              AND i.tenant_id=s.tenant_id AND i.original_user_id=s.user_id
+              AND i.api_key_id <=> s.api_key_id AND i.source=s.source AND
+            """ + SAME_REQUEST_START_MILLISECOND + """
+             WHERE s.tenant_id=#{tenantId} AND s.budget_applied=0 AND s.cost_status='CALCULATED'
+              AND s.request_started_at>=#{from} AND s.request_started_at<#{until}
+              AND i.reconciliation_generation>0
+              AND NOT EXISTS(SELECT 1 FROM t_cost_reconciliation_case c
+                JOIN t_cost_reconciliation_adjustment a ON a.case_id=c.id
+                WHERE c.tenant_id=s.tenant_id AND c.request_id=s.request_id)
+            ORDER BY s.request_started_at,s.id LIMIT 1001
+            """)
+    List<CostBudgetSettlementDO> pendingConfirmed(@Param("tenantId") Long tenantId,
+            @Param("from") LocalDateTime from, @Param("until") LocalDateTime until);
+
+    @Select("""
+            SELECT EXISTS(SELECT 1 FROM t_cost_budget_settlement s
+              LEFT JOIN t_cost_budget_invocation i ON i.event_id=s.event_id
+              WHERE s.tenant_id=#{tenantId} AND s.budget_applied=0 AND s.cost_status='CALCULATED'
+                AND s.request_started_at>=#{from} AND s.request_started_at<#{until}
+                AND (i.id IS NULL OR (i.reconciliation_generation>0 AND
+                    (i.original_user_id IS NULL OR NOT (i.original_user_id <=> s.user_id)
+                     OR i.tenant_id<>s.tenant_id OR i.request_id<>s.request_id
+                     OR NOT (i.api_key_id <=> s.api_key_id) OR i.source<>s.source
+                     OR NOT (
+            """ + SAME_REQUEST_START_MILLISECOND + """
+            )))))
+            """)
+    boolean hasInvalidPendingConfirmed(@Param("tenantId") Long tenantId,
+            @Param("from") LocalDateTime from, @Param("until") LocalDateTime until);
     @Select("SELECT * FROM t_cost_budget_settlement WHERE tenant_id=#{tenantId} AND api_key_id=#{keyId} "
             + "AND request_started_at >= #{start} ORDER BY id")
     List<CostBudgetSettlementDO> history(@Param("tenantId") Long tenantId, @Param("keyId") Long keyId,

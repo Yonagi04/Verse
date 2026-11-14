@@ -226,10 +226,10 @@ public class CostBudgetService {
                 row.setUpdateTime(time.local(time.now())); row.setLastHeartbeatAt(row.getUpdateTime()); row.setLeaseUntil(row.getUpdateTime().plusSeconds(30));
                 try {
                     if (invocations.lockRequest(requestId) != null) throw new CostBudgetUnavailableException();
-                    invocations.insert(row); llmBudgets.register(ctx.getCurrentTenantId(), requestId, serviceId);
                     if (reconciliation != null) {
                         reconciliation.register(row, ctx.getUserId());
                     }
+                    invocations.insert(row); llmBudgets.register(ctx.getCurrentTenantId(), requestId, serviceId);
                 }
                 catch (RuntimeException storageFailure) {
                     if (storageFailure instanceof CostBudgetUnavailableException) throw storageFailure;
@@ -354,10 +354,10 @@ public class CostBudgetService {
                         && "OWNER_UNCONFIRMED".equals(row.getLastErrorCode()) && row.getFailureCode() == null)) return false;
                 if (settlements.lockRequest(row.getTenantId(), requestId) != null) return false;
                 row.setState("NO_UPSTREAM"); copyFailure(row);
-                row.setUpdateTime(time.local(time.now())); invocations.updateById(row);
                 if (reconciliation != null) {
                     reconciliation.abandoned(row);
                 }
+                row.setUpdateTime(time.local(time.now())); invocations.updateById(row);
                 return true;
             });
             if (cleaned) { registry.remove(requestId); untrackedRequests.remove(requestId); }
@@ -524,10 +524,11 @@ public class CostBudgetService {
         row.setCreateTime(time.local(time.now())); settlements.insert(row);
         if (invocation != null) {
             copyFailure(invocation);
-            invocation.setState("FINALIZING"); invocation.setUpdateTime(row.getCreateTime()); invocations.updateById(invocation);
+            invocation.setState("FINALIZING"); invocation.setUpdateTime(row.getCreateTime());
             if (reconciliation != null) {
                 reconciliation.staged(invocation, event);
             }
+            invocations.updateById(invocation);
         }
         return row.getEventId();
     }
@@ -583,10 +584,12 @@ public class CostBudgetService {
                 invocation.setState(unknownExecution ? "UNKNOWN" : "SETTLED");
                 if (unknownExecution && invocation.getLastErrorCode() == null) invocation.setLastErrorCode("UPSTREAM_RESULT_UNKNOWN");
                 copyFailure(invocation);
+                if (reconciliation != null) {
+                    reconciliation.applied(invocation, CostStatus.valueOf(row.getCostStatus()));
+                }
                 invocation.setUpdateTime(time.local(time.now())); invocations.updateById(invocation);
             }
             if (reconciliation != null) {
-                reconciliation.applied(invocation, CostStatus.valueOf(row.getCostStatus()));
                 if (alreadyCorrected) {
                     reconciliation.reviewLateConflict(invocation, row);
                 } else {

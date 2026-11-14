@@ -22,14 +22,11 @@ public class CostBudgetRecoveryJob {
         try {
             service.retryUnsentCleanup();
             service.retryLocalSnapshots();
-            if (reconciliation.enabled()) {
-                return;
-            }
-            for (var row : settlements.pending()) {
+            for (var row : reconciliation.enabled() ? settlements.legacyPending() : settlements.pending()) {
                 try { service.apply(row.getEventId()); }
                 catch (RuntimeException e) { log.error("[cost-budget] 补偿失败: eventId={}", row.getEventId(), e); }
             }
-            for (var row : invocations.recoverable()) {
+            for (var row : reconciliation.enabled() ? invocations.legacyRecoverable() : invocations.recoverable()) {
                 try { service.recoverInvocation(row); }
                 catch (RuntimeException e) { log.warn("[cost-budget] 执行确认失败: requestId={}", row.getRequestId(), e); }
             }

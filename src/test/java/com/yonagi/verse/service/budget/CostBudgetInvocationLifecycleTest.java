@@ -59,6 +59,29 @@ class CostBudgetInvocationLifecycleTest {
 
     private void begin(BudgetInvocationMode mode) { service.begin(actor,10L,"request",now.minusSeconds(600),mode); }
 
+    @Test
+    void normalSnapshotMergesOriginalIdentityAndDispositionIntoExistingInvocationWrites() {
+        var scans=mock(CostReconciliationScanMapper.class);when(scans.activationGeneration()).thenReturn(1L);
+        var tracking=new CostReconciliationTracking(scans,mock(CostReconciliationAttemptMapper.class),
+                mock(CostReconciliationCaseMapper.class),mock(CostReconciliationAdjustmentMapper.class),invocations,
+                mock(com.yonagi.verse.service.pricing.PricingResolver.class),
+                new ReconciliationEvidence(new com.yonagi.verse.service.pricing.CostCalculator()),
+                new BudgetPeriodResolver(clock),mock(com.yonagi.verse.async.api.ReliableDomainEventPublisher.class),
+                mock(CostReconciliationSignals.class));
+        service.setReconciliationTracking(tracking);actor.setUserId(1L);
+        begin(BudgetInvocationMode.SYNC);
+        assertEquals(1L,row.getOriginalUserId());assertEquals("TRACKING",row.getReconciliationDisposition());
+        var saved=new java.util.concurrent.atomic.AtomicReference<CostBudgetSettlementDO>();
+        when(settlements.insert(any(CostBudgetSettlementDO.class))).thenAnswer(call->{saved.set(call.getArgument(0));return 1;});
+        when(settlements.lockEvent(anyString())).thenAnswer(call->saved.get());
+        when(settlements.selectOne(any())).thenAnswer(call->saved.get());
+        var terminal=event();terminal.setRequestStartedAt(row.getRequestStartedAt().atZone(BudgetPeriodResolver.ZONE).toInstant());
+        service.settle(terminal);
+        assertTrue(saved.get().getBudgetApplied());assertEquals("UNKNOWN",row.getState());
+        assertEquals("TRACKING",row.getReconciliationDisposition());assertEquals(1L,row.getOriginalUserId());
+        verify(invocations,times(2)).updateById(row);
+    }
+
     @Test void budgetRefusalHasNoFeesAndPersistsOriginalFailureWithNoUpstream() {
         begin(BudgetInvocationMode.SYNC); var attempt=service.attempt("request");
         when(models.decision(model)).thenReturn(new CostBudgetDecision(List.of(),true));

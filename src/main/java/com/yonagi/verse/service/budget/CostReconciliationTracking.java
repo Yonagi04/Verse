@@ -12,13 +12,11 @@ import com.yonagi.verse.dao.entity.CostBudgetSettlementDO;
 import com.yonagi.verse.dao.entity.CostReconciliationAttemptDO;
 import com.yonagi.verse.dao.entity.CostReconciliationAdjustmentDO;
 import com.yonagi.verse.dao.entity.CostReconciliationCaseDO;
-import com.yonagi.verse.dao.entity.CostReconciliationWorkDO;
 import com.yonagi.verse.dao.mapper.CostBudgetInvocationMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationAdjustmentMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationAttemptMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationCaseMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationScanMapper;
-import com.yonagi.verse.dao.mapper.CostReconciliationWorkMapper;
 import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
 import com.yonagi.verse.service.pricing.CostResult;
 import com.yonagi.verse.service.pricing.PricingResolver;
@@ -35,7 +33,6 @@ import java.util.Objects;
 @RequiredArgsConstructor
 public class CostReconciliationTracking {
     private final CostReconciliationScanMapper scans;
-    private final CostReconciliationWorkMapper work;
     private final CostReconciliationAttemptMapper attempts;
     private final CostReconciliationCaseMapper cases;
     private final CostReconciliationAdjustmentMapper adjustments;
@@ -44,6 +41,7 @@ public class CostReconciliationTracking {
     private final ReconciliationEvidence evidence;
     private final BudgetPeriodResolver time;
     private final ReliableDomainEventPublisher events;
+    private final CostReconciliationSignals signals;
 
     @Value("${verse.llm.cost-reconciliation.capture-enabled:false}")
     private boolean captureEnabled;
@@ -67,17 +65,9 @@ public class CostReconciliationTracking {
 
     void register(CostBudgetInvocationDO invocation, Long userId) {
         long generation = generation();
-        if (!captureEnabled && generation == 0) {
-            return;
-        }
-        var row = new CostReconciliationWorkDO();
-        row.setRequestId(invocation.getRequestId());
-        row.setTenantId(invocation.getTenantId());
-        row.setUserId(Objects.requireNonNull(userId, "invocation user"));
-        row.setGeneration(generation);
-        row.setNextActionAt(invocation.getLeaseUntil());
-        row.setRequestStartedAt(invocation.getRequestStartedAt());
-        work.insert(row);
+        invocation.setOriginalUserId(Objects.requireNonNull(userId, "invocation user"));
+        invocation.setReconciliationGeneration(generation);
+        invocation.setReconciliationDisposition(generation > 0 || captureEnabled ? "TRACKING" : "CLEAR");
     }
 
     /** 在供应商传输之前提交。原调用锁与恢复撤销发送资格使用同一行。 */
@@ -98,8 +88,7 @@ public class CostReconciliationTracking {
         if (invocation == null || !Objects.equals(observed.getEventId(), invocation.getEventId())) {
             throw new CostBudgetUnavailableException();
         }
-        var task = work.lockRequest(requestId);
-        if (!Objects.equals(tenantId, invocation.getTenantId()) || !"RUNNING".equals(invocation.getState()) || task == null) {
+        if (!Objects.equals(tenantId, invocation.getTenantId()) || !"RUNNING".equals(invocation.getState()) || invocation.getOriginalUserId() == null) {
             throw new CostBudgetUnavailableException();
         }
         var previous = attempts.latest(requestId);
@@ -175,22 +164,8 @@ public class CostReconciliationTracking {
     void queueLateAutomatic(CostBudgetInvocationDO invocation, CostReconciliationCaseDO row) {
         row.setState("AUTO");
         row.setVersion(Math.addExact(row.getVersion(), 1));
+        row.setAutomaticDeadlineAt(time.local(time.now()).plusMinutes(5));
         cases.updateById(row);
-        var deadline = time.local(time.now()).plusMinutes(5);
-        var task = work.lockRequest(row.getRequestId());
-        if (task == null) {
-            task = new CostReconciliationWorkDO();
-            task.setRequestId(row.getRequestId());
-            task.setTenantId(row.getTenantId());
-            task.setUserId(row.getUserId());
-            task.setGeneration(generation());
-            task.setRequestStartedAt(invocation.getRequestStartedAt());
-            task.setAutoQueued(true);
-            task.setNextActionAt(deadline);
-            work.insert(task);
-        } else if (work.queueAutomatic(task.getId(), task.getClaimVersion(), deadline) != 1) {
-            throw new IllegalStateException("reconciliation work changed before late evidence enqueue");
-        }
         var event = new CostReconciliationEvent();
         event.setEventId("cost-reconciliation-late-" + row.getId() + "-" + row.getVersion());
         event.setKey(String.valueOf(row.getTenantId()));
@@ -213,12 +188,15 @@ public class CostReconciliationTracking {
         if (invocation == null || !captures()) {
             return;
         }
-        var task = work.lockRequest(invocation.getRequestId());
-        var trackedCase = task == null ? findCase(invocation) : null;
-        if (task == null && trackedCase == null) {
-            return;
+        var trackedCase = findCase(invocation);
+        if (invocation.getOriginalUserId() == null) {
+            if (trackedCase == null && (invocation.getReconciliationGeneration() == null
+                    || invocation.getReconciliationGeneration() == 0)) {
+                return;
+            }
+            throw new CostBudgetSnapshot.ConflictException();
         }
-        Long originalUser = task == null ? trackedCase.getUserId() : task.getUserId();
+        Long originalUser = invocation.getOriginalUserId();
         if (!Objects.equals(invocation.getTenantId(), event.getTenantId())
                 || !Objects.equals(invocation.getApiKeyId(), event.getApiKeyId())
                 || !Objects.equals(invocation.getSource(), event.getSource())
@@ -239,7 +217,7 @@ public class CostReconciliationTracking {
         } else {
             attempt = null;
         }
-        if (task != null && task.getGeneration() == 0) {
+        if (invocation.getReconciliationGeneration() == null || invocation.getReconciliationGeneration() == 0) {
             return;
         }
         if (original != null) {
@@ -253,44 +231,23 @@ public class CostReconciliationTracking {
     }
 
     void staged(CostBudgetInvocationDO invocation, TokenUsageEvent event) {
-        if (invocation == null || !captures()) {
-            return;
-        }
-        var row = work.lockRequest(invocation.getRequestId());
-        if (row != null) {
-            // 正常在线应用优先，短暂暂存不应被误识别为故障。
-            if (!Boolean.TRUE.equals(row.getAutoQueued())) {
-                row.setNextActionAt(time.local(time.now()).plusSeconds(5));
-            }
-            row.setPendingConfirmed(row.getGeneration() > 0 && event.getCostResult().status() == CostStatus.CALCULATED
-                    && !hasAdjustment(invocation));
-            work.updateById(row);
+        // 与既有 invocation UPDATE 合并，避免正常调用新增工作表写入。
+        if (!"CASE".equals(invocation.getReconciliationDisposition())
+                && invocation.getReconciliationGeneration() != null && invocation.getReconciliationGeneration() > 0) {
+            invocation.setReconciliationDisposition("TRACKING");
         }
     }
 
     void applied(CostBudgetInvocationDO invocation, CostStatus status) {
-        if (invocation == null || !captures()) {
-            return;
-        }
-        var row = work.lockRequest(invocation.getRequestId());
-        if (row == null) {
-            return;
-        }
-        if (row.getGeneration() == 0 || status != CostStatus.UNCALCULABLE && row.getScanId() == null) {
-            work.deleteById(row.getId());
-        } else {
-            row.setPendingConfirmed(false);
-            work.updateById(row);
+        if (invocation != null && !"CASE".equals(invocation.getReconciliationDisposition())) {
+            invocation.setReconciliationDisposition(status == CostStatus.UNCALCULABLE
+                    && invocation.getReconciliationGeneration() != null && invocation.getReconciliationGeneration() > 0
+                    ? "TRACKING" : "CLEAR");
         }
     }
 
     void abandoned(CostBudgetInvocationDO invocation) {
-        if (captures()) {
-            var row = work.lockRequest(invocation.getRequestId());
-            if (row != null) {
-                work.deleteById(row.getId());
-            }
-        }
+        invocation.setReconciliationDisposition("CLEAR");
     }
 
     CostReconciliationCaseDO findCase(CostBudgetInvocationDO invocation) {
@@ -337,8 +294,8 @@ public class CostReconciliationTracking {
         if (invocation == null || !enabled()) {
             return false;
         }
-        var task = work.lockRequest(invocation.getRequestId());
-        return task != null && task.getGeneration() > 0 || findCase(invocation) != null;
+        return invocation.getReconciliationGeneration() != null && invocation.getReconciliationGeneration() > 0
+                || findCase(invocation) != null;
     }
 
     void resolveFromOriginal(CostBudgetInvocationDO invocation, CostStatus status) {
@@ -351,6 +308,7 @@ public class CostReconciliationTracking {
             row.setVersion(Math.addExact(row.getVersion(), 1));
             row.setResolvedAt(time.local(time.now()));
             cases.updateById(row);
+            signals.batchChanged(row);
         }
     }
 

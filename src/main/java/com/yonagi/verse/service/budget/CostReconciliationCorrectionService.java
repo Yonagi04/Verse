@@ -17,7 +17,6 @@ import com.yonagi.verse.dao.mapper.CostBudgetSettlementMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationAdjustmentMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationAttemptMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationCaseMapper;
-import com.yonagi.verse.dao.mapper.CostReconciliationWorkMapper;
 import com.yonagi.verse.dao.mapper.UserMapper;
 import com.yonagi.verse.dto.req.CostReconciliationResolveReqDTO;
 import com.yonagi.verse.service.pricing.CostResult;
@@ -43,12 +42,12 @@ public class CostReconciliationCorrectionService {
     private final CostReconciliationCaseMapper cases;
     private final CostReconciliationAttemptMapper attempts;
     private final CostReconciliationAdjustmentMapper adjustments;
-    private final CostReconciliationWorkMapper work;
     private final UserMapper users;
     private final TenantAccessPolicy access;
     private final LlmCostBudgetConfigurationService permissions;
     private final ReconciliationEvidence evidence;
     private final ReliableDomainEventPublisher events;
+    private final CostReconciliationSignals signals;
     private final BudgetPeriodResolver time;
 
     @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
@@ -153,13 +152,11 @@ public class CostReconciliationCorrectionService {
         current.setVersion(saved.getVersion());
         current.setResolvedAt(saved.getCreatedAt());
         cases.updateById(current);
+        signals.batchChanged(current);
         invocation.setState("SETTLED");
+        invocation.setReconciliationDisposition("CASE");
         invocation.setUpdateTime(saved.getCreatedAt());
         invocations.updateById(invocation);
-        var task = work.lockRequest(current.getRequestId());
-        if (task != null) {
-            work.deleteById(task.getId());
-        }
         var event = new CostReconciliationEvent();
         event.setEventId("cost-reconciliation-adjustment-" + saved.getId());
         event.setKey(String.valueOf(tenantId));

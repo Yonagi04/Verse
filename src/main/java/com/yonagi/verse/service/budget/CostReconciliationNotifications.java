@@ -87,20 +87,24 @@ public class CostReconciliationNotifications implements MessageSendEligibility {
         this.time = time;
         this.transaction = new TransactionTemplate(manager);
         this.transaction.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        this.transaction.setTimeout(5);
     }
 
-    public void stageReadyBatches() {
+    /** 指定批次就绪才提交；false 表示配置暂停，调用方必须持久化恢复标志。 */
+    public boolean stageBatchIfReady(Long batchId) {
         if (!enabled) {
-            return;
+            return false;
         }
-        for (var candidate : batches.awaitingNotification()) {
-            transaction.executeWithoutResult(status -> stage(candidate.getId()));
-        }
+        transaction.executeWithoutResult(status -> stage(batchId));
+        return true;
     }
 
     private void stage(Long batchId) {
         var row = batches.lock(batchId);
         if (row == null || row.getNotifiedAt() != null) {
+            return;
+        }
+        if (!batches.ready(batchId)) {
             return;
         }
         long pending = cases.count(batchId, "PENDING");

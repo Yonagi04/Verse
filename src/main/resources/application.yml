@@ -138,6 +138,17 @@ verse:
       # 审计概略截断长度（字符），超出部分追加 "..."，仅用于列表展示，详情回源 S3 取全量
       preview-length: 20
     cost-reconciliation:
+      # 部署预检完成后显式开启，不能用默认延迟等级冒充已验证 Broker。
+      broker-preflight-verified: ${COST_RECONCILIATION_BROKER_VERIFIED:true}
+      task-topic: ${COST_RECONCILIATION_TASK_TOPIC:verse-cost-reconciliation-task}
+      control-topic: ${COST_RECONCILIATION_CONTROL_TOPIC:verse-cost-reconciliation-control}
+      task-group: ${COST_RECONCILIATION_TASK_GROUP:verse-cost-reconciliation-task}
+      control-group: ${COST_RECONCILIATION_CONTROL_GROUP:verse-cost-reconciliation-control}
+      discovery-seconds: 600
+      execution-seconds: 86400
+      cleanup-seconds: 172800
+      discovery-delay-level: ${COST_RECONCILIATION_DISCOVERY_DELAY_LEVEL:14}
+      check-delay-level: ${COST_RECONCILIATION_CHECK_DELAY_LEVEL:18}
       # 存在账单差异时，是否向租户管理员发送补账通知
       notifications-enabled: true
   security:

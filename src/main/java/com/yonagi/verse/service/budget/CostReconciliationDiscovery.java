@@ -3,6 +3,7 @@ package com.yonagi.verse.service.budget;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.yonagi.verse.async.api.ReliableDomainEventPublisher;
 import com.yonagi.verse.async.event.CostReconciliationEvent;
+import com.yonagi.verse.async.event.CostReconciliationTaskEvent;
 import com.yonagi.verse.common.enums.BillingMode;
 import com.yonagi.verse.common.enums.CostStatus;
 import com.yonagi.verse.dao.entity.CostBudgetInvocationDO;
@@ -10,14 +11,12 @@ import com.yonagi.verse.dao.entity.CostBudgetSettlementDO;
 import com.yonagi.verse.dao.entity.CostReconciliationAttemptDO;
 import com.yonagi.verse.dao.entity.CostReconciliationBatchDO;
 import com.yonagi.verse.dao.entity.CostReconciliationCaseDO;
-import com.yonagi.verse.dao.entity.CostReconciliationWorkDO;
 import com.yonagi.verse.dao.mapper.CostBudgetInvocationMapper;
 import com.yonagi.verse.dao.mapper.CostBudgetSettlementMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationAttemptMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationBatchMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationCaseMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationScanMapper;
-import com.yonagi.verse.dao.mapper.CostReconciliationWorkMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -41,7 +40,8 @@ public class CostReconciliationDiscovery {
     private final CostBudgetInvocationMapper invocations;
     private final CostBudgetSettlementMapper settlements;
     private final CostReconciliationAttemptMapper attempts;
-    private final CostReconciliationWorkMapper work;
+    private final CostReconciliationPageBarrier barrier;
+    private final CostReconciliationSignals signals;
     private final CostReconciliationScanMapper scans;
     private final CostReconciliationBatchMapper batches;
     private final CostReconciliationCaseMapper cases;
@@ -49,83 +49,74 @@ public class CostReconciliationDiscovery {
     private final ReliableDomainEventPublisher events;
     private final CostReconciliationTracking tracking;
 
-    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
-    public void classify(CostReconciliationWorkDO claim, CostBudgetInvocationDO observed, boolean ownerActive) {
-        if (observed == null || !Objects.equals(observed.getTenantId(), claim.getTenantId())) {
-            throw new IllegalStateException("reconciliation work has no matching invocation");
+    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class, timeout = 5)
+    public boolean classify(CostReconciliationTaskEvent page, CostBudgetInvocationDO observed, boolean ownerActive) {
+        if (!barrier.admit(page)) {
+            return false;
         }
-        tenants.lock(claim.getTenantId());
+        if (observed == null || !Objects.equals(observed.getTenantId(), page.getTenantId())) {
+            throw new IllegalStateException("reconciliation page has no matching invocation");
+        }
+        tenants.lock(page.getTenantId());
         if (observed.getApiKeyId() != null) {
-            budgets.lockKey(claim.getTenantId(), observed.getApiKeyId());
+            budgets.lockKey(page.getTenantId(), observed.getApiKeyId());
         }
-        var participants = models.lockForRequest(claim.getTenantId(), claim.getRequestId(), null);
-        var invocation = invocations.lockRequest(claim.getRequestId());
-        models.verifyParticipants(claim.getRequestId(), participants);
+        var participants = models.lockForRequest(page.getTenantId(), observed.getRequestId(), null);
+        var invocation = invocations.lockRequest(observed.getRequestId());
+        models.verifyParticipants(observed.getRequestId(), participants);
         var original = settlements.lockEvent(observed.getEventId());
-        var marker = scans.lockActivation();
-        var scan = scans.lockActiveScan();
-        var current = work.lockRequest(claim.getRequestId());
-        if (current == null || marker == null || scan == null || !Objects.equals(scan.getId(), claim.getScanId())
-                || !Objects.equals(marker.getGeneration(), claim.getGeneration())
-                || !Objects.equals(current.getScanId(), claim.getScanId())
-                || !Objects.equals(current.getClaimVersion(), claim.getClaimVersion())) {
-            return;
-        }
         var now = scans.databaseTime();
-        if (invocation == null || !Objects.equals(invocation.getEventId(), observed.getEventId())) {
+        if (invocation == null || !Objects.equals(invocation.getEventId(), observed.getEventId())
+                || !Objects.equals(invocation.getTenantId(), page.getTenantId())
+                || !Objects.equals(invocation.getReconciliationGeneration(), page.getGeneration())
+                || invocation.getOriginalUserId() == null) {
             throw new IllegalStateException("reconciliation invocation identity changed");
         }
-        if ("NO_UPSTREAM".equals(invocation.getState())) {
-            work.deleteById(current.getId());
-            return;
+        if (!"TRACKING".equals(invocation.getReconciliationDisposition())) {
+            return true;
+        }
+        if ("NO_UPSTREAM".equals(invocation.getState()) || original != null
+                && Boolean.TRUE.equals(original.getBudgetApplied())
+                && !CostStatus.UNCALCULABLE.name().equals(original.getCostStatus())) {
+            invocation.setReconciliationDisposition("CLEAR");
+            invocation.setUpdateTime(now);
+            invocations.updateById(invocation);
+            return true;
         }
         if (original == null && "RUNNING".equals(invocation.getState())
                 && (ownerActive || invocation.getLeaseUntil() != null && now.isBefore(invocation.getLeaseUntil()))) {
             if (ownerActive) {
                 invocation.setLastHeartbeatAt(now);
                 invocation.setLeaseUntil(now.plusSeconds(30));
+                invocation.setUpdateTime(now);
                 invocations.updateById(invocation);
             }
-            work.defer(current.getId(), current.getClaimVersion(), now.plusSeconds(30));
-            return;
+            return true;
         }
         var attempt = attempts.latest(invocation.getRequestId());
         if (original == null && attempt != null && "INTENT".equals(attempt.getOutcome())
                 && invocation.getLeaseUntil() != null && now.isBefore(invocation.getLeaseUntil().plusSeconds(30))) {
-            work.defer(current.getId(), current.getClaimVersion(), invocation.getLeaseUntil().plusSeconds(30));
-            return;
+            return true;
         }
         if (original == null && attempt == null) {
-            // 与发送意图竞争同一请求锁。确认没有意图后，旧 owner 不能再取得许可。
             invocation.setState("NO_UPSTREAM");
+            invocation.setReconciliationDisposition("CLEAR");
             invocation.setUpdateTime(now);
             invocations.updateById(invocation);
-            work.deleteById(current.getId());
-            return;
+            return true;
         }
-        var existing = cases.lockRequest(current.getTenantId(), current.getRequestId());
-        if (original != null && Boolean.TRUE.equals(original.getBudgetApplied())
-                && !CostStatus.UNCALCULABLE.name().equals(original.getCostStatus())) {
-            if (existing != null && "AUTO".equals(existing.getState())) {
-                existing.setState("RESOLVED");
-                existing.setVersion(Math.addExact(existing.getVersion(), 1));
-                existing.setResolvedAt(now);
-                cases.updateById(existing);
-            }
-            work.deleteById(current.getId());
-            return;
-        }
+        var existing = cases.lockRequest(invocation.getTenantId(), invocation.getRequestId());
         boolean unapplied = original != null && !Boolean.TRUE.equals(original.getBudgetApplied());
-        var autoCost = evidence.automatic(attempt);
-        boolean canCorrect = autoCost.status() != CostStatus.UNCALCULABLE;
+        boolean canCorrect = evidence.automatic(attempt).status() != CostStatus.UNCALCULABLE;
         String state = unapplied || canCorrect ? "AUTO" : attempt == null ? "REVIEW" : "PENDING";
-        var row = existing == null ? createCase(current, invocation, original, attempt, state) : existing;
+        var row = existing == null ? createCase(page, invocation, original, attempt, state) : existing;
+        invocation.setReconciliationDisposition("CASE");
         if (!"FINALIZING".equals(invocation.getState())) {
             invocation.setState("UNKNOWN");
-            invocation.setUpdateTime(now);
-            invocations.updateById(invocation);
         }
-        if ("AUTO".equals(row.getState())) {
+        invocation.setUpdateTime(now);
+        invocations.updateById(invocation);
+        if (existing == null && "AUTO".equals(row.getState())) {
             var event = new CostReconciliationEvent();
             event.setEventId("cost-reconciliation-auto-" + row.getId());
             event.setKey(String.valueOf(row.getTenantId()));
@@ -135,12 +126,8 @@ public class CostReconciliationDiscovery {
                 event.setStagedEventId(original.getEventId());
             }
             events.publish(event, row.getTenantId());
-            if (work.queueAutomatic(current.getId(), current.getClaimVersion(), now.plusMinutes(5)) != 1) {
-                throw new IllegalStateException("reconciliation claim changed before automatic enqueue");
-            }
-        } else {
-            work.deleteById(current.getId());
         }
+        return true;
     }
 
     /** 原快照已应用但仍未知时，转人工并结束独立自动任务。 */
@@ -170,71 +157,72 @@ public class CostReconciliationDiscovery {
         }
         row.setVersion(Math.addExact(row.getVersion(), 1));
         cases.updateById(row);
-        var task = work.lockRequest(lookup.getRequestId());
-        if (task != null && Boolean.TRUE.equals(task.getAutoQueued())) {
-            work.deleteById(task.getId());
-        }
+        signals.batchChanged(row);
     }
 
-    /** 自动依赖长期失败时，单个案件不能阻塞同租户的其他人工待办。 */
-    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class)
-    public void expireAutomatic(CostReconciliationWorkDO expired) {
-        tenants.lock(expired.getTenantId());
-        var invocation = invocations.lockRequest(expired.getRequestId());
-        if (invocation == null) {
-            throw new IllegalStateException("missing automatic reconciliation invocation");
+    /** CASE 归属仍须处理 AUTO 超时；确认费用不得转为可人工覆盖金额。 */
+    @Transactional(isolation = Isolation.READ_COMMITTED, rollbackFor = Exception.class, timeout = 5)
+    public boolean expireAutomatic(CostReconciliationTaskEvent page, CostReconciliationCaseDO lookup,
+                                   long expectedVersion) {
+        if (!barrier.admit(page)) {
+            return false;
         }
-        var original = settlements.lockEvent(invocation.getEventId());
-        var row = cases.lockRequest(expired.getTenantId(), expired.getRequestId());
-        var task = work.lockRequest(expired.getRequestId());
-        var now = scans.databaseTime();
-        if (task == null || !Boolean.TRUE.equals(task.getAutoQueued()) || task.getNextActionAt().isAfter(now)) {
-            return;
+        if (lookup == null || !Objects.equals(lookup.getTenantId(), page.getTenantId())) {
+            throw new IllegalStateException("missing original automatic case");
         }
-        if (row == null) {
-            throw new IllegalStateException("missing automatic reconciliation case");
+        tenants.lock(lookup.getTenantId());
+        var invocation = invocations.lockRequest(lookup.getRequestId());
+        var original = settlements.lockEvent(lookup.getEventId());
+        var row = cases.lockInBatch(lookup.getBatchId(), lookup.getId());
+        var run = scans.selectById(page.getRunId());
+        if (row == null || !"AUTO".equals(row.getState()) || row.getVersion() != expectedVersion
+                || row.getAutomaticDeadlineAt() == null || row.getAutomaticDeadlineAt().isAfter(run.getCutoffAt())) {
+            return true;
         }
-        if ("RESOLVED".equals(row.getState()) || "PENDING".equals(row.getState())) {
-            work.deleteById(task.getId());
-            return;
+        if (invocation == null || !Objects.equals(invocation.getTenantId(), row.getTenantId())
+                || !Objects.equals(invocation.getEventId(), row.getEventId())
+                || !Objects.equals(invocation.getOriginalUserId(), row.getUserId())
+                || !Objects.equals(invocation.getApiKeyId(), row.getApiKeyId())
+                || !Objects.equals(invocation.getSource(), row.getSource())
+                || !Objects.equals(invocation.getRequestStartedAt(), row.getRequestStartedAt())
+                || invocation.getReconciliationGeneration() == null || invocation.getReconciliationGeneration() <= 0
+                || !"CASE".equals(invocation.getReconciliationDisposition())) {
+            throw new CostBudgetSnapshot.ConflictException();
         }
         var attempt = row.getAttemptId() == null ? null : attempts.selectById(row.getAttemptId());
+        boolean confirmed = original != null && !Boolean.TRUE.equals(original.getBudgetApplied())
+                && CostStatus.CALCULATED.name().equals(original.getCostStatus()) && !tracking.hasAdjustment(invocation);
         boolean canTransfer = attempt != null && evidence.price(attempt).priced()
                 && evidence.automatic(attempt).status() == CostStatus.UNCALCULABLE
-                && (original == null || CostStatus.UNCALCULABLE.name().equals(original.getCostStatus()))
-                && !Boolean.TRUE.equals(task.getPendingConfirmed());
-        if ("AUTO".equals(row.getState())) {
-            row.setState(canTransfer ? "PENDING" : "REVIEW");
-            row.setVersion(Math.addExact(row.getVersion(), 1));
-            cases.updateById(row);
-            log.warn("[reconciliation] 自动处理超时，已转交 batchId={} caseId={} state={}",
-                    row.getBatchId(), row.getId(), row.getState());
-        }
-        if (canTransfer) {
-            work.deleteById(task.getId());
-        } else {
-            // 保留待应用的确认金额，直到原事件修复或运维明确处理。
-            task.setNextActionAt(now.plusHours(1));
-            work.updateById(task);
-        }
+                && (original == null || CostStatus.UNCALCULABLE.name().equals(original.getCostStatus())) && !confirmed;
+        row.setState(canTransfer ? "PENDING" : "REVIEW");
+        row.setVersion(Math.addExact(row.getVersion(), 1));
+        cases.updateById(row);
+        signals.batchChanged(row);
+        log.warn("[reconciliation] 自动处理超时 batchId={} caseId={} state={}",
+                row.getBatchId(), row.getId(), row.getState());
+        return true;
     }
 
-    private CostReconciliationCaseDO createCase(CostReconciliationWorkDO task, CostBudgetInvocationDO invocation,
+    private CostReconciliationCaseDO createCase(CostReconciliationTaskEvent task, CostBudgetInvocationDO invocation,
                                                CostBudgetSettlementDO original, CostReconciliationAttemptDO attempt,
                                                String state) {
-        var batch = tenantBatch(task.getScanId(), task.getTenantId());
+        var batch = tenantBatch(task.getRunId(), task.getTenantId());
         var row = new CostReconciliationCaseDO();
         row.setBatchId(batch.getId());
         row.setTenantId(task.getTenantId());
-        row.setRequestId(task.getRequestId());
+        row.setRequestId(invocation.getRequestId());
         row.setEventId(invocation.getEventId());
         row.setApiKeyId(invocation.getApiKeyId());
         row.setSource(invocation.getSource());
         row.setRequestStartedAt(invocation.getRequestStartedAt());
-        row.setUserId(task.getUserId());
+        row.setUserId(invocation.getOriginalUserId());
         row.setAttemptId(attempt == null ? null : attempt.getId());
         row.setState(state);
         row.setVersion(0L);
+        if ("AUTO".equals(state)) {
+            row.setAutomaticDeadlineAt(scans.databaseTime().plusMinutes(5));
+        }
         if (attempt == null) {
             row.setReason("MISSING_ATTEMPT");
             log.error("[reconciliation] 缺少物理尝试: requestId={}", row.getRequestId());
@@ -267,6 +255,10 @@ public class CostReconciliationDiscovery {
                 batches.insert(row);
                 return row;
             } catch (DuplicateKeyException collision) {
+                var concurrent = batches.selectOne(lookup);
+                if (concurrent != null) {
+                    return concurrent;
+                }
                 if (retry == 4) {
                     throw collision;
                 }

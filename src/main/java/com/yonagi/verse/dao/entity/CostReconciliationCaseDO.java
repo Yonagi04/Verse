@@ -44,4 +44,6 @@ public class CostReconciliationCaseDO {
     private Boolean reviewRequired;
     /** 结案时间。 */
     private LocalDateTime resolvedAt;
+    /** 当前 AUTO 版本的业务处理截止时间。 */
+    private LocalDateTime automaticDeadlineAt;
 }

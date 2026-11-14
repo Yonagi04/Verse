@@ -3,7 +3,6 @@ package com.yonagi.verse.service.budget;
 import com.yonagi.verse.dao.entity.CostBudgetPeriodDO;
 import com.yonagi.verse.dao.entity.CostBudgetSettlementDO;
 import com.yonagi.verse.dao.mapper.CostBudgetSettlementMapper;
-import com.yonagi.verse.dao.mapper.CostReconciliationWorkMapper;
 import com.yonagi.verse.dao.mapper.CostReconciliationCaseMapper;
 import com.yonagi.verse.dao.projection.TenantCostBudgetAggregate;
 import com.yonagi.verse.dto.resp.TenantCostStatusRespDTO;
@@ -20,7 +19,6 @@ import java.util.Objects;
 public class CostReconciliationBudgetRead {
     private static final int MAX_STAGED_ROWS = 1000;
     private final CostReconciliationTracking tracking;
-    private final CostReconciliationWorkMapper work;
     private final CostBudgetSettlementMapper settlements;
     private final CostReconciliationCaseMapper cases;
     private final BudgetPeriodResolver time;
@@ -55,7 +53,11 @@ public class CostReconciliationBudgetRead {
     StagedCosts staged(Long tenantId, Instant instant) {
         var latestEnd = time.resolve(instant).stream().map(BudgetPeriodResolver.Period::end)
                 .max(java.time.LocalDateTime::compareTo).orElseThrow();
-        var rows = work.pendingConfirmed(tenantId, time.earliest(instant), latestEnd);
+        var from = time.earliest(instant);
+        if (settlements.hasInvalidPendingConfirmed(tenantId, from, latestEnd)) {
+            return StagedCosts.UNAVAILABLE;
+        }
+        var rows = settlements.pendingConfirmed(tenantId, from, latestEnd);
         if (rows.size() > MAX_STAGED_ROWS) {
             return StagedCosts.UNAVAILABLE;
         }

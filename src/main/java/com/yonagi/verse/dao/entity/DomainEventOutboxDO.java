@@ -24,4 +24,8 @@ public class DomainEventOutboxDO {
     /** 事实对账时间。 */ private LocalDateTime reconciledAt;
     /** 创建时间。 */ private LocalDateTime createTime;
     /** 更新时间。 */ private LocalDateTime updateTime;
+    /** 已校验的内部目标 Topic，旧事件为空。 */ private String destination;
+    /** 可选 Remoting 延迟等级。 */ private Integer delayLevel;
+    /** 事件专属可靠发送截止，旧事件为空。 */ private LocalDateTime retryUntil;
+    /** 新协议规范化载荷摘要。 */ private String payloadHash;
 }

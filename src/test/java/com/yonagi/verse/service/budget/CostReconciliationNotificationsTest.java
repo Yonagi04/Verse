@@ -54,6 +54,7 @@ class CostReconciliationNotificationsTest {
     private final SendRecordStore records = mock(SendRecordStore.class);
     private final EmailSendService email = mock(EmailSendService.class);
     private final AesUtil aes = mock(AesUtil.class);
+    private final ReliableDomainEventPublisher events = mock(ReliableDomainEventPublisher.class);
     private CostReconciliationNotifications service;
     private CostReconciliationBatchDO batch;
     private UserDO user;
@@ -63,7 +64,7 @@ class CostReconciliationNotificationsTest {
         MessagingProperties properties = new MessagingProperties();
         properties.getEmail().setProvider("mailpit");
         service = new CostReconciliationNotifications(batches, cases, mock(LlmCostAlertDeliveryMapper.class), roles,
-                users, mock(TenantAccessPolicy.class), mock(ReliableDomainEventPublisher.class), records,
+                users, mock(TenantAccessPolicy.class), events, records,
                 mock(SmsSendService.class), email, new EmailTemplateRenderer(
                         new ClassPathResource("messaging/email/templates.yml")), aes, properties,
                 new BudgetPeriodResolver(), mock(PlatformTransactionManager.class));
@@ -83,6 +84,28 @@ class CostReconciliationNotificationsTest {
         user.setEmailHash(HASH);
         when(users.selectActiveUserForShare(USER_ID)).thenReturn(user);
         when(roles.role(TENANT_ID, USER_ID)).thenReturn("SUPER_ADMIN");
+    }
+
+    @Test
+    void specifiedBatchWaitsForSealAndAutoCompletionAndPersistsOnlyOneNotice() {
+        assertEquals(true, service.stageBatchIfReady(1L));
+        assertNull(batch.getNotifiedAt());
+        when(batches.ready(1L)).thenReturn(true);
+        service.stageBatchIfReady(1L);
+        assertEquals(true, batch.getNotifiedAt() != null);
+        service.stageBatchIfReady(1L);
+        var event = ArgumentCaptor.forClass(com.yonagi.verse.async.event.CostReconciliationEvent.class);
+        verify(events).publish(event.capture(), org.mockito.ArgumentMatchers.eq(TENANT_ID));
+        assertEquals(1L, event.getValue().getBatchId());
+        assertEquals("cost-reconciliation-notice-1",event.getValue().getEventId());
+    }
+
+    @Test
+    void notificationPauseLeavesOriginalBatchUnstagedForReliableRecovery() {
+        ReflectionTestUtils.setField(service,"enabled",false);
+        assertEquals(false,service.stageBatchIfReady(1L));
+        assertNull(batch.getNotifiedAt());
+        verify(events,never()).publish(any(),any());
     }
 
     @ParameterizedTest

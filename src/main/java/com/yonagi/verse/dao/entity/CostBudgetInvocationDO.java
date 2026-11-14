@@ -11,6 +11,12 @@ public class CostBudgetInvocationDO {
     private Long id;
     /** 租户标识。 */
     private Long tenantId;
+    /** 原调用用户，不随 Key 当前归属变化。 */
+    private Long originalUserId;
+    /** 采集时核账代次，零保留旧预算恢复语义。 */
+    private Long reconciliationGeneration;
+    /** 核账归属：CLEAR、TRACKING 或 CASE。 */
+    private String reconciliationDisposition;
     /** Key 标识。 */
     private Long apiKeyId;
     /** API_KEY 或 PLAYGROUND。 */
