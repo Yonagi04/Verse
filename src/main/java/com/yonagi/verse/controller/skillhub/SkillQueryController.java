@@ -1,5 +1,7 @@
 package com.yonagi.verse.controller.skillhub;
 
+import cn.hutool.crypto.digest.DigestUtil;
+
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.dto.req.SkillSearchReqDTO;
@@ -9,12 +11,14 @@ import com.yonagi.verse.dto.resp.SkillOptionsRespDTO;
 import com.yonagi.verse.dto.resp.SkillPageRespDTO;
 import com.yonagi.verse.service.skillhub.SkillQueryService;
 import com.yonagi.verse.service.skillhub.port.SkillPublicQueryRateLimiter;
-import cn.hutool.crypto.digest.DigestUtil;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ModelAttribute;
@@ -71,6 +75,9 @@ public class SkillQueryController {
     @GetMapping("/{skillId:[0-9]+}")
     public Result<SkillDetailRespDTO> detail(@PathVariable @Positive Long skillId, HttpServletRequest request) {
         rateLimiter.check(DigestUtil.sha256Hex(request.getRemoteAddr()));
-        return Results.success(queryService.detail(skillId));
+        com.yonagi.verse.common.security.UserContext context =
+                com.yonagi.verse.common.security.UserContextHolder.get();
+        return Results.success(
+                queryService.detail(skillId, context == null ? null : context.getUserId()));
     }
 }

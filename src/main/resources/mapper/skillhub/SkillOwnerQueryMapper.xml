@@ -10,6 +10,9 @@
         <result column="draft_status" property="draftStatus"/>
         <result column="job_status" property="jobStatus"/>
         <result column="version_label" property="versionLabel"/>
+        <result column="latest_release_at" property="latestReleaseAt"/>
+        <result column="latest_draft_version" property="latestDraftVersion"/>
+        <result column="latest_draft_at" property="latestDraftAt"/>
         <result column="revision" property="revision"/>
         <result column="update_time" property="updateTime"/>
     </resultMap>
@@ -19,12 +22,15 @@
     </select>
     <select id="selectOwnedPage" resultMap="ownerView">
         SELECT s.skill_id,d.draft_id,COALESCE(r.name,s.slug) AS name,s.slug,s.status,
-               d.status AS draft_status,j.status AS job_status,v.version_label,s.revision,s.update_time
+               d.status AS draft_status,j.status AS job_status,CONCAT('v',v.release_number) AS version_label,s.revision,s.update_time,s.latest_release_at,
+               CASE WHEN h.version_type='DRAFT' THEN CONCAT('v',h.release_number,'-draft.',h.draft_number) END AS latest_draft_version,
+               CASE WHEN h.version_type='DRAFT' THEN h.published_at END AS latest_draft_at
         FROM t_skill s JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id
         LEFT JOIN t_skill_draft d ON d.skill_id=s.skill_id AND d.owner_user_id=#{userId}
         LEFT JOIN t_skill_job j ON j.job_id=d.latest_job_id AND j.draft_id=d.draft_id
         LEFT JOIN t_skill_revision r ON r.revision_id=s.public_revision_id AND r.skill_id=s.skill_id
-        LEFT JOIN t_skill_version v ON v.version_id=s.current_version_id AND v.skill_id=s.skill_id
+        LEFT JOIN t_skill_version v ON v.version_id=s.current_version_id AND v.skill_id=s.skill_id AND v.version_type='RELEASE'
+        LEFT JOIN t_skill_version h ON h.skill_id=s.skill_id AND h.sequence_number=s.version_sequence
         WHERE p.user_id=#{userId} AND p.status='ACTIVE'
         ORDER BY s.update_time DESC,s.skill_id DESC LIMIT #{size} OFFSET #{offset}
     </select>

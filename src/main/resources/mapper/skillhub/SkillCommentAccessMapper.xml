@@ -26,7 +26,7 @@
         SELECT skill_id,publisher_id,status,current_version_id,public_revision_id FROM t_skill WHERE skill_id=#{id} FOR SHARE
     </select>
     <select id="lockVersion" resultType="com.yonagi.verse.dao.entity.skillhub.SkillVersionDO">
-        SELECT version_id,skill_id,artifact_id,status FROM t_skill_version WHERE version_id=#{id} FOR SHARE
+        SELECT version_id,skill_id,artifact_id,status,version_type FROM t_skill_version WHERE version_id=#{id} FOR SHARE
     </select>
     <select id="lockArtifact" resultType="com.yonagi.verse.dao.entity.skillhub.SkillArtifactDO">
         SELECT artifact_id,owner_user_id,status FROM t_skill_artifact WHERE artifact_id=#{id} FOR SHARE

@@ -7,7 +7,9 @@ import com.yonagi.verse.dao.mapper.skillhub.SkillCommentAccessMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillCommentMapper;
 import com.yonagi.verse.dao.projection.SkillCommentResourceProjection;
 import com.yonagi.verse.service.user.AccountAvailabilityService;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -80,8 +82,10 @@ public class SkillCommentAccessPolicy {
             throw conflict();
         }
         var version = resources.lockVersion(skill.getCurrentVersionId());
-        if (version == null || !skill.getSkillId().equals(version.getSkillId())
-                || !"AVAILABLE".equals(version.getStatus())) {
+        if (version == null
+                || !skill.getSkillId().equals(version.getSkillId())
+                || !"AVAILABLE".equals(version.getStatus())
+                || !"RELEASE".equals(version.getVersionType())) {
             throw conflict();
         }
         var artifact = resources.lockArtifact(version.getArtifactId());

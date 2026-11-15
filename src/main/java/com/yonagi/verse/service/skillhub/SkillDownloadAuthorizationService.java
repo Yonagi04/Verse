@@ -11,7 +11,9 @@ import com.yonagi.verse.dao.entity.skillhub.SkillVersionDO;
 import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillDownloadQueryMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillVersionMapper;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -41,8 +43,10 @@ public class SkillDownloadAuthorizationService {
             throw denied();
         }
         SkillVersionDO version = versionMapper.selectByIdForUpdate(versionId);
-        if (version == null || !skill.getSkillId().equals(version.getSkillId())
-                || !SkillVersionStatusEnum.AVAILABLE.name().equals(version.getStatus())) {
+        if (version == null
+                || !skill.getSkillId().equals(version.getSkillId())
+                || !SkillVersionStatusEnum.AVAILABLE.name().equals(version.getStatus())
+                || !"RELEASE".equals(version.getVersionType())) {
             throw denied();
         }
         SkillArtifactDO artifact = artifactMapper.selectByIdForUpdate(version.getArtifactId());
@@ -50,8 +54,12 @@ public class SkillDownloadAuthorizationService {
                 || !SkillArtifactStatusEnum.READY.name().equals(artifact.getStatus())) {
             throw denied();
         }
-        return new SkillDownloadResource(versionId, skill.getSlug() + "-" + version.getVersionLabel() + ".zip",
-                artifact.getArchiveKey(), artifact.getArchiveSha256(), artifact.getArchiveBytes());
+        return new SkillDownloadResource(
+                versionId,
+                skill.getSlug() + "-" + SkillVersionRules.label(version) + ".zip",
+                artifact.getArchiveKey(),
+                artifact.getArchiveSha256(),
+                artifact.getArchiveBytes());
     }
 
     private ClientException denied() {

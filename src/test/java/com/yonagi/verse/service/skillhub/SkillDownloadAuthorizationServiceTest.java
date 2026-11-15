@@ -1,5 +1,11 @@
 package com.yonagi.verse.service.skillhub;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.dao.entity.skillhub.SkillArtifactDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillDO;
@@ -7,13 +13,9 @@ import com.yonagi.verse.dao.entity.skillhub.SkillVersionDO;
 import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillDownloadQueryMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillVersionMapper;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.when;
 
 class SkillDownloadAuthorizationServiceTest {
     private final SkillAccessPolicy access = mock(SkillAccessPolicy.class);
@@ -35,6 +37,9 @@ class SkillDownloadAuthorizationServiceTest {
         version.setArtifactId(40L);
         version.setVersionLabel("1.0.0");
         version.setStatus("AVAILABLE");
+        version.setVersionType("RELEASE");
+        version.setReleaseNumber(1);
+        version.setDraftNumber(0);
         when(query.selectOwnerId(70L)).thenReturn(1L);
         SkillVersionDO reference = new SkillVersionDO();
         reference.setSkillId(20L);
@@ -48,7 +53,7 @@ class SkillDownloadAuthorizationServiceTest {
     void authorizesOnlyCurrentAvailableVersionAndOwnedReadyArtifact() {
         SkillDownloadResource result = service.authorize(70L);
         assertEquals(70L, result.versionId());
-        assertEquals("test-skill-1.0.0.zip", result.filename());
+        assertEquals("test-skill-v1.zip", result.filename());
         assertEquals(artifact.getArchiveKey(), result.archiveKey());
         assertEquals(artifact.getArchiveSha256(), result.sha256());
     }
@@ -73,6 +78,9 @@ class SkillDownloadAuthorizationServiceTest {
         version.setStatus("BLOCKED");
         assertThrows(ClientException.class, () -> service.authorize(70L));
         version.setStatus("AVAILABLE");
+        version.setVersionType("RELEASE");
+        version.setReleaseNumber(1);
+        version.setDraftNumber(0);
         version.setSkillId(21L);
         assertThrows(ClientException.class, () -> service.authorize(70L));
     }

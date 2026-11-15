@@ -18,8 +18,11 @@ import com.yonagi.verse.dto.resp.SkillOptionRespDTO;
 import com.yonagi.verse.dto.resp.SkillOptionsRespDTO;
 import com.yonagi.verse.dto.resp.SkillPageRespDTO;
 import com.yonagi.verse.dto.resp.SkillPublisherRespDTO;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
+
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -65,6 +68,13 @@ public class SkillQueryService {
      * @return 当前版本详情或已下架的有限占位
      */
     public SkillDetailRespDTO detail(Long skillId) {
+        return detail(skillId, null);
+    }
+
+    /**
+     * @return 当前公开内容和可信账号的管理入口提示
+     */
+    public SkillDetailRespDTO detail(Long skillId, Long viewerId) {
         SkillPublicProjection row = publicQueryMapper.selectAvailableDetail(skillId);
         if (row == null) {
             row = publicQueryMapper.selectPublishedPlaceholder(skillId);
@@ -83,11 +93,20 @@ public class SkillQueryService {
         if (!declarations.isObject() || !declarations.path("license").isTextual()) {
             throw new ServerException(SkillErrorCodeEnum.UNAVAILABLE);
         }
-        return new SkillDetailRespDTO(card(row, readTags(List.of(row))), "AVAILABLE", row.getSkillMarkdown(),
-                declarations.path("license").textValue(), declarations.path("originalAuthor").textValue(),
-                declarations.path("sourceUrl").textValue(), declarations.path("compatibility").textValue(),
-                declarations.path("dependencies").textValue(), row.getArchiveBytes(), row.getArchiveSha256(),
-                new SkillGithubSnapshotCodec(objectMapper).source(row.getSourceType(), row.getSourceJson()));
+        return new SkillDetailRespDTO(
+                card(row, readTags(List.of(row))),
+                "AVAILABLE",
+                row.getSkillMarkdown(),
+                declarations.path("license").textValue(),
+                declarations.path("originalAuthor").textValue(),
+                declarations.path("sourceUrl").textValue(),
+                declarations.path("compatibility").textValue(),
+                declarations.path("dependencies").textValue(),
+                row.getArchiveBytes(),
+                row.getArchiveSha256(),
+                new SkillGithubSnapshotCodec(objectMapper)
+                        .source(row.getSourceType(), row.getSourceJson()),
+                viewerId != null && viewerId.equals(row.getOwnerUserId()));
     }
 
     /**
@@ -143,9 +162,19 @@ public class SkillQueryService {
         }
         String escaped = keyword == null ? null : keyword.replace("!", "!!").replace("%", "!%")
                 .replace("_", "!_");
-        return new SkillSearchCondition(keyword, keyword, escaped == null ? null : escaped + "%",
-                escaped == null ? null : "%" + escaped + "%", category, tags, input.getPublisherId(),
-                "relevance".equals(sort) || (sort == null && keyword != null), page, size, (page - 1) * size, source);
+        return new SkillSearchCondition(
+                keyword,
+                keyword,
+                escaped == null ? null : escaped + "%",
+                escaped == null ? null : "%" + escaped + "%",
+                category,
+                tags,
+                input.getPublisherId(),
+                "relevance".equals(sort) || (sort == null && keyword != null),
+                page,
+                size,
+                (page - 1) * size,
+                source);
     }
 
     private Map<Long, List<String>> readTags(List<SkillPublicProjection> rows) {

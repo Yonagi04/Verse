@@ -14,13 +14,13 @@
         <result column="archive_bytes" property="archiveBytes"/>
     </resultMap>
     <sql id="resource">
-        SELECT s.skill_id,s.publisher_id,p.user_id,v.version_id,v.artifact_id,s.slug,v.version_label,
+        SELECT s.skill_id,s.publisher_id,p.user_id,v.version_id,v.artifact_id,s.slug,CONCAT('v',v.release_number) AS version_label,
                a.archive_key,a.archive_sha256,a.archive_bytes
         FROM t_skill_version v JOIN t_skill s ON s.skill_id=v.skill_id AND s.current_version_id=v.version_id
         JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id
         JOIN t_skill_artifact a ON a.artifact_id=v.artifact_id
         WHERE v.version_id=#{versionId} AND s.status='ACTIVE' AND p.status='ACTIVE'
-              AND v.status='AVAILABLE' AND a.status='READY'
+              AND v.version_type='RELEASE' AND v.status='AVAILABLE' AND a.status='READY'
     </sql>
     <select id="selectAvailable" resultMap="download">
         <include refid="resource"/> AND s.skill_id=#{skillId}

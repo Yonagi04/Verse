@@ -2,6 +2,7 @@ package com.yonagi.verse.dao.projection;
 
 import lombok.Getter;
 import lombok.Setter;
+
 import java.time.LocalDateTime;
 
 /** 本人管理页定列投影，不含包正文、内部对象Key及声明。 */
@@ -16,6 +17,9 @@ public class SkillOwnerProjection {
     private String draftStatus;
     private String jobStatus;
     private String versionLabel;
+    private LocalDateTime latestReleaseAt;
+    private String latestDraftVersion;
+    private LocalDateTime latestDraftAt;
     private Long revision;
     private LocalDateTime updateTime;
 }

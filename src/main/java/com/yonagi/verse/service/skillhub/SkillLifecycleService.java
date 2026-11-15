@@ -17,10 +17,14 @@ import com.yonagi.verse.dto.req.SkillUnpublishReqDTO;
 import com.yonagi.verse.dto.resp.SkillMyPublicationRespDTO;
 import com.yonagi.verse.dto.resp.SkillPageRespDTO;
 import com.yonagi.verse.service.user.AccountAvailabilityService;
+
 import jakarta.validation.Validator;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -57,12 +61,33 @@ public class SkillLifecycleService {
         if (total == 0) {
             return new SkillPageRespDTO<>(page, PAGE_SIZE, 0L, List.of());
         }
-        List<SkillMyPublicationRespDTO> items = ownerQueryMapper
-                .selectOwnedPage(userId, PAGE_SIZE, (page - 1) * PAGE_SIZE).stream()
-                .map(row -> new SkillMyPublicationRespDTO(row.getSkillId().toString(),
-                        row.getDraftId() == null ? null : row.getDraftId().toString(), row.getName(), row.getSlug(),
-                        row.getStatus(), row.getDraftStatus(), row.getJobStatus(), row.getVersionLabel(),
-                        row.getRevision(), row.getUpdateTime().atOffset(ZoneOffset.UTC))).toList();
+        List<SkillMyPublicationRespDTO> items =
+                ownerQueryMapper.selectOwnedPage(userId, PAGE_SIZE, (page - 1) * PAGE_SIZE).stream()
+                        .map(
+                                row ->
+                                        new SkillMyPublicationRespDTO(
+                                                row.getSkillId().toString(),
+                                                row.getDraftId() == null
+                                                        ? null
+                                                        : row.getDraftId().toString(),
+                                                row.getName(),
+                                                row.getSlug(),
+                                                row.getStatus(),
+                                                row.getDraftStatus(),
+                                                row.getJobStatus(),
+                                                row.getVersionLabel(),
+                                                row.getRevision(),
+                                                row.getUpdateTime().atOffset(ZoneOffset.UTC),
+                                                row.getLatestReleaseAt() == null
+                                                        ? null
+                                                        : row.getLatestReleaseAt()
+                                                                .atOffset(ZoneOffset.UTC),
+                                                row.getLatestDraftVersion(),
+                                                row.getLatestDraftAt() == null
+                                                        ? null
+                                                        : row.getLatestDraftAt()
+                                                                .atOffset(ZoneOffset.UTC)))
+                        .toList();
         return new SkillPageRespDTO<>(page, PAGE_SIZE, total, items);
     }
 

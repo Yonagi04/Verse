@@ -4,6 +4,7 @@
     <resultMap id="publicView" type="com.yonagi.verse.dao.projection.SkillPublicProjection">
         <id column="skill_id" property="skillId"/>
         <result column="publisher_id" property="publisherId"/>
+        <result column="owner_user_id" property="ownerUserId"/>
         <result column="handle" property="handle"/>
         <result column="public_name" property="publicName"/>
         <result column="slug" property="slug"/>
@@ -31,16 +32,16 @@
     </resultMap>
     <sql id="authorName">COALESCE(NULLIF(TRIM(u.nickname),''),u.username)</sql>
     <sql id="cardColumns">
-        s.skill_id,s.publisher_id,p.handle,<include refid="authorName"/> AS public_name,
+        s.skill_id,s.publisher_id,p.user_id AS owner_user_id,p.handle,<include refid="authorName"/> AS public_name,
         s.slug,r.name,r.summary,r.category_id,
-        r.revision_id,v.version_id,v.version_label,v.published_at
+        r.revision_id,v.version_id,CONCAT('v',v.release_number) AS version_label,v.published_at
     </sql>
     <sql id="publishedJoins">
         FROM t_skill s
         JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id
         JOIN t_user u ON u.user_id=p.user_id
         JOIN t_skill_revision r ON r.revision_id=s.public_revision_id AND r.skill_id=s.skill_id
-        JOIN t_skill_version v ON v.version_id=s.current_version_id AND v.skill_id=s.skill_id
+        JOIN t_skill_version v ON v.version_id=s.current_version_id AND v.skill_id=s.skill_id AND v.version_type='RELEASE'
     </sql>
     <sql id="availableJoins">
         <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.publishedJoins"/>
@@ -50,7 +51,7 @@
         p.status='ACTIVE' AND u.status=1 AND u.del_flag=0
     </sql>
     <sql id="available">
-        s.status='ACTIVE' AND v.status='AVAILABLE' AND a.status='READY'
+        s.status='ACTIVE' AND v.version_type='RELEASE' AND v.status='AVAILABLE' AND a.status='READY'
         AND <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.accountAvailable"/>
     </sql>
     <sql id="filters">

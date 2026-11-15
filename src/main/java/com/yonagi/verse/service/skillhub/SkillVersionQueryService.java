@@ -167,6 +167,9 @@ public class SkillVersionQueryService {
                 .map(
                         value -> {
                             SkillArtifactDO artifact = files.get(value.getArtifactId());
+                    if (artifact != null && !resource.publisher().getUserId().equals(artifact.getOwnerUserId())) {
+                        artifact = null;
+                    }
                             boolean available =
                                     "AVAILABLE".equals(value.getStatus())
                                             && artifact != null
@@ -201,7 +204,8 @@ public class SkillVersionQueryService {
                                     uses.get(value.getVersionId()),
                                     string(value.getDiffBaseVersionId()),
                                     labels.get(value.getDiffBaseVersionId()),
-                                    value.getAddedCount() == null ? "UNAVAILABLE" : "READY",
+                                    value.getAddedCount() == null || value.getModifiedCount() == null || value.getDeletedCount() == null
+                            ? "UNAVAILABLE" : "READY",
                                     value.getAddedCount(),
                                     value.getModifiedCount(),
                                     value.getDeletedCount(),

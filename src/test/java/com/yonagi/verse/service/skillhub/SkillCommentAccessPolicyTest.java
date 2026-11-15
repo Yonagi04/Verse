@@ -1,14 +1,16 @@
 package com.yonagi.verse.service.skillhub;
 
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.dao.entity.skillhub.*;
 import com.yonagi.verse.dao.mapper.skillhub.*;
 import com.yonagi.verse.dao.projection.SkillCommentResourceProjection;
 import com.yonagi.verse.service.user.AccountAvailabilityService;
+
 import org.junit.jupiter.api.*;
-import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.*;
-import static org.mockito.ArgumentMatchers.*;
 
 class SkillCommentAccessPolicyTest {
     private final AccountAvailabilityService accounts = mock(AccountAvailabilityService.class);
@@ -28,9 +30,14 @@ class SkillCommentAccessPolicyTest {
         when(accounts.lockActiveAccountExclusively(any())).thenReturn(true);
         when(accounts.lockActiveAccount(any())).thenReturn(true);
         publisher = new SkillPublisherDO(); publisher.setUserId(9L); publisher.setStatus("ACTIVE");
-        skill = new SkillDO(); skill.setSkillId(20L); skill.setPublisherId(30L); skill.setStatus("ACTIVE");
+        skill = new SkillDO(); skill.setSkillId(20L); skill.setPublisherId(30L);
+        skill.setStatus("ACTIVE");
         skill.setCurrentVersionId(40L); skill.setPublicRevisionId(50L);
-        version = new SkillVersionDO(); version.setSkillId(20L); version.setArtifactId(60L); version.setStatus("AVAILABLE");
+        version = new SkillVersionDO(); version.setSkillId(20L); version.setArtifactId(60L);
+        version.setStatus("AVAILABLE");
+        version.setVersionType("RELEASE");
+        version.setReleaseNumber(1);
+        version.setDraftNumber(0);
         artifact = new SkillArtifactDO(); artifact.setOwnerUserId(9L); artifact.setStatus("READY");
         when(resources.lockPublisher(30L)).thenReturn(publisher); when(resources.lockSkill(20L)).thenReturn(skill);
         when(resources.lockVersion(40L)).thenReturn(version); when(resources.lockArtifact(60L)).thenReturn(artifact);
@@ -64,13 +71,15 @@ class SkillCommentAccessPolicyTest {
     }
     @Test void everyLifecycleLayerAndRelationshipIsRechecked() {
         var locked = new SkillCommentAccessPolicy.LockedAccounts(ref, true);
-        publisher.setStatus("CLOSED"); assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
+        publisher.setStatus("CLOSED");
+        assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
         publisher.setStatus("ACTIVE"); publisher.setUserId(8L);
         assertThrows(ClientException.class, () -> policy.lockAvailable(locked)); publisher.setUserId(9L);
         when(resources.lockPublisher(30L)).thenReturn(null);
         assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
         when(resources.lockPublisher(30L)).thenReturn(publisher);
-        skill.setStatus("OWNER_UNPUBLISHED"); assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
+        skill.setStatus("OWNER_UNPUBLISHED");
+        assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
         skill.setStatus("ACTIVE"); skill.setPublisherId(99L);
         assertThrows(ClientException.class, () -> policy.lockAvailable(locked)); skill.setPublisherId(30L);
         skill.setCurrentVersionId(null); assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
@@ -78,12 +87,18 @@ class SkillCommentAccessPolicyTest {
         assertThrows(ClientException.class, () -> policy.lockAvailable(locked)); skill.setPublicRevisionId(50L);
         when(resources.lockSkill(20L)).thenReturn(null);
         assertThrows(ClientException.class, () -> policy.lockAvailable(locked)); when(resources.lockSkill(20L)).thenReturn(skill);
-        version.setStatus("BLOCKED"); assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
-        version.setStatus("AVAILABLE"); version.setSkillId(99L);
+        version.setStatus("BLOCKED");
+        assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
+        version.setStatus("AVAILABLE");
+        version.setVersionType("RELEASE");
+        version.setReleaseNumber(1);
+        version.setDraftNumber(0);
+        version.setSkillId(99L);
         assertThrows(ClientException.class, () -> policy.lockAvailable(locked)); version.setSkillId(20L);
         when(resources.lockVersion(40L)).thenReturn(null);
         assertThrows(ClientException.class, () -> policy.lockAvailable(locked)); when(resources.lockVersion(40L)).thenReturn(version);
-        artifact.setStatus("DELETED"); assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
+        artifact.setStatus("DELETED");
+        assertThrows(ClientException.class, () -> policy.lockAvailable(locked));
         artifact.setStatus("READY"); artifact.setOwnerUserId(99L);
         assertThrows(ClientException.class, () -> policy.lockAvailable(locked)); artifact.setOwnerUserId(9L);
         when(resources.lockArtifact(60L)).thenReturn(null);

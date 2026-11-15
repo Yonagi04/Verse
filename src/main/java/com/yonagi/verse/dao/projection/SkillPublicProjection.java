@@ -2,6 +2,7 @@ package com.yonagi.verse.dao.projection;
 
 import lombok.Getter;
 import lombok.Setter;
+
 import java.time.LocalDateTime;
 
 /** 公开查询的定列投影，只由查询Service转成HTTP模型。 */
@@ -10,6 +11,7 @@ import java.time.LocalDateTime;
 public class SkillPublicProjection {
     private Long skillId;
     private Long publisherId;
+    private Long ownerUserId;
     private String handle;
     private String publicName;
     private String slug;

@@ -1,11 +1,13 @@
 package com.yonagi.verse.common.cache;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.ClassPathScanningCandidateComponentProvider;
 import org.springframework.core.type.filter.AnnotationTypeFilter;
 import org.springframework.web.bind.annotation.*;
+
 import java.util.*;
-import static org.junit.jupiter.api.Assertions.*;
 
 /** 所有 GET 必须显式分类，新增核心接口不能静默遗漏缓存策略。 */
 class QueryCatalogueCoverageTest {
@@ -17,26 +19,46 @@ class QueryCatalogueCoverageTest {
         add("/api/v1/tenants", "TenantCrudServiceImpl.listTenants");
         add("/api/v1/tenants/{tenantId}/info", "TenantCrudServiceImpl.getTenantInfo");
         add("/api/v1/tenants/{tenantId}/settings", "TenantSettingsServiceImpl.getSettings");
-        add("/api/v1/tenants/{tenantId}/activities/status", "TenantActivityQueryServiceImpl.getStatus");
-        add("/api/v1/tenants/{tenantId}/activities", "TenantActivityQueryServiceImpl.listActivities");
+        add(
+                "/api/v1/tenants/{tenantId}/activities/status",
+                "TenantActivityQueryServiceImpl.getStatus");
+        add(
+                "/api/v1/tenants/{tenantId}/activities",
+                "TenantActivityQueryServiceImpl.listActivities");
         add("/api/v1/api-keys/{tenantId}/list", "ApiKeyServiceImpl.listApiKeys");
-        add("/api/v1/tenants/invites/{inviteCode}/info", "TenantInviteServiceImpl.getTenantAndInviteCodeInfo");
+        add(
+                "/api/v1/tenants/invites/{inviteCode}/info",
+                "TenantInviteServiceImpl.getTenantAndInviteCodeInfo");
         add("/api/v1/tenants/{tenantId}/members", "TenantMembershipServiceImpl.listTenantMembers");
-        add("/api/v1/tenants/{tenantId}/join-requests", "TenantApprovalServiceImpl.listJoinRequests");
-        add("/api/v1/tenants/{tenantId}/join-requests/unreviewed-count", "TenantApprovalServiceImpl.getUnreviewedJoinReqCount");
+        add(
+                "/api/v1/tenants/{tenantId}/join-requests",
+                "TenantApprovalServiceImpl.listJoinRequests");
+        add(
+                "/api/v1/tenants/{tenantId}/join-requests/unreviewed-count",
+                "TenantApprovalServiceImpl.getUnreviewedJoinReqCount");
         add("/api/v1/tenants/overview", "TenantOverviewServiceImpl.batch");
         add("/api/v1/tenants/{tenantId}/overview", "TenantOverviewServiceImpl.detail");
         add("/api/v1/llm-service/{tenantId}/list", "LlmManageServiceImpl.listLlmService");
         add("/api/v1/llm-service/tags", "LlmManageServiceImpl.listTags");
         add("/api/v1/llm-service/{tenantId}/info/{serviceId}", "LlmManageServiceImpl.getLlmInfo");
-        add("/api/v1/llm-service/{tenantId}/get-llm-count", "LlmManageServiceImpl.getLlmServiceCount");
+        add(
+                "/api/v1/llm-service/{tenantId}/get-llm-count",
+                "LlmManageServiceImpl.getLlmServiceCount");
         add("/api/v1/notifications", "NotificationServiceImpl.getNotificationList");
-        add("/api/v1/notifications/unread-count", "NotificationServiceImpl.getUnreadNotificationCount");
+        add(
+                "/api/v1/notifications/unread-count",
+                "NotificationServiceImpl.getUnreadNotificationCount");
         add("/api/v1/notifications/recent", "NotificationServiceImpl.getRecentNotifications");
         add("/api/v1/tenants/{tenantId}/playground/models", "PlaygroundServiceImpl.models");
-        add("/api/v1/tenants/{tenantId}/playground/workbench/models", "PlaygroundWorkbenchServiceImpl.models");
-        add("/api/v1/tenants/{tenantId}/playground/workbench/{kind:groups|presets}", "PlaygroundWorkbenchServiceImpl.list");
-        add("/api/v1/tenants/{tenantId}/playground/workbench/{kind:groups|presets}/{id}", "PlaygroundWorkbenchServiceImpl.detail");
+        add(
+                "/api/v1/tenants/{tenantId}/playground/workbench/models",
+                "PlaygroundWorkbenchServiceImpl.models");
+        add(
+                "/api/v1/tenants/{tenantId}/playground/workbench/{kind:groups|presets}",
+                "PlaygroundWorkbenchServiceImpl.list");
+        add(
+                "/api/v1/tenants/{tenantId}/playground/workbench/{kind:groups|presets}/{id}",
+                "PlaygroundWorkbenchServiceImpl.detail");
         add("/api/v1/openai/models", "LlmForwardServiceImpl.listModels");
         add("/api/v1/audit/{tenantId}/list", "LlmAuditServiceImpl.listAudit");
         add("/api/v1/audit/{tenantId}/detail/{auditId}", "LlmAuditServiceImpl.getAuditDetail");
@@ -47,42 +69,70 @@ class QueryCatalogueCoverageTest {
         add("/api/v1/usage/{tenantId}/filters", "UsageReportServiceImpl.filterOptions");
     }
     private static void add(String path, String policy) { CORE.put(path, policy); }
-    private static final Set<String> EXCEPTIONS = Set.of(
-            "/api/v1/users/hasUsername", "/api/v1/users/logout", "/api/v1/users/account/cancel/prepare",
-            "/api/v1/users/me/devices", "/api/v1/users/me/external-accounts", "/api/v1/auth/external/providers",
-            // 本人高基数短查询和实时联系方式准备度，首版不缓存。
-            "/api/v1/users/me/cost-alert", "/api/v1/users/me/activity-calendar",
-            // Skill公开状态/账号、私人任务及短效能力必须实时；词表低成本，不引入查询缓存。
-            "/api/v1/skills", "/api/v1/skills/options", "/api/v1/skills/lookup",
-            "/api/v1/skills/{skillId:[0-9]+}", "/api/v1/skills/downloads/{token:[a-f0-9]{64}}",
-            // 文件清单和正文复用实时版本授权，内容有界且不跨请求缓存。
-            "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/files",
-            "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/files/content",
-            // 评论读取实时权限与本人反应状态；有界分页结果不缓存。
-            "/api/v1/skills/{skillId:[0-9]+}/comments",
-            "/api/v1/skills/{skillId:[0-9]+}/comments/{rootId}/replies",
-            "/api/v1/skills/me/publications",
-            "/api/v1/skills/drafts/{draftId:[0-9]+}", "/api/v1/skills/imports/{jobId:[0-9]+}",
-            // 私人快照清单按账号/当前制品实时校验，有界分页不缓存。
-            "/api/v1/skills/drafts/{draftId:[0-9]+}/files",
-            "/api/v1/skills/imports/{jobId:[0-9]+}/candidates",
-            "/api/v1/skills/submissions/{submissionId:[0-9]+}",
-            "/api/v1/auth/external/callback/{provider}", "/api/v1/auth/external/flows/{id}",
-            "/api/v1/tenants/{tenantId}/playground/status", "/api/v1/tenants/{tenantId}/playground/prompts",
-            "/api/v1/tenants/{tenantId}/playground/sessions", "/api/v1/tenants/{tenantId}/playground/sessions/{sessionId}",
-            "/api/v1/notifications/{notificationId}",
-            // 邀请自然过期需要实时筛选；只查当前页，不缓存整个租户候选集合。
-            "/api/v1/tenants/{tenantId}/invites",
-            // 实时成本快照参与熔断判断，不允许通过查询缓存返回旧状态。
-            "/api/v1/api-keys/{tenantId}/{apiKeyId}/cost-status",
-            "/api/v1/llm-services/{serviceId}/cost-status",
-            "/api/v1/llm-services/cost-status",
-            "/api/v1/tenants/{tenantId}/cost-status",
-            "/api/v1/tenants/{tenantId}/cost-notification-readiness",
-            "/api/v1/cost-reconciliation-batches/{batchCode}/cases",
-            "/api/v1/cost-reconciliation-batches/{batchCode}/cases/{caseId}",
-            "/api/v1/llm-services/cost-notification-readiness",
-            "/api/v1/usage/{tenantId}/export");
+
+    private static final Set<String> EXCEPTIONS =
+            Set.of(
+                    "/api/v1/users/hasUsername",
+                    "/api/v1/users/logout",
+                    "/api/v1/users/account/cancel/prepare",
+                    "/api/v1/users/me/devices",
+                    "/api/v1/users/me/external-accounts",
+                    "/api/v1/auth/external/providers",
+                    // 本人高基数短查询和实时联系方式准备度，首版不缓存。
+                    "/api/v1/users/me/cost-alert",
+                    "/api/v1/users/me/activity-calendar",
+                    // Skill公开状态/账号、私人任务及短效能力必须实时；词表低成本，不引入查询缓存。
+                    "/api/v1/skills",
+                    "/api/v1/skills/options",
+                    "/api/v1/skills/lookup",
+                    "/api/v1/skills/{skillId:[0-9]+}",
+                    "/api/v1/skills/downloads/{token:[a-f0-9]{64}}",
+                    // 文件清单和正文复用实时版本授权，内容有界且不跨请求缓存。
+                    "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/files",
+                    "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/files/content",
+                    // 私人版本/确认/正文按账号及修订实时授权，有界且低复用，首期不缓存。
+                    "/api/v1/skills/{skillId:[0-9]+}/versions",
+                    "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}",
+                    "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/changes",
+                    "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/comparison",
+                    "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/history-files",
+                    "/api/v1/skills/{skillId:[0-9]+}/versions/{versionId:[0-9]+}/history-files/content",
+                    "/api/v1/skills/{skillId:[0-9]+}/workspace",
+                    "/api/v1/skills/{skillId:[0-9]+}/workspace/changes",
+                    "/api/v1/skills/{skillId:[0-9]+}/workspace/comparison",
+                    "/api/v1/skills/{skillId:[0-9]+}/workspace/files",
+                    "/api/v1/skills/{skillId:[0-9]+}/workspace/files/content",
+                    "/api/v1/skills/{skillId:[0-9]+}/workspace/publication-preview",
+                    "/api/v1/skills/{skillId:[0-9]+}/publication-results/{publishKey}",
+                    // 评论读取实时权限与本人反应状态；有界分页结果不缓存。
+                    "/api/v1/skills/{skillId:[0-9]+}/comments",
+                    "/api/v1/skills/{skillId:[0-9]+}/comments/{rootId}/replies",
+                    "/api/v1/skills/me/publications",
+                    "/api/v1/skills/drafts/{draftId:[0-9]+}",
+                    "/api/v1/skills/imports/{jobId:[0-9]+}",
+                    // 私人快照清单按账号/当前制品实时校验，有界分页不缓存。
+                    "/api/v1/skills/drafts/{draftId:[0-9]+}/files",
+                    "/api/v1/skills/imports/{jobId:[0-9]+}/candidates",
+                    "/api/v1/skills/submissions/{submissionId:[0-9]+}",
+                    "/api/v1/auth/external/callback/{provider}",
+                    "/api/v1/auth/external/flows/{id}",
+                    "/api/v1/tenants/{tenantId}/playground/status",
+                    "/api/v1/tenants/{tenantId}/playground/prompts",
+                    "/api/v1/tenants/{tenantId}/playground/sessions",
+                    "/api/v1/tenants/{tenantId}/playground/sessions/{sessionId}",
+                    "/api/v1/notifications/{notificationId}",
+                    // 邀请自然过期需要实时筛选；只查当前页，不缓存整个租户候选集合。
+                    "/api/v1/tenants/{tenantId}/invites",
+                    // 实时成本快照参与熔断判断，不允许通过查询缓存返回旧状态。
+                    "/api/v1/api-keys/{tenantId}/{apiKeyId}/cost-status",
+                    "/api/v1/llm-services/{serviceId}/cost-status",
+                    "/api/v1/llm-services/cost-status",
+                    "/api/v1/tenants/{tenantId}/cost-status",
+                    "/api/v1/tenants/{tenantId}/cost-notification-readiness",
+                    "/api/v1/cost-reconciliation-batches/{batchCode}/cases",
+                    "/api/v1/cost-reconciliation-batches/{batchCode}/cases/{caseId}",
+                    "/api/v1/llm-services/cost-notification-readiness",
+                    "/api/v1/usage/{tenantId}/export");
 
     @Test void everyCoreGetHasPolicyAndEveryGetIsClassified() throws Exception {
         var scanner = new ClassPathScanningCandidateComponentProvider(false);
@@ -106,8 +156,11 @@ class QueryCatalogueCoverageTest {
             assertTrue(catalogue.policies().values().stream().anyMatch(policy -> policy.name().equals(entry)), entry);
         }
         var pointcut = new org.springframework.aop.aspectj.AspectJExpressionPointcut();
-        pointcut.setExpression(CoreQueryCacheAspect.class.getMethod("query", org.aspectj.lang.ProceedingJoinPoint.class)
-                .getAnnotation(org.aspectj.lang.annotation.Around.class).value());
+        pointcut.setExpression(
+                CoreQueryCacheAspect.class
+                        .getMethod("query", org.aspectj.lang.ProceedingJoinPoint.class)
+                        .getAnnotation(org.aspectj.lang.annotation.Around.class)
+                        .value());
         for (var entry : catalogue.policies().entrySet()) {
             var method = entry.getKey();
             var policy = entry.getValue();
