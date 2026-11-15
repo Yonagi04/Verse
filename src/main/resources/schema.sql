@@ -1401,24 +1401,6 @@ CREATE TABLE IF NOT EXISTS t_cost_reconciliation_scan (
 INSERT INTO t_cost_reconciliation_scan (state, generation) VALUES ('ACTIVATION', 0)
 ON DUPLICATE KEY UPDATE id=id;
 
-CREATE TABLE IF NOT EXISTS t_cost_reconciliation_work (
-    id BIGINT NOT NULL AUTO_INCREMENT COMMENT '恢复工作主键',
-    request_id VARCHAR(64) NOT NULL COMMENT '原调用标识',
-    tenant_id BIGINT NOT NULL COMMENT '原调用租户',
-    user_id BIGINT NOT NULL COMMENT '原调用用户',
-    generation BIGINT NOT NULL COMMENT '登记时的启用代次',
-    next_action_at DATETIME(6) NOT NULL COMMENT '下次检查或认领过期时间',
-    scan_id BIGINT NULL COMMENT '尚未完成首次分类的扫描轮次',
-    claim_version BIGINT NOT NULL DEFAULT 0 COMMENT '认领版本',
-    auto_queued TINYINT NOT NULL DEFAULT 0 COMMENT '首次分类结束并已可靠提交自动工作',
-    pending_confirmed TINYINT NOT NULL DEFAULT 0 COMMENT '暂存确认费用待应用',
-    request_started_at DATETIME(6) NOT NULL COMMENT '原调用开始时间',
-    PRIMARY KEY (id),
-    UNIQUE KEY uk_reconciliation_work_request (request_id),
-    KEY idx_reconciliation_work_due (generation, scan_id, auto_queued, next_action_at, id),
-    KEY idx_reconciliation_work_confirmed (tenant_id, pending_confirmed, request_started_at, id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='自动对账工作队列';
-
 CREATE TABLE IF NOT EXISTS t_cost_reconciliation_attempt (
     id BIGINT NOT NULL AUTO_INCREMENT COMMENT '物理尝试标识',
     request_id VARCHAR(64) NOT NULL COMMENT '原调用标识',
