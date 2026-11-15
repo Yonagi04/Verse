@@ -1,9 +1,9 @@
 package com.yonagi.verse.service.skillhub;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.yonagi.verse.common.enums.SkillArtifactStatusEnum;
 import com.yonagi.verse.common.enums.SkillDraftStatusEnum;
 import com.yonagi.verse.common.enums.SkillImportTaskStatusEnum;
-import com.yonagi.verse.common.enums.SkillArtifactStatusEnum;
 import com.yonagi.verse.dao.entity.skillhub.SkillArtifactDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillArtifactFileDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillDraftDO;
@@ -13,9 +13,12 @@ import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillCleanupMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Set;
@@ -46,11 +49,21 @@ public class SkillArtifactCleanupService {
                 || cleanupMapper.selectArtifactReferenced(artifactId)) {
             return null;
         }
-        int changed = artifactMapper.update(null, Wrappers.lambdaUpdate(SkillArtifactDO.class)
-                .eq(SkillArtifactDO::getArtifactId, artifactId)
-                .in(SkillArtifactDO::getStatus, "READY", SkillArtifactStatusEnum.DELETE_PENDING.name())
-                .set(SkillArtifactDO::getStatus, SkillArtifactStatusEnum.DELETE_PENDING.name())
-                .set(SkillArtifactDO::getUpdateTime, LocalDateTime.now(ZoneOffset.UTC)));
+        int changed =
+                artifactMapper.update(
+                        null,
+                        Wrappers.lambdaUpdate(SkillArtifactDO.class)
+                                .eq(SkillArtifactDO::getArtifactId, artifactId)
+                                .in(
+                                        SkillArtifactDO::getStatus,
+                                        "READY",
+                                        SkillArtifactStatusEnum.DELETE_PENDING.name())
+                                .set(
+                                        SkillArtifactDO::getStatus,
+                                        SkillArtifactStatusEnum.DELETE_PENDING.name())
+                                .set(
+                                        SkillArtifactDO::getUpdateTime,
+                                        LocalDateTime.now(ZoneOffset.UTC)));
         return changed == 1 ? artifact.getArchiveKey() : null;
     }
 
@@ -60,12 +73,23 @@ public class SkillArtifactCleanupService {
      */
     @Transactional(rollbackFor = Exception.class)
     public void artifactDeleted(Long artifactId, String key) {
-        int changed = artifactMapper.update(null, Wrappers.lambdaUpdate(SkillArtifactDO.class)
-                .eq(SkillArtifactDO::getArtifactId, artifactId).eq(SkillArtifactDO::getArchiveKey, key)
-                .eq(SkillArtifactDO::getStatus, SkillArtifactStatusEnum.DELETE_PENDING.name())
-                .set(SkillArtifactDO::getStatus, SkillArtifactStatusEnum.DELETED.name())
-                .set(SkillArtifactDO::getSkillMarkdown, "").set(SkillArtifactDO::getManifestJson, "{}")
-                .set(SkillArtifactDO::getUpdateTime, LocalDateTime.now(ZoneOffset.UTC)));
+        int changed =
+                artifactMapper.update(
+                        null,
+                        Wrappers.lambdaUpdate(SkillArtifactDO.class)
+                                .eq(SkillArtifactDO::getArtifactId, artifactId)
+                                .eq(SkillArtifactDO::getArchiveKey, key)
+                                .eq(
+                                        SkillArtifactDO::getStatus,
+                                        SkillArtifactStatusEnum.DELETE_PENDING.name())
+                                .set(
+                                        SkillArtifactDO::getStatus,
+                                        SkillArtifactStatusEnum.DELETED.name())
+                                .set(SkillArtifactDO::getSkillMarkdown, "")
+                                .set(SkillArtifactDO::getManifestJson, "{}")
+                                .set(
+                                        SkillArtifactDO::getUpdateTime,
+                                        LocalDateTime.now(ZoneOffset.UTC)));
         if (changed == 1) {
             fileMapper.delete(Wrappers.lambdaQuery(SkillArtifactFileDO.class)
                     .eq(SkillArtifactFileDO::getArtifactId, artifactId));
@@ -102,13 +126,34 @@ public class SkillArtifactCleanupService {
      * @param userId 已冻结注销账号；只抹除未提交表单，不改已批准版本事实
      */
     public void eraseClosedDrafts(Long userId) {
-        draftMapper.update(null, Wrappers.lambdaUpdate(SkillDraftDO.class)
-                .eq(SkillDraftDO::getOwnerUserId, userId)
-                .in(SkillDraftDO::getStatus, SkillDraftStatusEnum.CANCELLED.name(), SkillDraftStatusEnum.EXPIRED.name())
-                .and(fields -> fields.isNotNull(SkillDraftDO::getMetadataJson)
-                        .or().isNotNull(SkillDraftDO::getArtifactId).or().isNotNull(SkillDraftDO::getVersionLabel))
-                .set(SkillDraftDO::getMetadataJson, null).set(SkillDraftDO::getVersionLabel, null)
-                .set(SkillDraftDO::getArtifactId, null).last(CLEANUP_BATCH_LIMIT));
+        draftMapper.update(
+                null,
+                Wrappers.lambdaUpdate(SkillDraftDO.class)
+                        .eq(SkillDraftDO::getOwnerUserId, userId)
+                        .in(
+                                SkillDraftDO::getStatus,
+                                SkillDraftStatusEnum.CANCELLED.name(),
+                                SkillDraftStatusEnum.EXPIRED.name())
+                        .and(
+                                fields ->
+                                        fields.isNotNull(SkillDraftDO::getMetadataJson)
+                                                .or()
+                                                .isNotNull(SkillDraftDO::getArtifactId)
+                                                .or()
+                                                .isNotNull(SkillDraftDO::getVersionLabel)
+                                                .or()
+                                                .isNotNull(SkillDraftDO::getReleaseNotes)
+                                                .or()
+                                                .isNotNull(SkillDraftDO::getSourceVersionId)
+                                                .or()
+                                                .isNotNull(SkillDraftDO::getBaseSkillRevision))
+                        .set(SkillDraftDO::getMetadataJson, null)
+                        .set(SkillDraftDO::getVersionLabel, null)
+                        .set(SkillDraftDO::getArtifactId, null)
+                        .set(SkillDraftDO::getReleaseNotes, null)
+                        .set(SkillDraftDO::getSourceVersionId, null)
+                        .set(SkillDraftDO::getBaseSkillRevision, null)
+                        .last(CLEANUP_BATCH_LIMIT));
     }
 
     /**
