@@ -19,6 +19,10 @@ import com.yonagi.verse.dto.req.*;
 import com.yonagi.verse.dto.resp.LlmCostStatusRespDTO;
 import com.yonagi.verse.service.pricing.*;
 import com.yonagi.verse.service.tenant.TenantAccessPolicy;
+import com.yonagi.verse.service.messaging.MessageSendEligibility;
+import com.yonagi.verse.service.messaging.SendAttemptContext;
+import com.yonagi.verse.service.messaging.SendRecordStore;
+import com.yonagi.verse.dto.resp.MessageSubmissionRespDTO;
 import com.yonagi.verse.support.MySqlTestDatabase;
 import org.junit.jupiter.api.*;
 import org.mybatis.spring.SqlSessionTemplate;
@@ -51,6 +55,9 @@ class LlmCostBudgetMySqlIntegrationTest {
     private LlmCostBudgetLedger ledger;
     private LlmCostBudgetConfigurationService config;
     private CostAlertDeliveryGuard guard;
+    private final SendRecordStore guardRecords = mock(SendRecordStore.class);
+    private final SendAttemptContext emailAttempt =
+            new SendAttemptContext(MessageChannel.EMAIL, 1L, "fixture", 1, "same-email");
     private BudgetPeriodResolver time;
     private ReliableDomainEventPublisher publisher;
     private PricingConfigurationService pricing;
@@ -93,7 +100,8 @@ class LlmCostBudgetMySqlIntegrationTest {
         pricing = new PricingConfigurationService(map(LlmServicePricingMapper.class), map(LlmPricingPeakPeriodMapper.class), map(LlmServiceMapper.class), mock(PricingResolver.class));
         config = new LlmCostBudgetConfigurationService(map(LlmCostBudgetMapper.class), map(LlmServiceMapper.class), pricing,
                 new TenantAccessPolicy(map(TenantMapper.class), map(UserTenantMapper.class)), ledger, time, map(UserMapper.class));
-        guard = new CostAlertDeliveryGuard(ledger, mock(TenantCostBudgetLedger.class), map(TenantMapper.class), map(LlmCostAlertEventMapper.class), map(LlmCostAlertDeliveryMapper.class), map(UserMapper.class), time);
+        guard = new CostAlertDeliveryGuard(ledger, mock(TenantCostBudgetLedger.class), map(TenantMapper.class), map(LlmCostAlertEventMapper.class), map(LlmCostAlertDeliveryMapper.class), map(UserMapper.class), guardRecords, time);
+        when(guardRecords.lockAttempt(anyString(), anyString(), anyLong(), anyLong(), any())).thenReturn(true);
         jdbc.update("INSERT INTO t_user(user_id,username,nickname,password,email,email_hash) VALUES (1,'owner','管理员','test','encrypted','same-email'),(4,'member','成员','test','encrypted','same-email'),(5,'admin','管理员2','test','encrypted','same-email')");
         jdbc.update("INSERT INTO t_tenant(tenant_id,name,type,owner_id,activity_recording_enabled) VALUES(2,'测试团队','TEAM',1,1)");
         jdbc.update("INSERT INTO t_user_tenant(user_id,tenant_id,role) VALUES(1,2,'SUPER_ADMIN'),(4,2,'MEMBER'),(5,2,'ADMIN')");
@@ -354,11 +362,11 @@ class LlmCostBudgetMySqlIntegrationTest {
     @Test void sendingRechecksContactAndDisablingBudgetCancelsPending() throws Exception {
         budget(10,"1",null); call("limit",10L,playground,"1");
         var email=jdbc.queryForObject("SELECT request_id FROM t_llm_cost_alert_delivery WHERE channel='EMAIL' AND status='PENDING'",String.class);
-        assertNull(tx.execute(ignored -> guard.verify("LLM_COST_LIMIT",email)));
+        assertNull(tx.execute(ignored -> guard.verify("LLM_COST_LIMIT",email,emailAttempt)));
         jdbc.update("UPDATE t_user SET email_hash='new-contact' WHERE user_id=1");
-        assertEquals(MessageSubmissionStatus.CANCELLED,tx.execute(ignored -> guard.verify("LLM_COST_LIMIT",email)).status());
+        assertEquals(MessageSubmissionStatus.CANCELLED,tx.execute(ignored -> guard.verify("LLM_COST_LIMIT",email,emailAttempt)).status());
         jdbc.update("UPDATE t_llm_cost_budget SET cost_limit_enabled=0 WHERE service_id=10");
-        assertEquals("BUDGET_DISABLED",tx.execute(ignored -> guard.verify("LLM_COST_LIMIT",email)).errorCode());
+        assertEquals("BUDGET_DISABLED",tx.execute(ignored -> guard.verify("LLM_COST_LIMIT",email,emailAttempt)).errorCode());
         jdbc.update("UPDATE t_llm_cost_budget SET cost_limit_enabled=1 WHERE service_id=10");
         tx.executeWithoutResult(ignored -> ledger.capture(ledger.lock(2L,10L)));
         assertEquals(1,count("t_llm_cost_alert_event"));
@@ -370,7 +378,7 @@ class LlmCostBudgetMySqlIntegrationTest {
         jdbc.update("UPDATE t_llm_cost_alert_delivery SET status='CLAIMED',execution_token='fixture',lease_until=? WHERE request_id=?",time.local(now).plusSeconds(30),claimed);
         call("limit-after-warning",10L,playground,"0.5");
         assertEquals("CLAIMED",jdbc.queryForObject("SELECT status FROM t_llm_cost_alert_delivery WHERE request_id=?",String.class,claimed));
-        var denied=tx.execute(ignored -> guard.verify("LLM_COST_WARNING",claimed));
+        var denied=tx.execute(ignored -> guard.verify("LLM_COST_WARNING",claimed,emailAttempt));
         assertEquals(MessageSubmissionStatus.CANCELLED,denied.status()); assertEquals("STATE_CHANGED",denied.errorCode());
         assertEquals(3,jdbc.queryForObject("SELECT COUNT(*) FROM t_llm_cost_alert_delivery d JOIN t_llm_cost_alert_event e ON e.event_id=d.event_id WHERE e.event_type='WARNING' AND d.channel='IN_APP' AND d.status='CANCELLED'",Integer.class));
     }
@@ -395,19 +403,22 @@ class LlmCostBudgetMySqlIntegrationTest {
     }
     @Test void deliveryCreatesOneAnnouncementAndSystemEventAndMirrorsOneExternalSend() throws Exception {
         var key=Base64.getEncoder().encodeToString(new byte[32]); var aes=new com.yonagi.verse.common.util.AesUtil(key,key);
-        jdbc.update("UPDATE t_user SET email=?",aes.encrypt("admin@example.test"));
+        jdbc.update("UPDATE t_user SET email=?,email_hash=?",aes.encrypt("admin@example.test"),aes.hashForLookup("admin@example.test"));
         budget(10,"1",null); call("dispatch",10L,playground,"1");
         jdbc.update("UPDATE t_tenant SET activity_recording_enabled=0 WHERE tenant_id=2");
         var settings=new com.yonagi.verse.common.config.MessagingProperties(); settings.getEmail().setProvider("mailpit");
         var metrics=new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
         var records=new com.yonagi.verse.service.messaging.SendRecordStore(map(SmsSendRecordMapper.class),map(EmailSendRecordMapper.class),aes,manager);
+        CostAlertDeliveryGuard sendingGuard = new CostAlertDeliveryGuard(ledger, mock(TenantCostBudgetLedger.class),
+                map(TenantMapper.class), map(LlmCostAlertEventMapper.class), map(LlmCostAlertDeliveryMapper.class),
+                map(UserMapper.class), records, time);
         var emailProvider=mock(com.yonagi.verse.common.messaging.provider.EmailProvider.class);
         var smsProvider=mock(com.yonagi.verse.common.messaging.provider.SmsProvider.class);
         when(emailProvider.name()).thenReturn("fixture"); when(smsProvider.name()).thenReturn("fixture");
         when(emailProvider.send(any())).thenReturn(com.yonagi.verse.dto.resp.MessageSubmissionRespDTO.accepted("r","m"));
         var notification=new com.yonagi.verse.service.notification.NotificationCreationService(map(NotificationMapper.class),map(NotificationRecipientMapper.class),mock(org.springframework.messaging.simp.SimpMessagingTemplate.class));
         var activities=mock(com.yonagi.verse.async.activity.TenantActivityRecorder.class);
-        var delivery=new LlmCostAlertDeliveryService(map(LlmCostAlertEventMapper.class),map(LlmCostAlertDeliveryMapper.class),ledger,guard,
+        var delivery=new LlmCostAlertDeliveryService(map(LlmCostAlertEventMapper.class),map(LlmCostAlertDeliveryMapper.class),ledger,sendingGuard,
                 notification,activities,new com.yonagi.verse.service.messaging.SmsSendService(smsProvider,records,metrics,settings),
                 new com.yonagi.verse.service.messaging.EmailSendService(emailProvider,records,metrics,settings),map(SmsSendRecordMapper.class),map(EmailSendRecordMapper.class),settings,aes,time,metrics,manager);
         // 手工构造不会触发 Spring 的 @Value 注入，邮件管理链接仍需要受信前端地址。
@@ -418,7 +429,17 @@ class LlmCostBudgetMySqlIntegrationTest {
         verify(emailProvider,never()).send(any()); verify(activities,times(1)).recordSystemSnapshot(any());
         var worker=new com.yonagi.verse.async.messaging.MessageDeliveryWorker(records,smsProvider,emailProvider,
                 mock(com.yonagi.verse.service.messaging.VerificationCodeStore.class),settings,metrics);
-        worker.setEligibility(List.of((scene,id) -> tx.execute(ignored -> guard.verify(scene,id))));
+        worker.setEligibility(List.of(new MessageSendEligibility() {
+            @Override
+            public MessageSubmissionRespDTO verify(String scene, String requestId) {
+                return sendingGuard.verify(scene, requestId);
+            }
+
+            @Override
+            public MessageSubmissionRespDTO verify(String scene, String requestId, SendAttemptContext attempt) {
+                return tx.execute(ignored -> sendingGuard.verify(scene, requestId, attempt));
+            }
+        }));
         worker.execute(MessageChannel.EMAIL,jdbc.queryForObject("SELECT id FROM t_email_send_record",Long.class));
         delivery.scan(); delivery.scan();
         assertEquals("ACCEPTED",jdbc.queryForObject("SELECT status FROM t_llm_cost_alert_delivery WHERE channel='EMAIL' AND canonical_delivery_id IS NULL AND recipient_user_id=1",String.class));
