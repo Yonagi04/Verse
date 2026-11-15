@@ -11,7 +11,9 @@ import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillPublisherMapper;
 import com.yonagi.verse.service.user.AccountAvailabilityService;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +26,20 @@ public class SkillAccessPolicy {
     private final SkillPublisherMapper publisherMapper;
     private final SkillMapper skillMapper;
     private final SkillDraftMapper draftMapper;
+
+    /**
+     * @return 实时账号归属校验后的Skill，不接受租户管理员替代所有者
+     */
+    public SkillOwnedResource readSkill(Long userId, Long skillId) {
+        if (!accountAvailabilityService.isAccountActive(userId)) {
+            throw new ClientException(SkillErrorCodeEnum.NOT_ACCESSIBLE);
+        }
+        SkillDO skill = skillMapper.selectById(skillId);
+        SkillPublisherDO publisher =
+                skill == null ? null : publisherMapper.selectById(skill.getPublisherId());
+        verifyPublisher(userId, publisher);
+        return new SkillOwnedResource(publisher, skill);
+    }
 
     /**
      * @param userId 可信账号

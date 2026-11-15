@@ -1073,6 +1073,8 @@ CREATE TABLE IF NOT EXISTS t_skill (
     slug VARCHAR(64) NOT NULL COMMENT '同作者下唯一且发布后固定的标识',
     status VARCHAR(24) NOT NULL COMMENT 'DRAFT、ACTIVE、OWNER_UNPUBLISHED或PLATFORM_DISABLED',
     current_version_id BIGINT NULL COMMENT '当前已批准版本指针',
+    creation_version_id BIGINT NULL COMMENT '首次正式版，固定创建来源',
+    version_sequence BIGINT NOT NULL DEFAULT 0 COMMENT '已成功发布的节点数量',
     public_revision_id BIGINT NULL COMMENT '当前已批准展示修订',
     latest_release_at DATETIME(3) NULL COMMENT '最近内容版本发布时间',
     revision BIGINT NOT NULL COMMENT '生命周期并发修订号',
@@ -1102,6 +1104,9 @@ CREATE TABLE IF NOT EXISTS t_skill_draft (
     owner_user_id BIGINT NOT NULL COMMENT '可信会话确定的所有者',
     artifact_id BIGINT NULL COMMENT '已检查READY制品',
     latest_job_id BIGINT NULL COMMENT '当前选定导入任务',
+    base_skill_revision BIGINT NULL COMMENT '开始准备时的Skill修订',
+    source_version_id BIGINT NULL COMMENT '转正采用的最新草稿节点',
+    release_notes VARCHAR(2000) NULL COMMENT '本次后续更新说明',
     metadata_json TEXT NULL COMMENT '有界且已校验的发布表单快照',
     version_label VARCHAR(64) NULL COMMENT '首版平台SemVer',
     status VARCHAR(24) NOT NULL COMMENT 'EDITING、READY、SUBMITTED、CANCELLED或EXPIRED',
@@ -1168,6 +1173,7 @@ CREATE TABLE IF NOT EXISTS t_skill_artifact (
 
 CREATE TABLE IF NOT EXISTS t_skill_github_source (
     job_id BIGINT NOT NULL COMMENT '所属导入任务，一对一',
+    fetched_at DATETIME(3) NULL COMMENT '实际源包成功获取时间，历史未知为空',
     request_json JSON NULL COMMENT '规范请求，最多8KiB',
     source_options_json JSON NULL COMMENT '最多20个引用解析选项，32KiB',
     confirmed_source_json JSON NULL COMMENT '用户确认的完整SHA和目录，8KiB',
@@ -1200,6 +1206,7 @@ CREATE TABLE IF NOT EXISTS t_skill_submission (
     submission_id BIGINT NOT NULL COMMENT '提交冻结快照标识',
     skill_id BIGINT NOT NULL COMMENT '所属Skill',
     draft_id BIGINT NOT NULL COMMENT '来源草稿',
+    draft_revision BIGINT NULL COMMENT '正式提交实际消费的编辑修订，旧事实未知为空',
     submitted_by BIGINT NOT NULL COMMENT '可信提交账号',
     display_revision_id BIGINT NOT NULL COMMENT '冻结展示修订',
     artifact_id BIGINT NOT NULL COMMENT '冻结制品',
@@ -1210,7 +1217,7 @@ CREATE TABLE IF NOT EXISTS t_skill_submission (
     create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
     update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
     PRIMARY KEY (submission_id),
-    UNIQUE KEY uk_skill_submission_draft (draft_id)
+    UNIQUE KEY uk_skill_submission_revision (draft_id,draft_revision)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Submission';
 
 CREATE TABLE IF NOT EXISTS t_skill_approval (
@@ -1233,8 +1240,21 @@ CREATE TABLE IF NOT EXISTS t_skill_version (
     version_id BIGINT NOT NULL COMMENT '不可变已批准版本标识',
     skill_id BIGINT NOT NULL COMMENT '所属Skill',
     version_label VARCHAR(64) NOT NULL COMMENT '平台SemVer且不可覆盖',
+    version_type VARCHAR(16) NOT NULL COMMENT 'DRAFT私人草稿或RELEASE正式版',
+    release_number INT NOT NULL COMMENT '正式发布轮次，从1开始',
+    draft_number INT NOT NULL COMMENT '草稿序号，正式为0',
+    sequence_number BIGINT NOT NULL COMMENT '同Skill成功发布顺序',
+    display_revision_id BIGINT NOT NULL COMMENT '当时沿用的基础信息修订',
+    source_draft_version_id BIGINT NULL COMMENT '转正采用的草稿节点',
+    diff_base_version_id BIGINT NULL COMMENT '固定比较基准，首版为空',
+    added_count INT NULL COMMENT '新增文件数，旧快照不可恢复时为空',
+    modified_count INT NULL COMMENT '修改文件数，旧快照不可恢复时为空',
+    deleted_count INT NULL COMMENT '删除文件数，旧快照不可恢复时为空',
+    published_by BIGINT NOT NULL COMMENT '实际发布账号',
+    publish_key VARCHAR(36) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '长期发布UUID，旧事实未知为空',
+    publish_request_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NULL COMMENT '固定发布请求摘要',
     artifact_id BIGINT NOT NULL COMMENT '不可变制品',
-    approved_submission_id BIGINT NOT NULL COMMENT '批准并完成发布的提交',
+    approved_submission_id BIGINT NULL COMMENT '批准并完成发布的提交',
     status VARCHAR(24) NOT NULL COMMENT 'AVAILABLE或BLOCKED',
     release_notes VARCHAR(2000) NOT NULL COMMENT '首版更新说明',
     declarations_json TEXT NOT NULL COMMENT '冻结的许可来源依赖声明',
@@ -1242,7 +1262,12 @@ CREATE TABLE IF NOT EXISTS t_skill_version (
     create_time DATETIME(3) NOT NULL COMMENT '创建时间，UTC',
     update_time DATETIME(3) NOT NULL COMMENT '最近变更时间，UTC',
     PRIMARY KEY (version_id),
-    UNIQUE KEY uk_skill_version_label (skill_id,version_label),
+    UNIQUE KEY uk_skill_version_number (skill_id,release_number,draft_number),
+    UNIQUE KEY uk_skill_version_sequence (skill_id,sequence_number),
+    UNIQUE KEY uk_skill_version_publish (published_by,publish_key),
+    CONSTRAINT ck_skill_version_kind CHECK (release_number>0 AND sequence_number>0 AND
+      ((version_type='DRAFT' AND draft_number>0 AND approved_submission_id IS NULL) OR
+       (version_type='RELEASE' AND draft_number=0 AND approved_submission_id IS NOT NULL))),
     UNIQUE KEY uk_skill_version_submission (approved_submission_id),
     KEY idx_skill_version_artifact (artifact_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Skill广场Version';

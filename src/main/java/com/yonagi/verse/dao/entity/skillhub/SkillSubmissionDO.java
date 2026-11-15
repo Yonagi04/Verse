@@ -3,8 +3,10 @@ package com.yonagi.verse.dao.entity.skillhub;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+
 import lombok.Getter;
 import lombok.Setter;
+
 import java.time.LocalDateTime;
 
 /** 提交后冻结的发布快照及处理结果。 */
@@ -19,6 +21,10 @@ public class SkillSubmissionDO {
     private Long skillId;
     /** 来源草稿。 */
     private Long draftId;
+
+    /** 正式提交实际消费的编辑修订，旧事实未知时为空。 */
+    private Long draftRevision;
+
     /** 可信提交账号。 */
     private Long submittedBy;
     /** 冻结展示修订。 */

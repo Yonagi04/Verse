@@ -3,8 +3,10 @@ package com.yonagi.verse.dao.entity.skillhub;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+
 import lombok.Getter;
 import lombok.Setter;
+
 import java.time.LocalDateTime;
 
 /** Skill聚合根及当前公开版本指针，不保存包正文。 */
@@ -23,6 +25,13 @@ public class SkillDO {
     private String status;
     /** 当前已批准版本指针。 */
     private Long currentVersionId;
+
+    /** 首次正式版本，固定创建来源。 */
+    private Long creationVersionId;
+
+    /** 已成功发布的节点数量。 */
+    private Long versionSequence;
+
     /** 当前已批准展示修订。 */
     private Long publicRevisionId;
     /** 最近内容版本发布时间。 */

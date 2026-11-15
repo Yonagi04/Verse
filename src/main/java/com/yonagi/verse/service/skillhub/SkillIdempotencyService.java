@@ -42,7 +42,7 @@ public class SkillIdempotencyService {
         SkillIdempotencyRecordDO record = recordMapper.selectOne(Wrappers.lambdaQuery(SkillIdempotencyRecordDO.class)
                 .eq(SkillIdempotencyRecordDO::getSubjectScope, userId.toString())
                 .eq(SkillIdempotencyRecordDO::getCommandType, command)
-                .eq(SkillIdempotencyRecordDO::getIdempotencyKey, normalizeKey(key)));
+                .eq(SkillIdempotencyRecordDO::getIdempotencyKey, SkillIdempotencyService.normalizeKey(key)));
         if (record == null) {
             return null;
         }
@@ -70,7 +70,7 @@ public class SkillIdempotencyService {
         record.setCommandId(SnowflakeIdUtil.nextId());
         record.setSubjectScope(userId.toString());
         record.setCommandType(command);
-        record.setIdempotencyKey(normalizeKey(key));
+        record.setIdempotencyKey(SkillIdempotencyService.normalizeKey(key));
         record.setRequestHash(hash(payload));
         record.setResourceId(resourceId);
         try {
@@ -84,7 +84,8 @@ public class SkillIdempotencyService {
         recordMapper.insert(record);
     }
 
-    private String normalizeKey(String key) {
+    /** @return 无副作用的规范UUID，查询长期回执也使用同一规则 */
+    public static String normalizeKey(String key) {
         if (key == null || !UUID_KEY.matcher(key).matches()) {
             throw new ClientException("请求需要有效UUID幂等标识", SkillErrorCodeEnum.INVALID_INPUT);
         }

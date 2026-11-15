@@ -3,8 +3,10 @@ package com.yonagi.verse.dao.entity.skillhub;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
+
 import lombok.Getter;
 import lombok.Setter;
+
 import java.time.LocalDateTime;
 
 /** 本人可编辑草稿，不直接决定公开内容。 */
@@ -23,6 +25,16 @@ public class SkillDraftDO {
     private Long artifactId;
     /** 当前选定导入任务。 */
     private Long latestJobId;
+
+    /** 开始准备时的Skill修订，读取不会自动刷新。 */
+    private Long baseSkillRevision;
+
+    /** 转正所采用的本轮最新草稿节点。 */
+    private Long sourceVersionId;
+
+    /** 后续发版的本次更新说明。 */
+    private String releaseNotes;
+
     /** 有界且已校验的发布表单快照。 */
     private String metadataJson;
     /** 首版平台SemVer。 */

@@ -7,7 +7,9 @@ import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.SkillErrorCodeEnum;
 import com.yonagi.verse.dto.skillhub.SkillPublicationMetadataDTO;
 import com.yonagi.verse.dto.skillhub.SkillSourceDTO;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Component;
 
 /** 发布声明在草稿与版本之间保持同一固定快照契约。 */
@@ -63,6 +65,62 @@ public class SkillPublicationSnapshotCodec {
             throw new ServerException("Skill审批快照摘要不可生成", SkillErrorCodeEnum.UNAVAILABLE);
         }
     }
+
+    /**
+     * @return 新快照补平台编号；后续沿用声明，明确记录非再次主动确认
+     */
+    public SkillPublicationMetadataDTO versionMetadata(
+            SkillPublicationMetadataDTO value, String label, String notes, boolean inherited) {
+        return new SkillPublicationMetadataDTO(
+                value.name(),
+                value.summary(),
+                value.categoryId(),
+                value.tags(),
+                label,
+                notes,
+                value.license(),
+                value.originalAuthor(),
+                value.sourceUrl(),
+                value.compatibility(),
+                value.dependencies(),
+                inherited ? false : value.distributionAuthorized(),
+                inherited ? false : value.declarationsConfirmed());
+    }
+
+    /**
+     * @return V3审批摘要记录声明沿用依据，不修改历史hash
+     */
+    public String versionHash(
+            SkillPublicationMetadataDTO value,
+            String content,
+            String type,
+            String source,
+            Long basisVersionId) {
+        return new SkillGithubSnapshotCodec(objectMapper)
+                .encode(
+                        new VersionSnapshot(
+                                3,
+                                value,
+                                content,
+                                new SkillGithubSnapshotCodec(objectMapper).source(type, source),
+                                basisVersionId,
+                                basisVersionId == null ? "INITIAL_EXPLICIT" : "INHERITED"),
+                        32768);
+    }
+
+    /** @return 旧首发适配的固定命令摘要，不包含重试时的可变状态 */
+    public String initialCommandHash(Long draftId, Long revision) {
+        return cn.hutool.crypto.digest.DigestUtil.sha256Hex(new SkillGithubSnapshotCodec(objectMapper)
+                .encode(java.util.List.of("SUBMIT_DRAFT_V1", draftId.toString(), revision.toString()), 8192));
+    }
+
+    private record VersionSnapshot(
+            int snapshotSchemaVersion,
+            SkillPublicationMetadataDTO metadata,
+            String contentSha256,
+            SkillSourceDTO source,
+            Long declarationBasisVersionId,
+            String confirmationMode) {}
 
     private record PublicationSnapshot(int snapshotSchemaVersion, SkillPublicationMetadataDTO metadata,
                                         String contentSha256, String sourceType, SkillSourceDTO source) { }
