@@ -1,7 +1,6 @@
 package com.yonagi.verse.service.skillhub;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.yonagi.verse.common.enums.SkillImportTaskStatusEnum;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,24 +9,29 @@ import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.SkillArtifactStatusEnum;
 import com.yonagi.verse.common.enums.SkillDraftStatusEnum;
 import com.yonagi.verse.common.enums.SkillErrorCodeEnum;
+import com.yonagi.verse.common.enums.SkillImportTaskStatusEnum;
 import com.yonagi.verse.common.enums.SkillStatusEnum;
 import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.skillhub.SkillArtifactDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillDraftDO;
+import com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillPublisherDO;
 import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
-import com.yonagi.verse.dao.mapper.skillhub.SkillMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
-import com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO;
+import com.yonagi.verse.dao.mapper.skillhub.SkillMapper;
 import com.yonagi.verse.dto.req.SkillDraftCreateReqDTO;
 import com.yonagi.verse.dto.req.SkillDraftSaveReqDTO;
 import com.yonagi.verse.dto.resp.SkillDraftRespDTO;
+
 import jakarta.validation.Validator;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Set;
@@ -72,6 +76,7 @@ public class SkillDraftService {
         skill.setSlug(input.slug());
         skill.setStatus(SkillStatusEnum.DRAFT.name());
         skill.setRevision(0L);
+        skill.setVersionSequence(0L);
         skill.setCreateTime(now);
         skill.setUpdateTime(now);
         skillMapper.insert(skill);
@@ -81,6 +86,7 @@ public class SkillDraftService {
         draft.setOwnerUserId(userId);
         draft.setStatus(SkillDraftStatusEnum.EDITING.name());
         draft.setRevision(0L);
+        draft.setBaseSkillRevision(skill.getRevision());
         draft.setCreateTime(now);
         draft.setUpdateTime(now);
         draftMapper.insert(draft);
@@ -94,7 +100,11 @@ public class SkillDraftService {
      * @return 服务端保存的真实表单、修订与检查预览
      */
     public SkillDraftRespDTO get(Long userId, Long draftId) {
-        return view(accessPolicy.readDraft(userId, draftId));
+        SkillOwnedDraft owned = accessPolicy.readDraft(userId, draftId);
+        if (SkillStatusEnum.PLATFORM_DISABLED.name().equals(owned.skill().getStatus())) {
+            throw new ClientException(SkillErrorCodeEnum.NOT_ACCESSIBLE);
+        }
+        return view(owned);
     }
 
     /**
@@ -108,27 +118,36 @@ public class SkillDraftService {
         if (input == null || !validator.validate(input).isEmpty()) {
             throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
         }
-        publicationPolicy.validateDraft(input.metadata());
+        publicationPolicy.validateDraft(input.metadata().snapshot());
         SkillOwnedDraft owned = accessPolicy.lockDraft(userId, draftId);
         SkillDraftDO draft = owned.draft();
         requireEditable(draft, input.revision());
+        if (!SkillStatusEnum.DRAFT.name().equals(owned.skill().getStatus())) {
+            throw new ClientException(SkillErrorCodeEnum.CONFLICT);
+        }
         if ((Boolean.TRUE.equals(input.metadata().distributionAuthorized())
                 || Boolean.TRUE.equals(input.metadata().declarationsConfirmed()))
                 && (!SkillDraftStatusEnum.READY.name().equals(draft.getStatus()) || draft.getArtifactId() == null)) {
             throw new ClientException("请在检查完成后确认当前内容的声明", SkillErrorCodeEnum.INVALID_INPUT);
         }
-        String json = snapshotCodec.encode(input.metadata());
+        String json = snapshotCodec.encode(input.metadata().snapshot());
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        int changed = draftMapper.update(null, Wrappers.lambdaUpdate(SkillDraftDO.class)
-                .eq(SkillDraftDO::getDraftId, draftId).eq(SkillDraftDO::getOwnerUserId, userId)
-                .eq(SkillDraftDO::getRevision, input.revision())
-                .set(SkillDraftDO::getMetadataJson, json).set(SkillDraftDO::getVersionLabel, input.metadata().version())
-                .set(SkillDraftDO::getRevision, input.revision() + 1).set(SkillDraftDO::getUpdateTime, now));
+        int changed =
+                draftMapper.update(
+                        null,
+                        Wrappers.lambdaUpdate(SkillDraftDO.class)
+                                .eq(SkillDraftDO::getDraftId, draftId)
+                                .eq(SkillDraftDO::getOwnerUserId, userId)
+                                .eq(SkillDraftDO::getRevision, input.revision())
+                                .set(SkillDraftDO::getMetadataJson, json)
+                                .set(SkillDraftDO::getVersionLabel, "v1")
+                                .set(SkillDraftDO::getRevision, input.revision() + 1)
+                                .set(SkillDraftDO::getUpdateTime, now));
         if (changed != 1) {
             throw new ClientException(SkillErrorCodeEnum.CONFLICT);
         }
         draft.setMetadataJson(json);
-        draft.setVersionLabel(input.metadata().version());
+        draft.setVersionLabel("v1");
         draft.setRevision(input.revision() + 1);
         draft.setUpdateTime(now);
         return view(owned);
@@ -170,28 +189,43 @@ public class SkillDraftService {
         SkillDraftDO draft = owned.draft();
         SkillArtifactDO artifact = draft.getArtifactId() == null ? null
                 : artifactMapper.selectById(draft.getArtifactId());
+        if (!SkillStatusEnum.DRAFT.name().equals(owned.skill().getStatus())) {
+            artifact = null;
+        }
         JsonNode manifest = null;
         if (artifact != null && SkillArtifactStatusEnum.READY.name().equals(artifact.getStatus())
                 && draft.getOwnerUserId().equals(artifact.getOwnerUserId())) {
             try {
                 manifest = objectMapper.readTree(artifact.getManifestJson());
             } catch (JsonProcessingException exception) {
-                throw new ServerException("Skill检查快照不可读取", exception, SkillErrorCodeEnum.UNAVAILABLE);
+                throw new ServerException(
+                        "Skill检查快照不可读取", exception, SkillErrorCodeEnum.UNAVAILABLE);
             }
         } else {
             artifact = null;
         }
-        return new SkillDraftRespDTO(draft.getDraftId().toString(), draft.getSkillId().toString(),
-                owned.skill().getSlug(), draft.getStatus(), draft.getRevision(),
+        return new SkillDraftRespDTO(
+                draft.getDraftId().toString(),
+                draft.getSkillId().toString(),
+                owned.skill().getSlug(),
+                draft.getStatus(),
+                draft.getRevision(),
                 draft.getLatestJobId() == null ? null : draft.getLatestJobId().toString(),
-                draft.getMetadataJson() == null ? null : snapshotCodec.decode(draft.getMetadataJson()),
+                !SkillStatusEnum.DRAFT.name().equals(owned.skill().getStatus())
+                                || draft.getMetadataJson() == null
+                        ? null
+                        : snapshotCodec.decode(draft.getMetadataJson()),
                 manifest == null ? null : manifest.path("packageName").textValue(),
                 manifest == null ? null : manifest.path("packageDescription").textValue(),
                 artifact == null ? null : artifact.getSkillMarkdown(),
                 artifact == null ? null : artifact.getArchiveBytes(),
-                artifact == null ? null : artifact.getFileCount(), draft.getUpdateTime().atOffset(ZoneOffset.UTC),
+                artifact == null ? null : artifact.getFileCount(),
+                draft.getUpdateTime().atOffset(ZoneOffset.UTC),
                 artifact == null ? null : artifact.getArtifactId().toString(),
-                artifact == null ? null : artifact.getContentSha256(), artifact == null ? null
-                        : new SkillGithubSnapshotCodec(objectMapper).source(artifact.getSourceType(), artifact.getSourceJson()));
+                artifact == null ? null : artifact.getContentSha256(),
+                artifact == null
+                        ? null
+                        : new SkillGithubSnapshotCodec(objectMapper)
+                                .source(artifact.getSourceType(), artifact.getSourceJson()));
     }
 }

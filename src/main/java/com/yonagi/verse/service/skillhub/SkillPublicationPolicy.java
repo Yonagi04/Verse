@@ -9,18 +9,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 import java.net.URI;
 import java.util.Set;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /** 发布声明、版本与平台词表的业务规则，不承担JSON或HTTP职责。 */
 @Component
 @RequiredArgsConstructor
 public class SkillPublicationPolicy {
-    private static final Pattern SEMVER = Pattern.compile(
-            "(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)"
-            + "(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
-            + "(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
-            + "(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?");
     private final Validator validator;
     private final SkillPublicQueryMapper publicQueryMapper;
 
@@ -30,7 +24,6 @@ public class SkillPublicationPolicy {
      */
     public void validateDraft(SkillPublicationMetadataDTO metadata) {
         if (metadata == null || !validator.validate(metadata).isEmpty()
-                || !SEMVER.matcher(metadata.version()).matches()
                 || metadata.tags().stream().distinct().count() != metadata.tags().size()) {
             throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
         }

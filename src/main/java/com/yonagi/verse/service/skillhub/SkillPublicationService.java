@@ -2,6 +2,9 @@ package com.yonagi.verse.service.skillhub;
 
 import com.yonagi.verse.common.constant.SkillPackageLimitConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.convention.exception.ServerException;
+import com.yonagi.verse.dao.entity.skillhub.SkillVersionDO;
+import com.yonagi.verse.dao.mapper.skillhub.SkillVersionMapper;
 import com.yonagi.verse.common.enums.SkillArtifactStatusEnum;
 import com.yonagi.verse.common.enums.SkillDraftStatusEnum;
 import com.yonagi.verse.common.enums.SkillErrorCodeEnum;
@@ -35,6 +38,7 @@ public class SkillPublicationService {
     private final SkillPublicationWriter publicationWriter;
     private final SkillSubmissionMapper submissionMapper;
     private final SkillApprovalMapper approvalMapper;
+    private final SkillVersionMapper versionMapper;
 
     /**
      * @param userId 可信账号
@@ -51,7 +55,7 @@ public class SkillPublicationService {
         SkillApprovalDO approval = approvalMapper.selectOne(Wrappers.lambdaQuery(SkillApprovalDO.class)
                 .eq(SkillApprovalDO::getSubmissionId, submissionId));
         if (approval == null) {
-            throw new com.yonagi.verse.common.convention.exception.ServerException(SkillErrorCodeEnum.UNAVAILABLE);
+            throw new ServerException(SkillErrorCodeEnum.UNAVAILABLE);
         }
         return new SkillPublicationRespDTO(submission.getSkillId().toString(), submissionId.toString(),
                 approval.getApprovalId().toString(), submission.getVersionId().toString(), approval.getStatus(),
@@ -72,6 +76,27 @@ public class SkillPublicationService {
             throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
         }
         SkillOwnedDraft owned = accessPolicy.lockDraft(userId, draftId);
+        String normalizedKey = SkillIdempotencyService.normalizeKey(key);
+        String commandHash = snapshotCodec.initialCommandHash(draftId, input.revision());
+        SkillVersionDO committed = versionMapper.selectOne(
+                Wrappers.lambdaQuery(SkillVersionDO.class)
+                        .eq(SkillVersionDO::getPublishedBy, userId)
+                        .eq(SkillVersionDO::getPublishKey, normalizedKey)
+                        .last("FOR UPDATE"));
+        if (committed != null) {
+            if (!owned.skill().getSkillId().equals(committed.getSkillId())
+                    || !commandHash.equals(committed.getPublishRequestHash())) {
+                throw new ClientException(SkillErrorCodeEnum.IDEMPOTENCY_CONFLICT);
+            }
+            SkillApprovalDO approval = approvalMapper.selectOne(Wrappers.lambdaQuery(SkillApprovalDO.class)
+                    .eq(SkillApprovalDO::getSubmissionId, committed.getApprovedSubmissionId()));
+            if (approval == null) {
+                throw new ServerException(SkillErrorCodeEnum.UNAVAILABLE);
+            }
+            return new SkillPublicationRespDTO(committed.getSkillId().toString(), committed.getApprovedSubmissionId().toString(),
+                    approval.getApprovalId().toString(), committed.getVersionId().toString(), approval.getStatus(),
+                    approval.getDecisionSource(), "PUBLISHED", owned.publisher().getHandle(), owned.skill().getSlug());
+        }
         List<Long> request = List.of(draftId, input.revision());
         SkillPublicationRespDTO replay = idempotencyService.replay(userId, SUBMIT_COMMAND, key, request,
                 SkillPublicationRespDTO.class);
@@ -93,7 +118,7 @@ public class SkillPublicationService {
         }
         SkillPublicationMetadataDTO metadata = snapshotCodec.decode(draft.getMetadataJson());
         publicationPolicy.validateSubmission(metadata);
-        SkillPublicationRespDTO result = publicationWriter.publish(owned, artifact, metadata);
+        SkillPublicationRespDTO result = publicationWriter.publish(owned, artifact, metadata, normalizedKey, commandHash);
         idempotencyService.record(userId, SUBMIT_COMMAND, key, request, Long.valueOf(result.submissionId()), result);
         return result;
     }

@@ -38,7 +38,7 @@ class SkillPublicationServiceTest {
     private final SkillSubmissionMapper submissions = mock(SkillSubmissionMapper.class);
     private final SkillApprovalMapper approvals = mock(SkillApprovalMapper.class);
     private final SkillPublicationService service = new SkillPublicationService(access, artifacts, policy, codec,
-            commands, writer, submissions, approvals);
+            commands, writer, submissions, approvals, mock(com.yonagi.verse.dao.mapper.skillhub.SkillVersionMapper.class));
 
     @Test
     void replayHappensBeforeConsumedDraftRejectionAndDoesNotRepublish() {
@@ -48,7 +48,7 @@ class SkillPublicationServiceTest {
         when(commands.replay(1L, "SUBMIT_DRAFT", KEY, List.of(30L, 2L), SkillPublicationRespDTO.class))
                 .thenReturn(receipt);
         assertSame(receipt, service.submit(1L, 30L, new SkillDraftSubmitReqDTO(2L), KEY));
-        verify(writer, never()).publish(any(), any(), any());
+        verify(writer, never()).publish(any(), any(), any(), any(), any());
         verify(artifacts, never()).selectByIdForUpdate(any());
     }
 
@@ -57,7 +57,7 @@ class SkillPublicationServiceTest {
         SkillOwnedDraft owned = ready();
         SkillArtifactDO artifact = SkillTestFixture.artifact();
         when(artifacts.selectByIdForUpdate(40L)).thenReturn(artifact);
-        when(writer.publish(eq(owned), eq(artifact), any())).thenReturn(receipt());
+        when(writer.publish(eq(owned), eq(artifact), any(), any(), any())).thenReturn(receipt());
         SkillPublicationRespDTO result = service.submit(1L, 30L, new SkillDraftSubmitReqDTO(2L), KEY);
         assertEquals("70", result.versionId());
         assertEquals("APPROVED", result.approvalStatus());
@@ -78,7 +78,7 @@ class SkillPublicationServiceTest {
         ClientException failure = assertThrows(ClientException.class,
                 () -> service.submit(1L, 30L, new SkillDraftSubmitReqDTO(2L), KEY));
         assertEquals(SkillErrorCodeEnum.PACKAGE_INVALID.code(), failure.getErrorCode());
-        verify(writer, never()).publish(any(), any(), any());
+        verify(writer, never()).publish(any(), any(), any(), any(), any());
         verify(commands, never()).record(any(), any(), any(), any(), any(), any());
     }
 
@@ -88,9 +88,9 @@ class SkillPublicationServiceTest {
         when(artifacts.selectByIdForUpdate(40L)).thenReturn(SkillTestFixture.artifact());
         doThrow(new ClientException(SkillErrorCodeEnum.LICENSE_REQUIRED)).when(policy).validateSubmission(any());
         assertThrows(ClientException.class, () -> service.submit(1L, 30L, new SkillDraftSubmitReqDTO(2L), KEY));
-        verify(writer, never()).publish(any(), any(), any());
+        verify(writer, never()).publish(any(), any(), any(), any(), any());
         org.mockito.Mockito.doNothing().when(policy).validateSubmission(any());
-        when(writer.publish(any(), any(), any())).thenThrow(new ServerException(SkillErrorCodeEnum.UNAVAILABLE));
+        when(writer.publish(any(), any(), any(), any(), any())).thenThrow(new ServerException(SkillErrorCodeEnum.UNAVAILABLE));
         assertThrows(ServerException.class, () -> service.submit(1L, 30L, new SkillDraftSubmitReqDTO(2L), KEY));
         verify(commands, never()).record(any(), any(), any(), any(), any(), any());
     }
@@ -102,7 +102,7 @@ class SkillPublicationServiceTest {
         when(access.lockDraft(1L, 30L)).thenThrow(new ClientException(SkillErrorCodeEnum.NOT_ACCESSIBLE));
         assertThrows(ClientException.class, () -> service.submit(1L, 30L, new SkillDraftSubmitReqDTO(2L), KEY));
         verify(artifacts, never()).selectByIdForUpdate(any());
-        verify(writer, never()).publish(any(), any(), any());
+        verify(writer, never()).publish(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -153,10 +153,11 @@ class SkillPublicationServiceTest {
         artifact.setArchiveBytes(3L);
         artifact.setFileCount(501);
         assertThrows(ClientException.class, () -> service.submit(1L, 30L, new SkillDraftSubmitReqDTO(2L), KEY));
-        verify(writer, never()).publish(any(), any(), any());
+        verify(writer, never()).publish(any(), any(), any(), any(), any());
     }
 
     private SkillOwnedDraft ready() {
+        SkillTestFixture.initializeMapping(com.yonagi.verse.dao.entity.skillhub.SkillVersionDO.class);
         SkillDraftDO draft = SkillTestFixture.draft();
         draft.setStatus("READY");
         draft.setArtifactId(40L);

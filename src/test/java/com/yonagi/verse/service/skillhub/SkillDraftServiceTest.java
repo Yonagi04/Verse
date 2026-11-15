@@ -1,5 +1,14 @@
 package com.yonagi.verse.service.skillhub;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -14,20 +23,14 @@ import com.yonagi.verse.dao.mapper.skillhub.SkillMapper;
 import com.yonagi.verse.dto.req.SkillDraftCreateReqDTO;
 import com.yonagi.verse.dto.req.SkillDraftSaveReqDTO;
 import com.yonagi.verse.dto.resp.SkillDraftRespDTO;
+
 import jakarta.validation.Validation;
 import jakarta.validation.ValidatorFactory;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 class SkillDraftServiceTest {
     private static final ValidatorFactory VALIDATORS = Validation.buildDefaultValidatorFactory();
@@ -60,7 +63,8 @@ class SkillDraftServiceTest {
 
     @Test
     void createsPrivateStableSlugAndExplicitOwnerWithoutPublishingAnything() {
-        SkillDraftRespDTO result = service.create(1L, new SkillDraftCreateReqDTO("test-skill"), "key");
+        SkillDraftRespDTO result =
+                service.create(1L, new SkillDraftCreateReqDTO("test-skill"), "key");
         ArgumentCaptor<SkillDO> skill = ArgumentCaptor.forClass(SkillDO.class);
         ArgumentCaptor<SkillDraftDO> created = ArgumentCaptor.forClass(SkillDraftDO.class);
         verify(skills).insert(skill.capture());
@@ -77,8 +81,12 @@ class SkillDraftServiceTest {
 
     @Test
     void editingCannotPreAuthorizeFutureArtifact() {
-        ClientException failure = assertThrows(ClientException.class,
-                () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(2L, SkillTestFixture.metadata())));
+        ClientException failure =
+                assertThrows(
+                        ClientException.class,
+                        () ->
+                                service.save(
+                                        1L, 30L, new SkillDraftSaveReqDTO(2L, creationMetadata())));
         assertEquals(com.yonagi.verse.common.enums.SkillErrorCodeEnum.INVALID_INPUT.code(), failure.getErrorCode());
         assertEquals(2L, draft.getRevision()); assertNull(draft.getMetadataJson());
         verify(drafts, never()).update(any(), any());
@@ -89,22 +97,26 @@ class SkillDraftServiceTest {
         draft.setStatus("READY");
         draft.setArtifactId(40L);
         when(drafts.update(any(), any())).thenReturn(1);
-        SkillDraftRespDTO result = service.save(1L, 30L, new SkillDraftSaveReqDTO(2L, SkillTestFixture.metadata()));
+        SkillDraftRespDTO result =
+                service.save(1L, 30L, new SkillDraftSaveReqDTO(2L, creationMetadata()));
         assertEquals(3L, result.revision());
         assertEquals(SkillTestFixture.metadata(), result.metadata());
         draft.setStatus("SUBMITTED");
-        assertThrows(ClientException.class,
-                () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(3L, SkillTestFixture.metadata())));
+        assertThrows(
+                ClientException.class,
+                () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(3L, creationMetadata())));
     }
 
     @Test
     void staleRevisionAndLostCompareAndSetCannotReportSaved() {
         draft.setStatus("READY");
         draft.setArtifactId(40L);
-        assertThrows(ClientException.class,
-                () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(1L, SkillTestFixture.metadata())));
-        assertThrows(ClientException.class,
-                () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(2L, SkillTestFixture.metadata())));
+        assertThrows(
+                ClientException.class,
+                () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(1L, creationMetadata())));
+        assertThrows(
+                ClientException.class,
+                () -> service.save(1L, 30L, new SkillDraftSaveReqDTO(2L, creationMetadata())));
         assertEquals(2L, draft.getRevision());
         assertNull(draft.getMetadataJson());
     }
@@ -138,9 +150,28 @@ class SkillDraftServiceTest {
 
     @Test
     void invalidInputNeverCreatesResource() {
-        assertThrows(ClientException.class, () -> service.create(1L, new SkillDraftCreateReqDTO("UPPER"), "key"));
+        assertThrows(
+                ClientException.class,
+                () -> service.create(1L, new SkillDraftCreateReqDTO("UPPER"), "key"));
         assertThrows(ClientException.class, () -> service.save(1L, 30L, null));
         verify(skills, never()).insert(any(SkillDO.class));
         verify(drafts, never()).insert(any(SkillDraftDO.class));
+    }
+
+    private com.yonagi.verse.dto.skillhub.SkillCreationMetadataDTO creationMetadata() {
+        var value = SkillTestFixture.metadata();
+        return new com.yonagi.verse.dto.skillhub.SkillCreationMetadataDTO(
+                value.name(),
+                value.summary(),
+                value.categoryId(),
+                value.tags(),
+                value.releaseNotes(),
+                value.license(),
+                value.originalAuthor(),
+                value.sourceUrl(),
+                value.compatibility(),
+                value.dependencies(),
+                value.distributionAuthorized(),
+                value.declarationsConfirmed());
     }
 }

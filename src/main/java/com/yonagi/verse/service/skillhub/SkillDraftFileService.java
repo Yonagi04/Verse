@@ -7,11 +7,14 @@ import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactMapper;
 import com.yonagi.verse.dto.resp.SkillDraftFileRespDTO;
 import com.yonagi.verse.dto.resp.SkillDraftFilesRespDTO;
 import com.yonagi.verse.service.skillhub.port.SkillValidatedFile;
+
+import lombok.RequiredArgsConstructor;
+
+import org.springframework.stereotype.Service;
+
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
 
 /** 本人READY文件清单不缓存，来源是当前绑定制品，不能按任意对象Key读取。 */
 @Service
@@ -27,7 +30,9 @@ public class SkillDraftFileService {
             throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
         }
         SkillOwnedDraft owned = access.readDraft(userId, draftId);
-        if (!"READY".equals(owned.draft().getStatus()) || owned.draft().getArtifactId() == null) {
+        if (!"DRAFT".equals(owned.skill().getStatus())
+                || !"READY".equals(owned.draft().getStatus())
+                || owned.draft().getArtifactId() == null) {
             throw new ClientException(SkillErrorCodeEnum.CONFLICT);
         }
         SkillArtifactDO artifact = artifacts.selectById(owned.draft().getArtifactId());

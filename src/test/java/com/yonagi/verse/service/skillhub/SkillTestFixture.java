@@ -1,6 +1,7 @@
 package com.yonagi.verse.service.skillhub;
 
 import cn.hutool.crypto.digest.DigestUtil;
+
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.yonagi.verse.dao.entity.skillhub.SkillArtifactDO;
@@ -9,7 +10,9 @@ import com.yonagi.verse.dao.entity.skillhub.SkillDraftDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillPublisherDO;
 import com.yonagi.verse.dto.skillhub.SkillPublicationMetadataDTO;
+
 import org.apache.ibatis.builder.MapperBuilderAssistant;
+
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -21,7 +24,8 @@ final class SkillTestFixture {
 
     static void initializeMapping(Class<?>... types) {
         for (Class<?> type : types) {
-            MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "unit");
+            MapperBuilderAssistant assistant =
+                    new MapperBuilderAssistant(new MybatisConfiguration(), "unit");
             assistant.setCurrentNamespace("unit." + type.getSimpleName());
             TableInfoHelper.initTableInfo(assistant, type);
         }
@@ -47,6 +51,7 @@ final class SkillTestFixture {
         skill.setSlug("test-skill");
         skill.setStatus("DRAFT");
         skill.setRevision(0L);
+        skill.setVersionSequence(0L);
         skill.setCreateTime(now());
         skill.setUpdateTime(now());
         return skill;
@@ -59,6 +64,7 @@ final class SkillTestFixture {
         draft.setOwnerUserId(1L);
         draft.setStatus("EDITING");
         draft.setRevision(2L);
+        draft.setBaseSkillRevision(0L);
         draft.setCreateTime(now());
         draft.setUpdateTime(now());
         return draft;
@@ -96,8 +102,20 @@ final class SkillTestFixture {
     }
 
     static SkillPublicationMetadataDTO metadata() {
-        return new SkillPublicationMetadataDTO("测试", "简介", "development", List.of("coding"), "1.0.0", "首版",
-                "MIT", "本人", "https://example.com/source", "Agent Skills", "无", true, true);
+        return new SkillPublicationMetadataDTO(
+                "测试",
+                "简介",
+                "development",
+                List.of("coding"),
+                "v1",
+                "首版",
+                "MIT",
+                "本人",
+                "https://example.com/source",
+                "Agent Skills",
+                "无",
+                true,
+                true);
     }
 
     static LocalDateTime now() {
