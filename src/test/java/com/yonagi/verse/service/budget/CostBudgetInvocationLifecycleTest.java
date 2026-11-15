@@ -110,6 +110,9 @@ class CostBudgetInvocationLifecycleTest {
                         com.yonagi.verse.common.enums.BillingMode.REQUEST, "CNY", null, null,
                         null, null, null, new BigDecimal("600"), null, null)));
         when(attempts.latest("request")).thenReturn(attempt);
+        when(attempts.selectById(31L)).thenThrow(new IllegalStateException("completion evidence unavailable"));
+        // 接收侧证据旁路失败后，终态携带的冻结证明仍必须恢复正确费用。
+        service.recordUpstreamCompletion(31L, "request", null);
         var saved = new java.util.concurrent.atomic.AtomicReference<CostBudgetSettlementDO>();
         var failOnce = new java.util.concurrent.atomic.AtomicBoolean(true);
         when(settlements.insert(any(CostBudgetSettlementDO.class))).thenAnswer(call -> {

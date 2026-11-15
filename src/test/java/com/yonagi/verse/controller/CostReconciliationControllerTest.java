@@ -3,6 +3,7 @@ package com.yonagi.verse.controller;
 import com.yonagi.verse.common.security.UserContext;
 import com.yonagi.verse.common.security.UserContextHolder;
 import com.yonagi.verse.dto.resp.CostReconciliationRespDTO;
+import com.yonagi.verse.dto.req.CostReconciliationResolveReqDTO;
 import com.yonagi.verse.service.budget.CostReconciliationQueries;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,5 +64,34 @@ class CostReconciliationControllerTest {
                  "inputTokens":1.5,"cachedTokens":0,"outputTokens":1}
                 """)).andExpect(status().isBadRequest());
         verifyNoInteractions(queries);
+    }
+
+    @Test
+    void detailRouteUsesAuthenticatedAccountAndReturnsCase() throws Exception {
+        when(queries.detail(42L, "A1b2C3d4", 3L)).thenReturn(resolvedCase());
+        mvc.perform(get(PATH + "/3"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("0"))
+                .andExpect(jsonPath("$.data.id").value("3"))
+                .andExpect(jsonPath("$.data.state").value("RESOLVED"));
+    }
+
+    @Test
+    void validResolvePassesVersionAndSubmissionKeyToAuthenticatedUseCase() throws Exception {
+        var request = new CostReconciliationResolveReqDTO(CostReconciliationResolveReqDTO.Decision.NO_CHARGE,
+                true, 0L, "submission-1", null, null, null);
+        when(queries.resolve(42L, "A1b2C3d4", 3L, request)).thenReturn(resolvedCase());
+        mvc.perform(post(PATH + "/3/resolve").contentType(MediaType.APPLICATION_JSON).content("""
+                {"decision":"NO_CHARGE","evidenceConfirmed":true,"version":0,"submissionKey":"submission-1"}
+                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("0"))
+                .andExpect(jsonPath("$.data.id").value("3"))
+                .andExpect(jsonPath("$.data.version").value(1));
+    }
+
+    private CostReconciliationRespDTO.Case resolvedCase() {
+        return new CostReconciliationRespDTO.Case("3", "request", null, null, "PLAYGROUND",
+                "2026-11-08T00:00:00+08:00", "RESOLVED", null, 1L, false, null, null);
     }
 }

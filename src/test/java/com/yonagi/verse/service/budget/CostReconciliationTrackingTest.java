@@ -409,6 +409,219 @@ class CostReconciliationTrackingTest {
         assertEquals(price,JSON.parseObject(saved.getValue().getPricingJson(),PricingSnapshot.class));
     }
 
+    @ParameterizedTest
+    @CsvSource({"AUTO,1,7,1,true", "AUTO,2,7,1,false", "REVIEW,2,7,1,true",
+            "REVIEW,1,7,1,false", "PENDING,1,7,1,false", "RESOLVED,1,7,1,false", "AUTO,1,8,1,false"})
+    void replayRequiresOriginalCaseAndCurrentAutomaticVersion(String state, long version, long caseId,
+            long expectedVersion, boolean allowed) {
+        row.setState(state);
+        row.setVersion(version);
+        when(cases.selectOne(any())).thenReturn(row);
+        assertEquals(allowed, tracking.acceptsReplay(invocation(), caseId, expectedVersion));
+        row.setAttemptId(null);
+        if ("REVIEW".equals(state)) {
+            assertFalse(tracking.acceptsReplay(invocation(), caseId, expectedVersion));
+        }
+        when(cases.selectOne(any())).thenReturn(null);
+        assertFalse(tracking.acceptsReplay(invocation(), caseId, expectedVersion));
+        verify(cases, never()).updateById(any());
+    }
+
+    @Test
+    void correctedConflictMarksReviewOnlyOnceAndKeepsOriginalCaseOwnership() {
+        when(cases.selectOne(any())).thenReturn(row);
+        assertFalse(tracking.retainCorrectedConflict(invocation()));
+        assertNull(row.getReviewRequired());
+        when(adjustments.exists(any())).thenReturn(true);
+        assertTrue(tracking.retainCorrectedConflict(invocation()));
+        assertTrue(tracking.retainCorrectedConflict(invocation()));
+        assertTrue(row.getReviewRequired());
+        assertEquals(2L, row.getVersion());
+        assertEquals(8L, row.getBatchId());
+        verify(cases).updateById(row);
+        verifyNoInteractions(events, signals);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"same", "amount", "missing-amount", "status", "model"})
+    void lateOriginalOnlyFlagsActualDifferenceFromEffectiveCorrection(String difference) {
+        when(cases.selectOne(any())).thenReturn(row);
+        var original = new CostBudgetSettlementDO();
+        original.setCostStatus("CALCULATED");
+        original.setEstimatedCostFen(new BigDecimal("13.00"));
+        original.setServiceId(10L);
+        var correction = new CostReconciliationAdjustmentDO();
+        correction.setCostStatus("CALCULATED");
+        correction.setCostFen(new BigDecimal("13"));
+        correction.setServiceId(10L);
+        switch (difference) {
+            case "amount" -> original.setEstimatedCostFen(new BigDecimal("14"));
+            case "missing-amount" -> original.setEstimatedCostFen(null);
+            case "status" -> original.setCostStatus("NOT_CHARGEABLE");
+            case "model" -> original.setServiceId(11L);
+            case "same" -> { }
+            default -> throw new IllegalArgumentException("unknown scenario");
+        }
+        when(adjustments.latest(7L)).thenReturn(correction);
+
+        tracking.reviewLateConflict(invocation(), original);
+        tracking.reviewLateConflict(invocation(), original);
+
+        boolean conflict = !"same".equals(difference);
+        assertEquals(conflict, Boolean.TRUE.equals(row.getReviewRequired()));
+        assertEquals(conflict ? 2L : 1L, row.getVersion());
+        assertEquals(0, new BigDecimal("13").compareTo(correction.getCostFen()));
+        assertEquals(10L, correction.getServiceId());
+        assertEquals(8L, row.getBatchId());
+        verify(cases, times(conflict ? 1 : 0)).updateById(row);
+        verifyNoInteractions(events, signals);
+    }
+
+    @Test
+    void missingCorrectionAndUnknownOriginalDoNotCreateReview() {
+        when(cases.selectOne(any())).thenReturn(row);
+        var original = new CostBudgetSettlementDO();
+        original.setCostStatus("UNCALCULABLE");
+        tracking.reviewLateConflict(invocation(), original);
+        original.setCostStatus("NOT_CHARGEABLE");
+        tracking.reviewLateConflict(invocation(), original);
+        assertNull(row.getReviewRequired());
+        assertEquals(1L, row.getVersion());
+        verify(cases, never()).updateById(any());
+    }
+
+    @Test
+    void verifiedAutomaticEvidenceIsRetainedOnlyForUnknownOriginalAndCalculableAttempt() {
+        when(cases.selectOne(any())).thenReturn(row);
+        row.setState("AUTO");
+        var original = new CostBudgetSettlementDO();
+        original.setCostStatus("UNCALCULABLE");
+        assertFalse(tracking.retainsVerifiedAutomaticEvidence(invocation(), original));
+        attempt.setUsageJson(JSON.toJSONString(new ReconciliationEvidence.Tokens(1_000_000L, 0L, 1_000_000L)));
+        assertTrue(tracking.retainsVerifiedAutomaticEvidence(invocation(), original));
+        row.setState("PENDING");
+        assertFalse(tracking.retainsVerifiedAutomaticEvidence(invocation(), original));
+        row.setState("AUTO");
+        row.setAttemptId(null);
+        assertFalse(tracking.retainsVerifiedAutomaticEvidence(invocation(), original));
+        row.setAttemptId(31L);
+        original.setCostStatus("CALCULATED");
+        assertFalse(tracking.retainsVerifiedAutomaticEvidence(invocation(), original));
+        original.setCostStatus("UNCALCULABLE");
+        when(cases.selectOne(any())).thenReturn(null);
+        assertFalse(tracking.retainsVerifiedAutomaticEvidence(invocation(), original));
+        verify(cases, never()).updateById(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"AUTO", "REVIEW", "RESOLVED"})
+    void confirmedOriginalClosesOnlyOpenCaseAndRepeatedEvidenceDoesNotAdvanceVersion(String state) {
+        row.setState(state);
+        when(cases.selectOne(any())).thenReturn(row);
+        tracking.resolveFromOriginal(invocation(), CostStatus.CALCULATED);
+        tracking.resolveFromOriginal(invocation(), CostStatus.CALCULATED);
+        assertEquals("RESOLVED", row.getState());
+        assertEquals("RESOLVED".equals(state) ? 1L : 2L, row.getVersion());
+        assertEquals(8L, row.getBatchId());
+        verify(cases, times("RESOLVED".equals(state) ? 0 : 1)).updateById(row);
+        verify(signals, times("RESOLVED".equals(state) ? 0 : 1)).batchChanged(row);
+    }
+
+    @Test
+    void unknownOriginalCannotClosePendingReconciliation() {
+        when(cases.selectOne(any())).thenReturn(row);
+        tracking.resolveFromOriginal(invocation(), CostStatus.UNCALCULABLE);
+        assertEquals("PENDING", row.getState());
+        assertEquals(1L, row.getVersion());
+        verify(cases, never()).updateById(any());
+        verifyNoInteractions(signals);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"INTENT", "COMPLETED", "UNKNOWN", "NOT_SENT", "REJECTED"})
+    void nextPhysicalAttemptRequiresProofThatPreviousAttemptCanBeRetried(String previousOutcome) {
+        var invocation = invocation();
+        invocation.setState("RUNNING");
+        when(invocations.selectOne(any())).thenReturn(invocation);
+        when(invocations.lockRequest("request")).thenReturn(invocation);
+        when(prices.resolve(eq(2L), eq(10L), any()))
+                .thenReturn(JSON.parseObject(attempt.getPricingJson(), PricingSnapshot.class));
+        attempt.setOutcome(previousOutcome);
+        attempt.setAttemptNo(1);
+        when(attempts.latest("request")).thenReturn(attempt);
+        boolean retryable = "NOT_SENT".equals(previousOutcome) || "REJECTED".equals(previousOutcome);
+        if (retryable) {
+            doAnswer(call -> { call.getArgument(0, CostReconciliationAttemptDO.class).setId(32L); return 1; })
+                    .when(attempts).insert(any(CostReconciliationAttemptDO.class));
+            assertEquals(32L, tracking.intent(2L, "request", 10L, "openai", ModelOperation.CHAT_COMPLETIONS));
+            var created = ArgumentCaptor.forClass(CostReconciliationAttemptDO.class);
+            verify(attempts).insert(created.capture());
+            assertEquals(2, created.getValue().getAttemptNo());
+            assertEquals("INTENT", created.getValue().getOutcome());
+            assertEquals(attempt.getPricingJson(), created.getValue().getPricingJson());
+        } else {
+            assertThrows(CostBudgetUnavailableException.class,
+                    () -> tracking.intent(2L, "request", 10L, "openai", ModelOperation.CHAT_COMPLETIONS));
+            assertEquals(previousOutcome, attempt.getOutcome());
+            verify(attempts, never()).insert(any(CostReconciliationAttemptDO.class));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"missing-observation", "foreign-observation", "missing-locked", "changed-event",
+            "foreign-locked"})
+    void missingOrChangedOriginalRequestCannotObtainSendIntent(String failure) {
+        var observed = invocation();
+        observed.setState("RUNNING");
+        observed.setEventId("original-event");
+        var locked = JSON.parseObject(JSON.toJSONString(observed), CostBudgetInvocationDO.class);
+        switch (failure) {
+            case "foreign-observation" -> observed.setTenantId(99L);
+            case "changed-event" -> locked.setEventId("new-event");
+            case "foreign-locked" -> locked.setTenantId(99L);
+            case "missing-observation", "missing-locked" -> { }
+            default -> throw new IllegalArgumentException("unknown scenario");
+        }
+        when(invocations.selectOne(any())).thenReturn("missing-observation".equals(failure) ? null : observed);
+        when(invocations.lockRequest("request")).thenReturn("missing-locked".equals(failure) ? null : locked);
+        assertThrows(CostBudgetUnavailableException.class,
+                () -> tracking.intent(2L, "request", 10L, "openai", ModelOperation.CHAT_COMPLETIONS));
+        assertEquals("PENDING", row.getState());
+        verify(attempts, never()).insert(any(CostReconciliationAttemptDO.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"no-attempt-id", "missing-request", "missing-attempt", "foreign-request",
+            "rejected-attempt"})
+    void completionCannotAttachEvidenceToAnotherOrUnavailablePhysicalAttempt(String failure) {
+        if ("missing-request".equals(failure)) {
+            when(invocations.lockRequest("request")).thenReturn(null);
+        } else if ("missing-attempt".equals(failure)) {
+            when(attempts.selectById(31L)).thenReturn(null);
+        } else if ("foreign-request".equals(failure)) {
+            attempt.setRequestId("another-request");
+        } else if ("rejected-attempt".equals(failure)) {
+            attempt.setOutcome("REJECTED");
+        }
+        tracking.completeAttempt("no-attempt-id".equals(failure) ? null : 31L, "request", exactUsage(0L));
+        assertNull(attempt.getUsageJson());
+        assertEquals("PENDING", row.getState());
+        assertEquals(1L, row.getVersion());
+        verify(attempts, never()).updateById(any());
+        verifyNoInteractions(events, signals);
+    }
+
+    @Test
+    void inactiveCaptureSkipsIntentAndMissingActivationMarkerFailsClosed() {
+        when(scans.activationGeneration()).thenReturn(0L);
+        assertNull(tracking.intent(2L, "request", 10L, "openai", ModelOperation.CHAT_COMPLETIONS));
+        verify(attempts, never()).insert(any(CostReconciliationAttemptDO.class));
+        when(scans.activationGeneration()).thenReturn(null);
+        var invocation = invocation();
+        assertThrows(IllegalStateException.class, () -> tracking.register(invocation, 9L));
+        assertEquals(1L, invocation.getReconciliationGeneration());
+    }
+
     private UsageBreakdown exactUsage(long cached) {
         return new UsageBreakdown(1_000_000L, cached, null, 1_000_000L, 2_000_000L,
                 TokenUsageEvent.SOURCE_EXACT, "fixture", JSONObject.of("cached_tokens", cached), true);
