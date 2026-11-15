@@ -147,6 +147,8 @@ class LlmForwardUsagePublicationTest {
     @ParameterizedTest @ValueSource(strings = {"SPEECH", "TRANSCRIPTION"})
     void mediaValidationBeforeSendingStillSettlesAsNotChargeable(String operation) {
         ModelOperation op = ModelOperation.valueOf(operation);
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), eq(op)))
+                .thenReturn(42L);
         var adapter = new OpenAiMediaAdapter(op, UpstreamProtocol.OPENAI_COMPAT);
         ReflectionTestUtils.setField(service, "providerAdapter", adapter);
         AdapterExchange.Request request = op == ModelOperation.SPEECH
@@ -157,6 +159,7 @@ class LlmForwardUsagePublicationTest {
         var event = terminalEvent();
         assertEquals(CostStatus.NOT_CHARGEABLE, event.getCostResult().status());
         assertEquals("NOT_SENT", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
+        verify(budgets).recordUpstreamRejection(42L, UpstreamExecutionOutcome.NOT_SENT);
         verify(circuitBreaker, never()).recordFailure(anyString());
     }
 
@@ -195,6 +198,25 @@ class LlmForwardUsagePublicationTest {
             assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
             assertEquals("COMPLETED", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
         } finally { release.countDown(); subscription.dispose(); }
+    }
+
+    @Test
+    void mediaRejectionEvidenceFailureStillPublishesOriginalNotSentTerminal() {
+        var adapter = new OpenAiMediaAdapter(ModelOperation.SPEECH, UpstreamProtocol.OPENAI_COMPAT);
+        ReflectionTestUtils.setField(service, "providerAdapter", adapter);
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), any())).thenReturn(42L);
+        doThrow(new IllegalStateException("evidence unavailable"))
+                .when(budgets).recordUpstreamRejection(42L, UpstreamExecutionOutcome.NOT_SENT);
+
+        ClientException failure = assertThrows(ClientException.class, () -> service.media(context,
+                ModelOperation.SPEECH,
+                "alias", new AdapterExchange.JsonRequest(ModelOperation.SPEECH,
+                JSON.parseObject("{\"input\":\"\",\"voice\":\"alloy\"}")), "rejection-write-failed", Instant.now()));
+
+        assertEquals(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED.code(), failure.getErrorCode());
+        TokenUsageEvent event = terminalEvent();
+        assertEquals(UpstreamExecutionOutcome.NOT_SENT, event.getExecutionOutcome());
+        assertEquals(CostStatus.NOT_CHARGEABLE, event.getCostResult().status());
     }
 
     @ParameterizedTest @ValueSource(strings = {"IMAGE_GENERATION", "SPEECH", "TRANSCRIPTION"})

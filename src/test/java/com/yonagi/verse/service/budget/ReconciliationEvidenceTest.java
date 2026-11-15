@@ -42,6 +42,22 @@ class ReconciliationEvidenceTest {
     }
 
     @Test
+    void notSentTerminalConfirmsNoChargeWithoutDowngradingCompletedEvidence() {
+        var attempt = attempt(BillingMode.REQUEST, "openai");
+        var event = terminal(UpstreamExecutionOutcome.NOT_SENT, null);
+        event.setStatus("FAIL");
+
+        evidence.recordTerminal(attempt, event);
+        assertThat(attempt.getOutcome()).isEqualTo("NOT_SENT");
+        assertThat(evidence.automatic(attempt).status()).isEqualTo(CostStatus.NOT_CHARGEABLE);
+
+        attempt.setOutcome("COMPLETED");
+        evidence.recordTerminal(attempt, event);
+        assertThat(attempt.getOutcome()).isEqualTo("COMPLETED");
+        assertThat(evidence.automatic(attempt).estimatedCostFen()).isEqualByComparingTo("600");
+    }
+
+    @Test
     void tokenNormalizerDefaultZeroCannotSubstituteForMissingPricedCacheEvidence() {
         var attempt = attempt(BillingMode.TOKEN, "openai");
         var usage = new UsageBreakdown(1_000_000L, 0L, null, 1_000_000L, null,

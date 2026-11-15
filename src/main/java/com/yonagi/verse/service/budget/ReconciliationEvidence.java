@@ -71,6 +71,12 @@ public class ReconciliationEvidence {
 
     void recordTerminal(CostReconciliationAttemptDO attempt, TokenUsageEvent event, boolean verifiedTransport) {
         var outcome = event.getExecutionOutcome();
+        if (outcome == UpstreamExecutionOutcome.NOT_SENT) {
+            if ("INTENT".equals(attempt.getOutcome())) {
+                attempt.setOutcome("NOT_SENT");
+            }
+            return;
+        }
         if (outcome != UpstreamExecutionOutcome.COMPLETED) {
             return;
         }

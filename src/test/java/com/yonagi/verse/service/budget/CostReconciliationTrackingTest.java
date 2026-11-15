@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.CsvSource;
+import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
 import org.springframework.test.util.ReflectionTestUtils;
 import com.yonagi.verse.common.enums.CostStatus;
 import com.yonagi.verse.dao.entity.CostBudgetSettlementDO;
@@ -228,6 +229,35 @@ class CostReconciliationTrackingTest {
         event.setCostResult(CostResult.of(CostStatus.NOT_CHARGEABLE));
         tracking.prepareTerminal(event, invocation, null);
         assertEquals(CostStatus.NOT_CHARGEABLE,event.getCostResult().status());
+    }
+
+    @Test
+    void notSentTerminalRepairsMissingRejectionEvidenceBeforeCalculatingCost() {
+        fixedPriceIntent();
+        TokenUsageEvent event = attemptedTerminal();
+        event.setExecutionOutcome(UpstreamExecutionOutcome.NOT_SENT);
+        event.setStatus("FAIL");
+
+        tracking.prepareTerminal(event, invocation(), null);
+
+        assertEquals("NOT_SENT", attempt.getOutcome());
+        assertEquals(CostStatus.NOT_CHARGEABLE, event.getCostResult().status());
+    }
+
+    private void fixedPriceIntent() {
+        attempt.setOutcome("INTENT");
+        attempt.setPricingJson(JSON.toJSONString(new PricingSnapshot(1L, BillingMode.REQUEST, "CNY", null, null,
+                null, null, null, new BigDecimal("600"), null, null)));
+        when(attempts.latest("request")).thenReturn(attempt);
+    }
+
+    private TokenUsageEvent attemptedTerminal() {
+        TokenUsageEvent event = terminal();
+        event.setServiceId(10L);
+        event.setOperation("CHAT_COMPLETIONS");
+        event.setStatus("ABORTED");
+        event.setExecutionOutcome(UpstreamExecutionOutcome.COMPLETED);
+        return event;
     }
 
     @Test

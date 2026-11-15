@@ -588,6 +588,12 @@ public class LlmForwardServiceImpl implements LlmForwardService {
             throw e;
         } catch (ClientException e) {
             // 发送后失败由适配器携带执行证据；普通业务错误仅用于发送前校验。
+            try {
+                costBudgetService.recordUpstreamRejection(attemptId, UpstreamExecutionOutcome.NOT_SENT);
+            } catch (RuntimeException evidenceFailure) {
+                // 原校验错误和 NOT_SENT 终态仍须接管，结算事务可以重建未发送证据。
+                log.warn("[llm-cost] 未发送证据待终态结算接管: requestId={}", requestId, evidenceFailure);
+            }
             costBudgetService.noteFailure(requestId, "DISPATCH", e.getErrorCode());
             publishTokenUsage(ctx, tenant.getTenantId(), service, null, requestId, LlmAuditEvent.STATUS_FAIL,
                     TokenUsageEvent.SOURCE_UNKNOWN, start, operation, InvocationSource.API_KEY, UpstreamExecutionOutcome.NOT_SENT);
