@@ -1,6 +1,5 @@
 package com.yonagi.verse.service.skillhub;
 
-import cn.hutool.crypto.digest.DigestUtil;
 import com.yonagi.verse.common.constant.SkillPackageLimitConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -12,13 +11,14 @@ import com.yonagi.verse.dao.projection.SkillDownloadProjection;
 import com.yonagi.verse.dto.resp.SkillFileContentRespDTO;
 import com.yonagi.verse.dto.resp.SkillFileRespDTO;
 import com.yonagi.verse.dto.resp.SkillFilesRespDTO;
-import com.yonagi.verse.service.skillhub.port.SkillArtifactStore;
 import com.yonagi.verse.service.skillhub.port.SkillValidatedFile;
+
+import lombok.RequiredArgsConstructor;
+
+import org.springframework.stereotype.Service;
+
 import java.util.Comparator;
 import java.util.List;
-import java.util.concurrent.Semaphore;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
 
 /** 当前公开版本只读文件用例；可用性不缓存，S3 读取不持数据库事务。 */
 @Service
@@ -29,10 +29,7 @@ public class SkillFileQueryService {
     private final SkillDownloadAuthorizationService authorization;
     private final SkillArtifactMapper artifacts;
     private final SkillGithubSnapshotCodec codec;
-    private final SkillArtifactStore store;
-    private final Semaphore previews = new Semaphore(2);
-    private final SkillFilePreviewPolicy policy = new SkillFilePreviewPolicy();
-    private final SkillArchivePreviewReader reader = new SkillArchivePreviewReader();
+    private final SkillArtifactPreviewReader previewReader;
 
     /** @return 固定版本内最多五百个文件的完整清单，不暴露私有对象位置 */
     public SkillFilesRespDTO files(Long skillId, Long versionId) {
@@ -50,37 +47,13 @@ public class SkillFileQueryService {
      * @return 只读正文或明确的不支持/超限元数据，空文本保持为空字符串
      */
     public SkillFileContentRespDTO content(Long skillId, Long versionId, String path) {
-        validatePath(path);
-        if (!previews.tryAcquire()) {
-            throw new ClientException(SkillErrorCodeEnum.RATE_LIMITED);
-        }
-        try {
-            Snapshot snapshot = snapshot(skillId, versionId);
-            SkillValidatedFile file = snapshot.manifest().files().stream()
-                    .filter(value -> path.equals(value.relativePath())).findFirst()
-                    .orElseThrow(() -> new ClientException(SkillErrorCodeEnum.NOT_ACCESSIBLE));
-            SkillFilePreviewPolicy.Format format = policy.format(path);
-            String status = "UNSUPPORTED";
-            String content = null;
-            if (!"UNSUPPORTED".equals(format.kind())) {
-                status = "TOO_LARGE";
-                if (file.sizeBytes() <= SkillFilePreviewPolicy.MAX_PREVIEW_BYTES) {
-                    byte[] archive = store.get(snapshot.resource().archiveKey(),
-                            (int) SkillPackageLimitConstant.MAX_ARCHIVE_BYTES);
-                    if (archive.length != snapshot.resource().bytes()
-                            || !DigestUtil.sha256Hex(archive).equals(snapshot.resource().sha256())) {
-                        throw new ServerException("Skill归档字节校验失败", SkillErrorCodeEnum.UNAVAILABLE);
-                    }
-                    content = policy.text(reader.read(archive, snapshot.manifest().packageName(), file));
-                    status = content == null ? "UNSUPPORTED" : "READY";
-                }
-            }
-            confirm(snapshot);
-            return new SkillFileContentRespDTO(versionId.toString(), path, file.sizeBytes(), file.sha256(),
-                    format.kind(), format.language(), status, content);
-        } finally {
-            previews.release();
-        }
+        SkillArtifactPreviewReader.validatePath(path);
+        Snapshot snapshot = snapshot(skillId, versionId);
+        SkillFileContentRespDTO result =
+                previewReader.content(
+                        snapshot.artifact(), snapshot.manifest(), versionId.toString(), path);
+        confirm(snapshot);
+        return result;
     }
 
     private Snapshot snapshot(Long skillId, Long versionId) {
@@ -103,7 +76,7 @@ public class SkillFileQueryService {
                 || file.sha256() == null || file.sizeBytes() < 0)) {
             throw new ServerException(SkillErrorCodeEnum.UNAVAILABLE);
         }
-        return new Snapshot(resource, manifest);
+        return new Snapshot(resource, manifest, artifact);
     }
 
     private void confirm(Snapshot snapshot) {
@@ -123,19 +96,8 @@ public class SkillFileQueryService {
         }
     }
 
-    private void validatePath(String path) {
-        if (path == null || path.isBlank() || path.length() > MAX_PATH_LENGTH || path.startsWith("/")
-                || path.indexOf('\\') >= 0 || path.indexOf(':') >= 0
-                || path.chars().anyMatch(Character::isISOControl)) {
-            throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
-        }
-        for (String segment : path.split("/", -1)) {
-            if (segment.isEmpty() || ".".equals(segment) || "..".equals(segment)) {
-                throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
-            }
-        }
-    }
-
-    private record Snapshot(SkillDownloadResource resource, SkillPackageManifest manifest) {
-    }
+    private record Snapshot(
+            SkillDownloadResource resource,
+            SkillPackageManifest manifest,
+            SkillArtifactDO artifact) {}
 }

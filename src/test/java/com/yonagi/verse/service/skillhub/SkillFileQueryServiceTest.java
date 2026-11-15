@@ -1,6 +1,20 @@
 package com.yonagi.verse.service.skillhub;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import cn.hutool.crypto.digest.DigestUtil;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
@@ -13,6 +27,13 @@ import com.yonagi.verse.dto.resp.SkillFileContentRespDTO;
 import com.yonagi.verse.dto.resp.SkillFilesRespDTO;
 import com.yonagi.verse.service.skillhub.port.SkillArtifactStore;
 import com.yonagi.verse.service.skillhub.port.SkillValidatedFile;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
+
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -23,23 +44,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.NullAndEmptySource;
-import org.junit.jupiter.params.provider.ValueSource;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyInt;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.doReturn;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 /** 隔离 Mapper/S3/原授权，只验证新增用例决策，不声称证明基础设施一致性。 */
 class SkillFileQueryServiceTest {
@@ -49,7 +53,9 @@ class SkillFileQueryServiceTest {
     private final SkillArtifactMapper artifacts = mock(SkillArtifactMapper.class);
     private final SkillArtifactStore store = mock(SkillArtifactStore.class);
     private final SkillGithubSnapshotCodec codec = new SkillGithubSnapshotCodec(new ObjectMapper());
-    private final SkillFileQueryService service = new SkillFileQueryService(query, authorization, artifacts, codec, store);
+    private final SkillFileQueryService service =
+            new SkillFileQueryService(
+                    query, authorization, artifacts, codec, new SkillArtifactPreviewReader(store));
     private SkillArtifactDO artifact;
     private SkillDownloadResource resource;
 
@@ -68,13 +74,16 @@ class SkillFileQueryServiceTest {
 
     @Test
     void listsStablePathsAndPackageRootFromTheExactPublishedSnapshot() {
-        List<SkillValidatedFile> files = List.of(file("z.txt", new byte[0]), file("SKILL.md", new byte[0]));
+        List<SkillValidatedFile> files =
+                List.of(file("z.txt", new byte[0]), file("SKILL.md", new byte[0]));
         manifest(new SkillPackageManifest(ROOT, "说明", files));
         SkillFilesRespDTO result = service.files(20L, 70L);
         assertEquals("70", result.versionId());
         assertEquals(ROOT, result.rootName());
         assertEquals(1024 * 1024, result.maxPreviewBytes());
-        assertEquals(List.of("SKILL.md", "z.txt"), result.items().stream().map(value -> value.relativePath()).toList());
+        assertEquals(
+                List.of("SKILL.md", "z.txt"),
+                result.items().stream().map(value -> value.relativePath()).toList());
         assertEquals(DigestUtil.sha256Hex(new byte[0]), result.items().getFirst().sha256());
         verify(store, never()).get(anyString(), anyInt());
     }
@@ -102,7 +111,8 @@ class SkillFileQueryServiceTest {
         manifest(new SkillPackageManifest(ROOT, "说明", List.of(
                 new SkillValidatedFile("large.txt", "a".repeat(64), maximum.length + 1L),
                 new SkillValidatedFile("office.docx", "b".repeat(64), 10L))));
-        when(store.get(anyString(), anyInt())).thenThrow(new AssertionError("metadata-only result must not read S3"));
+        when(store.get(anyString(), anyInt()))
+                .thenThrow(new AssertionError("metadata-only result must not read S3"));
         assertEquals("TOO_LARGE", service.content(20L, 70L, "large.txt").status());
         SkillFileContentRespDTO unsupported = service.content(20L, 70L, "office.docx");
         assertEquals("UNSUPPORTED", unsupported.status());
@@ -120,8 +130,20 @@ class SkillFileQueryServiceTest {
 
     @ParameterizedTest
     @NullAndEmptySource
-    @ValueSource(strings = {" ", "/etc/passwd", "../SKILL.md", "a/../x.txt", "a/./x.txt", "a//x.txt",
-            "a/", "C:/x.txt", "a\\x.txt", "a\u0000.txt", "https://example.com/a.txt"})
+    @ValueSource(
+            strings = {
+                " ",
+                "/etc/passwd",
+                "../SKILL.md",
+                "a/../x.txt",
+                "a/./x.txt",
+                "a//x.txt",
+                "a/",
+                "C:/x.txt",
+                "a\\x.txt",
+                "a\u0000.txt",
+                "https://example.com/a.txt"
+            })
     void rejectsUnsafePathsBeforeAnyResourceLookup(String path) {
         ClientException failure = assertThrows(ClientException.class, () -> service.content(20L, 70L, path));
         assertEquals(SkillErrorCodeEnum.INVALID_INPUT.code(), failure.getErrorCode());
@@ -149,7 +171,8 @@ class SkillFileQueryServiceTest {
 
     @Test
     void finalSnapshotChangeAndOtherAuthorizationFailuresRemainFailures() {
-        SkillDownloadResource changed = new SkillDownloadResource(70L, "changed.zip", "other", "other", 1L);
+        SkillDownloadResource changed =
+                new SkillDownloadResource(70L, "changed.zip", "other", "other", 1L);
         when(authorization.authorize(70L)).thenReturn(resource).thenReturn(changed);
         assertDenied(() -> service.files(20L, 70L));
         when(authorization.authorize(70L)).thenThrow(new ClientException(SkillErrorCodeEnum.RATE_LIMITED));
@@ -193,11 +216,19 @@ class SkillFileQueryServiceTest {
         malformed.add(new SkillPackageManifest(null, "", List.of()));
         malformed.add(new SkillPackageManifest(" ", "", List.of()));
         malformed.add(new SkillPackageManifest(ROOT, "", null));
-        malformed.add(new SkillPackageManifest(ROOT, "", java.util.Collections.nCopies(501, file("a.txt", new byte[0]))));
+        malformed.add(
+                new SkillPackageManifest(
+                        ROOT, "", java.util.Collections.nCopies(501, file("a.txt", new byte[0]))));
         malformed.add(new SkillPackageManifest(ROOT, "", Arrays.asList((SkillValidatedFile) null)));
-        malformed.add(new SkillPackageManifest(ROOT, "", List.of(new SkillValidatedFile(null, "hash", 1L))));
-        malformed.add(new SkillPackageManifest(ROOT, "", List.of(new SkillValidatedFile("a.txt", null, 1L))));
-        malformed.add(new SkillPackageManifest(ROOT, "", List.of(new SkillValidatedFile("a.txt", "hash", -1L))));
+        malformed.add(
+                new SkillPackageManifest(
+                        ROOT, "", List.of(new SkillValidatedFile(null, "hash", 1L))));
+        malformed.add(
+                new SkillPackageManifest(
+                        ROOT, "", List.of(new SkillValidatedFile("a.txt", null, 1L))));
+        malformed.add(
+                new SkillPackageManifest(
+                        ROOT, "", List.of(new SkillValidatedFile("a.txt", "hash", -1L))));
         for (SkillPackageManifest manifest : malformed) {
             manifest(manifest);
             assertThrows(ServerException.class, () -> service.files(20L, 70L));
