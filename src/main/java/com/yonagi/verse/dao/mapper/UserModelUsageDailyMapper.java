@@ -15,13 +15,17 @@ public interface UserModelUsageDailyMapper extends BaseMapper<UserModelUsageDail
         """)
     int contribute(UserModelUsageDailyDO contribution);
 
+    /** 与有效日汇总使用相同的请求身份，避免同日其他请求的更正触发重建。 */
     @Select("""
         SELECT EXISTS (
             SELECT 1 FROM t_cost_reconciliation_case c JOIN t_cost_reconciliation_adjustment a ON a.case_id=c.id
-            WHERE c.user_id=#{userId} AND c.request_started_at>=#{from} AND c.request_started_at<#{to}
+            WHERE c.event_id=#{eventId} AND c.user_id=#{userId} AND c.tenant_id=#{tenantId}
+              AND c.request_id=#{requestId} AND c.source=#{source}
         )
         """)
-    boolean hasCorrections(@Param("userId") Long userId, @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+    boolean hasCorrectionForUsage(@Param("eventId") String eventId, @Param("userId") Long userId,
+                                  @Param("tenantId") Long tenantId, @Param("requestId") String requestId,
+                                  @Param("source") String source);
 
     @Insert("""
         INSERT INTO t_personal_usage_daily(user_id,usage_date,success_count,known_cost_fen,unknown_cost_count,updated_at)

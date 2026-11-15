@@ -1,11 +1,14 @@
 package com.yonagi.verse.service.usage.user;
 
 import com.yonagi.verse.service.user.costalert.UserCostAlertTriggerService;
+import com.yonagi.verse.service.budget.CostReconciliationTracking;
 import com.yonagi.verse.support.UserUsageTestFixtures;
 import com.yonagi.verse.common.config.UserModelUsageProperties;
 import com.yonagi.verse.dao.entity.*;
 import com.yonagi.verse.dao.mapper.*;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import java.math.BigDecimal;
 import java.time.*;
 import java.util.*;
@@ -35,6 +38,129 @@ class UserModelUsageProjectionServiceTest {
         assertEquals(LocalDate.of(2026,10,17),contribution.getValue().getUsageDate()); assertEquals(1,contribution.getValue().getSuccessCount());
         assertEquals(cost.getEstimatedCostFen(),contribution.getValue().getKnownCostFen()); assertEquals("APPLIED",task.getStatus()); verify(capture).capture(1L);
         service.project(1L,10L); verify(daily,times(1)).contribute(any()); verify(capture,times(1)).capture(1L);
+    }
+
+    @Test
+    void ordinaryUsageKeepsIncrementalContributionAfterAnotherCorrectionOnTheDay() {
+        reconciliation(true);
+        LocalDate day = fact.getRequestStartedAt().toLocalDate();
+        fact.setEventId("usage-event");
+        when(daily.hasCorrectionForUsage("usage-event", 1L, 2L, "r", "PLAYGROUND")).thenReturn(false);
+
+        service.project(1L, 10L);
+
+        var contribution = org.mockito.ArgumentCaptor.forClass(UserModelUsageDailyDO.class);
+        verify(daily).contribute(contribution.capture());
+        assertEquals(cost.getEstimatedCostFen(), contribution.getValue().getKnownCostFen());
+        assertEquals(1L, contribution.getValue().getSuccessCount());
+        assertEquals(0L, contribution.getValue().getUnknownCostCount());
+        assertEquals(day, contribution.getValue().getUsageDate());
+        assertEquals("APPLIED", task.getStatus());
+        verify(daily, never()).rebuildEffectiveDay(any(), any(), any(), any());
+        service.project(1L, 10L);
+        verify(daily).contribute(any());
+    }
+
+    @Test
+    void alreadyCorrectedUsageIsAppliedBeforeRebuildWithoutAddingItsOriginalUnknownCost() {
+        reconciliation(true);
+        fact.setEventId("corrected-event");
+        cost.setCostStatus("UNCALCULABLE");
+        cost.setEstimatedCostFen(null);
+        when(daily.hasCorrectionForUsage("corrected-event", 1L, 2L, "r", "PLAYGROUND")).thenReturn(true);
+        LocalDate day = fact.getRequestStartedAt().toLocalDate();
+        when(daily.rebuildEffectiveDay(eq(1L), eq(day.atStartOfDay()), eq(day.plusDays(1).atStartOfDay()), any()))
+                .thenAnswer(call -> {
+                    assertEquals("APPLIED", task.getStatus());
+                    assertEquals(UserUsageTestFixtures.TIME.local(UserUsageTestFixtures.TIME.now()),
+                            task.getProjectedAt());
+                    return 1;
+                });
+
+        service.project(1L, 10L);
+        service.project(1L, 10L);
+
+        assertEquals("APPLIED", task.getStatus());
+        assertEquals("UNCALCULABLE", cost.getCostStatus());
+        assertNull(cost.getEstimatedCostFen());
+        verify(daily, never()).contribute(any());
+        verify(daily).rebuildEffectiveDay(eq(1L), eq(day.atStartOfDay()), eq(day.plusDays(1).atStartOfDay()), any());
+        verify(capture).capture(1L);
+    }
+
+    @Test
+    void unresolvedUsageKeepsUnknownContributionUntilItsOwnCorrectionExists() {
+        reconciliation(true);
+        cost.setCostStatus("UNCALCULABLE");
+        cost.setEstimatedCostFen(null);
+
+        service.project(1L, 10L);
+
+        var contribution = org.mockito.ArgumentCaptor.forClass(UserModelUsageDailyDO.class);
+        verify(daily).contribute(contribution.capture());
+        assertEquals(BigDecimal.ZERO, contribution.getValue().getKnownCostFen());
+        assertEquals(1L, contribution.getValue().getUnknownCostCount());
+        assertEquals(1L, contribution.getValue().getSuccessCount());
+        assertEquals("APPLIED", task.getStatus());
+        verify(daily, never()).rebuildEffectiveDay(any(), any(), any(), any());
+    }
+
+    @Test
+    void laterCorrectionRebuildsOriginalDayWithoutReprojectingTheOriginalFee() {
+        reconciliation(true);
+        service.project(1L, 10L);
+        when(daily.hasCorrectionForUsage(any(), any(), any(), any(), any())).thenReturn(true);
+
+        service.correctedDay(1L, fact.getRequestStartedAt().toLocalDate());
+        service.project(1L, 10L);
+
+        var contribution = org.mockito.ArgumentCaptor.forClass(UserModelUsageDailyDO.class);
+        verify(daily).contribute(contribution.capture());
+        assertEquals(cost.getEstimatedCostFen(), contribution.getValue().getKnownCostFen());
+        assertEquals("APPLIED", task.getStatus());
+        verify(daily).rebuildEffectiveDay(eq(1L), eq(LocalDateTime.of(2026, 10, 17, 0, 0)),
+                eq(LocalDateTime.of(2026, 10, 18, 0, 0)), any());
+        verify(capture, times(2)).capture(1L);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"lookup", "rebuild"})
+    void correctionDependencyFailurePropagatesWithoutInventingAContributionOrAlert(String stage) {
+        reconciliation(true);
+        when(daily.hasCorrectionForUsage(any(), any(), any(), any(), any())).thenReturn(true);
+        IllegalStateException failure = new IllegalStateException("correction unavailable");
+        if ("lookup".equals(stage)) {
+            when(daily.hasCorrectionForUsage(any(), any(), any(), any(), any())).thenThrow(failure);
+        } else {
+            when(daily.rebuildEffectiveDay(any(), any(), any(), any())).thenThrow(failure);
+        }
+
+        assertSame(failure, assertThrows(IllegalStateException.class, () -> service.project(1L, 10L)));
+        verify(daily, never()).contribute(any());
+        verifyNoInteractions(capture);
+        if ("lookup".equals(stage)) {
+            assertEquals("PENDING", task.getStatus());
+            verify(work, never()).finish(any());
+        }
+    }
+
+    @Test
+    void inactiveReconciliationKeepsLegacyIncrementalProjection() {
+        reconciliation(false);
+
+        service.project(1L, 10L);
+
+        var contribution = org.mockito.ArgumentCaptor.forClass(UserModelUsageDailyDO.class);
+        verify(daily).contribute(contribution.capture());
+        assertEquals(cost.getEstimatedCostFen(), contribution.getValue().getKnownCostFen());
+        assertEquals("APPLIED", task.getStatus());
+        verify(daily, never()).hasCorrectionForUsage(any(), any(), any(), any(), any());
+    }
+
+    private void reconciliation(boolean enabled) {
+        CostReconciliationTracking reconciliation = mock(CostReconciliationTracking.class);
+        when(reconciliation.enabled()).thenReturn(enabled);
+        service.setReconciliationTracking(reconciliation);
     }
     @Test void equivalentDuplicateHasCredentialButNoContributionAndConflictPausesFurtherAlerts() {
         task.setCanonicalUsageId(9L); var canonical=new TokenUsageDO(); org.springframework.beans.BeanUtils.copyProperties(fact,canonical); canonical.setId(9L); when(facts.selectById(9L)).thenReturn(canonical);

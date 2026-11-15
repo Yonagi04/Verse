@@ -68,8 +68,9 @@ public class UserModelUsageProjectionService {
             if (first==null || !"APPLIED".equals(first.getStatus())) throw new IllegalStateException("CANONICAL_PENDING");
             row.setStatus("DUPLICATE");
         } else if (reconciliation != null && reconciliation.enabled()
-                && daily.hasCorrections(userId, usage.getRequestStartedAt().toLocalDate().atStartOfDay(),
-                usage.getRequestStartedAt().toLocalDate().plusDays(1).atStartOfDay())) {
+                && daily.hasCorrectionForUsage(usage.getEventId(), userId, usage.getTenantId(),
+                usage.getRequestId(), usage.getSource())) {
+            // 更正费用可能已先于原用量进入日汇总，整体替换才能避免重复贡献。
             row.setStatus("APPLIED");
             row.setProjectedAt(time.local(time.now()));
             work.finish(row);
