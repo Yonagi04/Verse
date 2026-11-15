@@ -7,10 +7,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yonagi.verse.common.convention.exception.ServerException;
 import com.yonagi.verse.common.enums.SkillErrorCodeEnum;
 import com.yonagi.verse.dto.skillhub.SkillSourceDTO;
+
+import lombok.RequiredArgsConstructor;
+
+import org.springframework.stereotype.Component;
+
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Component;
 
 /** 固定形状私人快照的有界编解码，不接受任意JSON扩展字段。 */
 @Component
@@ -64,7 +67,11 @@ public class SkillGithubSnapshotCodec {
             return SkillSourceDTO.zip();
         }
         SkillSourceDTO source = decode(sourceJson, SkillSourceDTO.class);
-        if (source == null || !"GITHUB".equals(source.type()) || source.commitSha() == null) {
+        if (source == null
+                || source.schemaVersion() == null
+                || !java.util.Set.of(1, 2).contains(source.schemaVersion())
+                || !"GITHUB".equals(source.type())
+                || source.commitSha() == null) {
             throw invalid();
         }
         return source;

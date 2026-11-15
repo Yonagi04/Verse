@@ -40,6 +40,7 @@ class SkillCreationSourcePolicyTest {
         version.setVersionId(70L);
         version.setSkillId(20L);
         version.setArtifactId(40L);
+        version.setPublishedBy(1L);
         version.setVersionType("RELEASE");
         when(versions.selectById(70L)).thenReturn(version);
         artifact = SkillTestFixture.artifact();

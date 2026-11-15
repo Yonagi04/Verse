@@ -1,5 +1,18 @@
 package com.yonagi.verse.service.skillhub;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.dao.entity.skillhub.SkillArtifactDO;
@@ -17,23 +30,13 @@ import com.yonagi.verse.dto.skillhub.SkillValidationIssueDTO;
 import com.yonagi.verse.service.skillhub.port.SkillValidatedFile;
 import com.yonagi.verse.service.skillhub.port.SkillValidationReport;
 import com.yonagi.verse.service.user.AccountAvailabilityService;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+
 import java.time.LocalDateTime;
 import java.util.List;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 class SkillImportExecutionServiceTest {
     private final SkillAccessPolicy access = mock(SkillAccessPolicy.class);
@@ -44,10 +47,19 @@ class SkillImportExecutionServiceTest {
     private final SkillArtifactFileMapper files = mock(SkillArtifactFileMapper.class);
     private final com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper githubSources =
             mock(com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper.class);
-    private final SkillImportExecutionService service = new SkillImportExecutionService(access, accounts, tasks,
-            drafts, artifacts, files, new ObjectMapper(),
-            githubSources,
-            new SkillGithubSnapshotCodec(new ObjectMapper()), new SkillPublicationSnapshotCodec(new ObjectMapper()));
+    private final SkillImportExecutionService service =
+            new SkillImportExecutionService(
+                    access,
+                    mock(SkillCreationSourcePolicy.class),
+                    accounts,
+                    tasks,
+                    drafts,
+                    artifacts,
+                    files,
+                    new ObjectMapper(),
+                    githubSources,
+                    new SkillGithubSnapshotCodec(new ObjectMapper()),
+                    new SkillPublicationSnapshotCodec(new ObjectMapper()));
     private final SkillDraftDO draft = SkillTestFixture.draft();
     private final SkillImportTaskDO task = SkillTestFixture.task();
 
@@ -75,7 +87,16 @@ class SkillImportExecutionServiceTest {
         task.setQueueDeadline(SkillTestFixture.now().plusMinutes(10));
         var source = new com.yonagi.verse.dao.entity.skillhub.SkillGithubSourceDO(); source.setJobId(50L);
         when(githubSources.selectById(50L)).thenReturn(source);
-        var origin = new SkillSourceDTO(1,"GITHUB","https://github.com/a/b","99","main","BRANCH","a".repeat(40),"");
+        var origin =
+                new SkillSourceDTO(
+                        1,
+                        "GITHUB",
+                        "https://github.com/a/b",
+                        "99",
+                        "main",
+                        "BRANCH",
+                        "a".repeat(40),
+                        "");
         var choices = List.of(new SkillGithubSourceOptionDTO("option",origin,"b".repeat(40)));
         var claim = service.claim(50L);
         assertThrows(ClientException.class, () -> service.resolved(claim,List.of()));
@@ -94,13 +115,25 @@ class SkillImportExecutionServiceTest {
     void multipleCandidatesPauseWithNewDraftRevisionAndNoArtifactBinding() {
         var source = githubFetchSource(); var claim = service.claim(50L);
         var candidate = githubCandidate("one",true);
-        assertFalse(service.fetched(claim,"archive","a".repeat(64),10L,"tree","b".repeat(64),"c".repeat(64),
-                List.of(candidate,githubCandidate("two",true))));
+        assertFalse(
+                service.fetched(
+                        claim,
+                        "archive",
+                        "a".repeat(64),
+                        10L,
+                        "tree",
+                        "b".repeat(64),
+                        "c".repeat(64),
+                        List.of(candidate, githubCandidate("two", true))));
         assertEquals("WAITING_SELECTION",task.getStatus()); assertEquals("SELECT",task.getPhase());
         assertEquals(3L,draft.getRevision()); assertNull(source.getSelectedCandidateId());
         assertEquals("tree",source.getTreeKey()); assertEquals("archive",task.getSourceKey());
         assertNull(draft.getArtifactId());
-        assertThrows(ClientException.class, () -> service.fetched(claim,"late","a",1L,"late-tree","b","c",List.of(candidate)));
+        assertThrows(
+                ClientException.class,
+                () ->
+                        service.fetched(
+                                claim, "late", "a", 1L, "late-tree", "b", "c", List.of(candidate)));
         assertEquals("archive",task.getSourceKey());
     }
 
@@ -108,21 +141,56 @@ class SkillImportExecutionServiceTest {
     void uniqueValidCandidateRetainsFetchBudgetWhileInvalidCandidateFailsWithRelativeIssue() {
         var source = githubFetchSource(); var claim = service.claim(50L);
         var deadline = task.getProcessingDeadline(); var token = task.getExecutionToken();
-        assertTrue(service.fetched(claim,"archive","a".repeat(64),10L,"tree","b","c",List.of(githubCandidate("one",true))));
+        assertTrue(
+                service.fetched(
+                        claim,
+                        "archive",
+                        "a".repeat(64),
+                        10L,
+                        "tree",
+                        "b",
+                        "c",
+                        List.of(githubCandidate("one", true))));
         assertEquals("RUNNING",task.getStatus()); assertEquals("FETCH",task.getPhase());
-        assertEquals("one",source.getSelectedCandidateId()); assertEquals(deadline,task.getProcessingDeadline());
+        assertEquals("one", source.getSelectedCandidateId());
+        assertEquals(deadline,task.getProcessingDeadline());
         assertEquals(token,task.getExecutionToken()); assertNull(task.getWaitUntil());
-        assertFalse(service.fetched(claim,"archive","a".repeat(64),10L,"tree","b","c",List.of(githubCandidate("one",false))));
-        assertEquals("FAILED",task.getStatus()); assertEquals("INVALID_SKILL_MARKDOWN",task.getErrorCode());
-        assertTrue(source.getValidationIssuesJson().contains("one/SKILL.md")); assertNull(draft.getArtifactId());
+        assertFalse(
+                service.fetched(
+                        claim,
+                        "archive",
+                        "a".repeat(64),
+                        10L,
+                        "tree",
+                        "b",
+                        "c",
+                        List.of(githubCandidate("one", false))));
+        assertEquals("FAILED", task.getStatus());
+        assertEquals("INVALID_SKILL_MARKDOWN", task.getErrorCode());
+        assertTrue(source.getValidationIssuesJson().contains("one/SKILL.md"));
+        assertNull(draft.getArtifactId());
     }
 
     @Test
     void cancelledOrReplacedGithubClaimCannotWriteSourceSnapshotsOrFailure() {
         var source = githubFetchSource(); var claim = service.claim(50L);
         task.setExecutionToken("replacement");
-        assertThrows(ClientException.class, () -> service.fetched(claim,"late","a",1L,"tree","b","c",List.of(githubCandidate("one",true))));
-        service.githubFailed(claim,new com.yonagi.verse.service.skillhub.port.SkillGithubSourceException("SOURCE_UNAVAILABLE","暂不可用",true,null));
+        assertThrows(
+                ClientException.class,
+                () ->
+                        service.fetched(
+                                claim,
+                                "late",
+                                "a",
+                                1L,
+                                "tree",
+                                "b",
+                                "c",
+                                List.of(githubCandidate("one", true))));
+        service.githubFailed(
+                claim,
+                new com.yonagi.verse.service.skillhub.port.SkillGithubSourceException(
+                        "SOURCE_UNAVAILABLE", "暂不可用", true, null));
         assertEquals("RUNNING",task.getStatus()); assertNull(source.getCandidatesJson());
         assertNull(source.getTreeKey()); assertNull(draft.getArtifactId());
     }
@@ -135,8 +203,22 @@ class SkillImportExecutionServiceTest {
     }
 
     private SkillGithubCandidateDTO githubCandidate(String name, boolean valid) {
-        return new SkillGithubCandidateDTO(name,name,name,"说明",1,10L,valid,
-                valid ? List.of() : List.of(new SkillValidationIssueDTO("INVALID_SKILL_MARKDOWN",name+"/SKILL.md",null,"声明错误")));
+        return new SkillGithubCandidateDTO(
+                name,
+                name,
+                name,
+                "说明",
+                1,
+                10L,
+                valid,
+                valid
+                        ? List.of()
+                        : List.of(
+                                new SkillValidationIssueDTO(
+                                        "INVALID_SKILL_MARKDOWN",
+                                        name + "/SKILL.md",
+                                        null,
+                                        "声明错误")));
     }
 
     @Test
@@ -164,9 +246,15 @@ class SkillImportExecutionServiceTest {
         assertNull(service.claim(50L)); assertEquals("QUEUE_TIMEOUT", task.getErrorCode());
         task.setStatus("QUEUED"); task.setQueueDeadline(SkillTestFixture.now().plusMinutes(10));
         SkillExecutionClaim claim = service.claim(50L);
-        service.githubFailed(claim, new com.yonagi.verse.service.skillhub.port.SkillGithubSourceException(
-                "GITHUB_RATE_LIMITED", "GitHub限流", true, java.time.Instant.now().plusSeconds(3600)));
-        assertEquals("FAILED", task.getStatus()); assertEquals("GITHUB_RATE_LIMITED", task.getErrorCode());
+        service.githubFailed(
+                claim,
+                new com.yonagi.verse.service.skillhub.port.SkillGithubSourceException(
+                        "GITHUB_RATE_LIMITED",
+                        "GitHub限流",
+                        true,
+                        java.time.Instant.now().plusSeconds(3600)));
+        assertEquals("FAILED", task.getStatus());
+        assertEquals("GITHUB_RATE_LIMITED", task.getErrorCode());
         assertTrue(task.getNextRetryAt().isAfter(SkillTestFixture.now().plusMinutes(59)));
     }
 
@@ -191,7 +279,8 @@ class SkillImportExecutionServiceTest {
         ArgumentCaptor<SkillArtifactDO> artifact = ArgumentCaptor.forClass(SkillArtifactDO.class);
         verify(artifacts).insert(artifact.capture());
         var origin = codec.source(artifact.getValue().getSourceType(), artifact.getValue().getSourceJson());
-        assertEquals("skills/one", origin.directory()); assertEquals("a".repeat(40), origin.commitSha());
+        assertEquals("skills/one", origin.directory());
+        assertEquals("a".repeat(40), origin.commitSha());
         assertFalse(metadata.decode(draft.getMetadataJson()).distributionAuthorized());
         assertFalse(metadata.decode(draft.getMetadataJson()).declarationsConfirmed());
         assertEquals("READY", draft.getStatus()); assertEquals("SUCCEEDED", task.getStatus());
@@ -218,7 +307,9 @@ class SkillImportExecutionServiceTest {
         SkillExecutionClaim replacement = service.claim(50L);
         assertNotEquals(original.token(), replacement.token());
         assertEquals(2, task.getAttemptCount());
-        assertThrows(ClientException.class, () -> service.complete(original, report(), "skillhub/v1/artifact/old.zip"));
+        assertThrows(
+                ClientException.class,
+                () -> service.complete(original, report(), "skillhub/v1/artifact/old.zip"));
         verify(artifacts, never()).insert(any(SkillArtifactDO.class));
     }
 
@@ -244,7 +335,9 @@ class SkillImportExecutionServiceTest {
         SkillExecutionClaim claim = service.claim(50L);
         draft.setStatus("CANCELLED");
         assertFalse(service.renew(claim));
-        assertThrows(ClientException.class, () -> service.complete(claim, report(), "skillhub/v1/artifact/late.zip"));
+        assertThrows(
+                ClientException.class,
+                () -> service.complete(claim, report(), "skillhub/v1/artifact/late.zip"));
         draft.setStatus("EDITING");
         draft.setLatestJobId(51L);
         assertFalse(service.renew(claim));
@@ -340,7 +433,9 @@ class SkillImportExecutionServiceTest {
         task.setProcessingDeadline(SkillTestFixture.now().minusSeconds(1));
         task.setLeaseUntil(SkillTestFixture.now().plusSeconds(30));
         assertFalse(service.renew(claim));
-        assertThrows(ClientException.class, () -> service.complete(claim, report(), "skillhub/v1/artifact/late.zip"));
+        assertThrows(
+                ClientException.class,
+                () -> service.complete(claim, report(), "skillhub/v1/artifact/late.zip"));
         verify(artifacts, never()).insert(any(SkillArtifactDO.class));
         assertNull(draft.getArtifactId());
         service.fail(claim, false, "CHECK_UNAVAILABLE", "正在重试");
@@ -398,8 +493,18 @@ class SkillImportExecutionServiceTest {
     }
 
     private SkillValidationReport report() {
-        return new SkillValidationReport("a".repeat(64), true, null, null, "test-skill", "说明", "# 测试",
-                new byte[]{1, 2, 3}, "b".repeat(64), "c".repeat(64), 10L,
+        return new SkillValidationReport(
+                "a".repeat(64),
+                true,
+                null,
+                null,
+                "test-skill",
+                "说明",
+                "# 测试",
+                new byte[] {1, 2, 3},
+                "b".repeat(64),
+                "c".repeat(64),
+                10L,
                 List.of(new SkillValidatedFile("SKILL.md", "d".repeat(64), 10L)));
     }
 }

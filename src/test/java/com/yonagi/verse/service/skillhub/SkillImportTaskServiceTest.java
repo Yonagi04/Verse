@@ -1,17 +1,5 @@
 package com.yonagi.verse.service.skillhub;
 
-import com.yonagi.verse.common.convention.exception.ClientException;
-import com.yonagi.verse.common.enums.SkillErrorCodeEnum;
-import com.yonagi.verse.dao.entity.skillhub.SkillDraftDO;
-import com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO;
-import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
-import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
-import com.yonagi.verse.dto.req.SkillImportCreateReqDTO;
-import com.yonagi.verse.dto.resp.SkillImportTaskRespDTO;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -24,16 +12,42 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.yonagi.verse.common.convention.exception.ClientException;
+import com.yonagi.verse.common.enums.SkillErrorCodeEnum;
+import com.yonagi.verse.dao.entity.skillhub.SkillDraftDO;
+import com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO;
+import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
+import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
+import com.yonagi.verse.dto.req.SkillImportCreateReqDTO;
+import com.yonagi.verse.dto.resp.SkillImportTaskRespDTO;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import java.time.LocalDateTime;
+
 class SkillImportTaskServiceTest {
     private static final String KEY = "49a3d831-c7f1-4d70-ae81-c044921bf2a9";
     private final SkillAccessPolicy access = mock(SkillAccessPolicy.class);
     private final SkillImportTaskMapper tasks = mock(SkillImportTaskMapper.class);
     private final SkillDraftMapper drafts = mock(SkillDraftMapper.class);
     private final SkillIdempotencyService commands = mock(SkillIdempotencyService.class);
-    private final SkillImportTaskService service = new SkillImportTaskService(access, tasks, drafts, commands,
-            new SkillPublicationSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper()),
-            new SkillImportTaskViews(mock(com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper.class),
-                    new SkillGithubSnapshotCodec(new com.fasterxml.jackson.databind.ObjectMapper())));
+    private final SkillImportTaskService service =
+            new SkillImportTaskService(
+                    access,
+                    mock(SkillCreationSourcePolicy.class),
+                    tasks,
+                    drafts,
+                    commands,
+                    new SkillPublicationSnapshotCodec(
+                            new com.fasterxml.jackson.databind.ObjectMapper()),
+                    new SkillImportTaskViews(
+                            mock(
+                                    com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper
+                                            .class),
+                            new SkillGithubSnapshotCodec(
+                                    new com.fasterxml.jackson.databind.ObjectMapper())));
     private final SkillDraftDO draft = SkillTestFixture.draft();
     private final SkillImportTaskDO task = SkillTestFixture.task();
 

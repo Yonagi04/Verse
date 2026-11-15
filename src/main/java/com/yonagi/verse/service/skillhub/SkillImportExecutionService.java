@@ -1,12 +1,15 @@
 package com.yonagi.verse.service.skillhub;
 
 import cn.hutool.crypto.digest.DigestUtil;
+
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.yonagi.verse.common.constant.SkillGithubLimitConstant;
+import com.yonagi.verse.common.constant.SkillPackageLimitConstant;
 import com.yonagi.verse.common.convention.exception.ClientException;
 import com.yonagi.verse.common.convention.exception.ServerException;
-import com.yonagi.verse.common.constant.SkillPackageLimitConstant;
 import com.yonagi.verse.common.enums.SkillArtifactStatusEnum;
 import com.yonagi.verse.common.enums.SkillDraftStatusEnum;
 import com.yonagi.verse.common.enums.SkillErrorCodeEnum;
@@ -15,30 +18,31 @@ import com.yonagi.verse.common.util.SnowflakeIdUtil;
 import com.yonagi.verse.dao.entity.skillhub.SkillArtifactDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillArtifactFileDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillDraftDO;
+import com.yonagi.verse.dao.entity.skillhub.SkillGithubSourceDO;
 import com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO;
 import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactFileMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillArtifactMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
-import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
-import com.yonagi.verse.service.skillhub.port.SkillValidatedFile;
-import com.yonagi.verse.service.skillhub.port.SkillValidationReport;
-import com.yonagi.verse.service.user.AccountAvailabilityService;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.util.Set;
-import java.util.UUID;
-import java.util.List;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.yonagi.verse.common.constant.SkillGithubLimitConstant;
-import com.yonagi.verse.dao.entity.skillhub.SkillGithubSourceDO;
 import com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper;
+import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
 import com.yonagi.verse.dto.skillhub.SkillGithubCandidateDTO;
 import com.yonagi.verse.dto.skillhub.SkillGithubSourceOptionDTO;
 import com.yonagi.verse.dto.skillhub.SkillSourceDTO;
 import com.yonagi.verse.service.skillhub.port.SkillGithubSourceException;
+import com.yonagi.verse.service.skillhub.port.SkillValidatedFile;
+import com.yonagi.verse.service.skillhub.port.SkillValidationReport;
+import com.yonagi.verse.service.user.AccountAvailabilityService;
+
+import lombok.RequiredArgsConstructor;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 
 /** Worker代次、租约与最终绑定的数据库权威边界，不包含S3调用或包解析。 */
 @Service
@@ -49,6 +53,7 @@ public class SkillImportExecutionService {
     private static final int RETRY_SECONDS = 15;
     private static final Set<String> EDITABLE = Set.of("EDITING", "READY");
     private final SkillAccessPolicy accessPolicy;
+    private final SkillCreationSourcePolicy creationSource;
     private final AccountAvailabilityService accountAvailabilityService;
     private final SkillImportTaskMapper taskMapper;
     private final SkillDraftMapper draftMapper;
@@ -89,7 +94,9 @@ public class SkillImportExecutionService {
         if (!queued && !abandoned) {
             return null;
         }
-        if (!jobId.equals(owned.draft().getLatestJobId()) || !EDITABLE.contains(owned.draft().getStatus())) {
+        if (!jobId.equals(owned.draft().getLatestJobId())
+                || !EDITABLE.contains(owned.draft().getStatus())
+                || !Set.of("ACTIVE", "DRAFT").contains(owned.skill().getStatus())) {
             task.setStatus(SkillImportTaskStatusEnum.CANCELLED.name());
             task.setUpdateTime(now);
             taskMapper.updateById(task);
@@ -139,9 +146,17 @@ public class SkillImportExecutionService {
         task.setAttemptCount(task.getAttemptCount() + 1);
         task.setUpdateTime(now);
         taskMapper.updateById(task);
-        return new SkillExecutionClaim(jobId, task.getDraftId(), task.getOwnerUserId(), token,
-                task.getSourceKey(), task.getSourceSha256(), task.getSourceBytes() == null ? 0L : task.getSourceBytes(),
-                github ? "GITHUB" : "ZIP", task.getPhase(), task.getProcessingDeadline().toInstant(ZoneOffset.UTC));
+        return new SkillExecutionClaim(
+                jobId,
+                task.getDraftId(),
+                task.getOwnerUserId(),
+                token,
+                task.getSourceKey(),
+                task.getSourceSha256(),
+                task.getSourceBytes() == null ? 0L : task.getSourceBytes(),
+                github ? "GITHUB" : "ZIP",
+                task.getPhase(),
+                task.getProcessingDeadline().toInstant(ZoneOffset.UTC));
     }
 
     /**
@@ -189,9 +204,11 @@ public class SkillImportExecutionService {
                 || task.getLeaseUntil() == null || !task.getLeaseUntil().isAfter(now)) {
             throw new ClientException(SkillErrorCodeEnum.CONFLICT);
         }
+        creationSource.requirePreparing(owned);
         SkillArtifactDO artifact = new SkillArtifactDO();
         if ("GITHUB".equals(task.getSourceType())) {
-            if (!Set.of("FETCH", "VALIDATE").contains(task.getPhase()) || !task.getPhase().equals(claim.phase())) {
+            if (!Set.of("FETCH", "VALIDATE").contains(task.getPhase())
+                    || !task.getPhase().equals(claim.phase())) {
                 throw new ClientException(SkillErrorCodeEnum.CONFLICT);
             }
             SkillGithubSourceDO stored = sourceMapper.selectById(claim.jobId());
@@ -202,18 +219,34 @@ public class SkillImportExecutionService {
             SkillGithubCandidateDTO candidate = candidates.stream()
                     .filter(value -> value.candidateId().equals(stored.getSelectedCandidateId()))
                     .findFirst().orElseThrow(() -> new ClientException(SkillErrorCodeEnum.CONFLICT));
-            if (("FETCH".equals(task.getPhase()) && candidates.size() != 1)
-                    || !Boolean.TRUE.equals(candidate.selectable()) || confirmed == null) {
+            if (("FETCH".equals(task.getPhase())
+                            && candidates.size() != 1
+                            && !creationSource.updating(owned.skill()))
+                    || !Boolean.TRUE.equals(candidate.selectable())
+                    || confirmed == null) {
                 throw new ClientException(SkillErrorCodeEnum.CONFLICT);
             }
             SkillSourceDTO source = confirmed.source();
             artifact.setSourceType("GITHUB");
-            artifact.setSourceJson(githubCodec.encode(new SkillSourceDTO(1, "GITHUB", source.repositoryUrl(),
-                    source.repositoryId(), source.requestedRef(), source.resolvedRefType(), source.commitSha(),
-                    candidate.directory()), 8192));
+            artifact.setSourceJson(
+                    githubCodec.encode(
+                            new SkillSourceDTO(
+                                    2,
+                                    "GITHUB",
+                                    source.repositoryUrl(),
+                                    source.repositoryId(),
+                                    source.requestedRef(),
+                                    source.resolvedRefType(),
+                                    source.commitSha(),
+                                    candidate.directory(),
+                                    stored.getFetchedAt() == null
+                                            ? null
+                                            : stored.getFetchedAt().atOffset(ZoneOffset.UTC)),
+                            8192));
         } else {
             artifact.setSourceType("ZIP");
         }
+        creationSource.validate(owned.skill(), artifact.getSourceType(), artifact.getSourceJson());
         artifact.setArtifactId(SnowflakeIdUtil.nextId());
         artifact.setOwnerUserId(claim.userId());
         artifact.setArchiveKey(archiveKey);
@@ -298,7 +331,32 @@ public class SkillImportExecutionService {
         source.setSourceOptionsJson(githubCodec.encode(options, 32768));
         source.setUpdateTime(LocalDateTime.now(ZoneOffset.UTC));
         sourceMapper.updateById(source);
-        pause(task, "WAITING_CONFIRMATION", "RESOLVE");
+        if (creationSource.updating(owned.skill())) {
+            if (options.size() != 1) {
+                throw new SkillGithubSourceException(
+                        "SOURCE_CHANGED", "固定来源不再唯一，请核验原来源", false, null);
+            }
+            SkillGithubSourceOptionDTO option = options.getFirst();
+            creationSource.validate(
+                    owned.skill(), "GITHUB", githubCodec.encode(option.source(), 8192));
+            source.setConfirmedSourceJson(githubCodec.encode(option, 8192));
+            sourceMapper.updateById(source);
+            task.setStatus("QUEUED");
+            task.setPhase("FETCH");
+            task.setAttemptCount(0);
+            task.setQueueDeadline(LocalDateTime.now(ZoneOffset.UTC).plusMinutes(10));
+            task.setNextRetryAt(LocalDateTime.now(ZoneOffset.UTC));
+            taskMapper.update(
+                    null,
+                    Wrappers.lambdaUpdate(SkillImportTaskDO.class)
+                            .eq(SkillImportTaskDO::getJobId, task.getJobId())
+                            .set(SkillImportTaskDO::getProcessingDeadline, null)
+                            .set(SkillImportTaskDO::getLeaseUntil, null));
+            task.setProcessingDeadline(null);
+            task.setLeaseUntil(null);
+        } else {
+            pause(task, "WAITING_CONFIRMATION", "RESOLVE");
+        }
         taskMapper.updateById(task);
         clearErrors(task);
     }
@@ -322,6 +380,31 @@ public class SkillImportExecutionService {
         task.setSourceKey(sourceKey);
         task.setSourceSha256(sourceSha);
         task.setSourceBytes(sourceBytes);
+        if (source.getFetchedAt() == null) {
+            source.setFetchedAt(LocalDateTime.now(ZoneOffset.UTC));
+        }
+        if (creationSource.updating(owned.skill())) {
+            String directory = creationSource.source(owned.skill()).directory();
+            SkillGithubCandidateDTO selected =
+                    candidates.stream()
+                            .filter(
+                                    value ->
+                                            directory.equals(value.directory())
+                                                    && Boolean.TRUE.equals(value.selectable()))
+                            .findFirst()
+                            .orElseThrow(
+                                    () ->
+                                            new SkillGithubSourceException(
+                                                    "SKILL_DIRECTORY_UNAVAILABLE",
+                                                    "原Skill目录已缺失或未通过校验，请检查固定来源后重试",
+                                                    false,
+                                                    null));
+            source.setSelectedCandidateId(selected.candidateId());
+            sourceMapper.updateById(source);
+            task.setUpdateTime(LocalDateTime.now(ZoneOffset.UTC));
+            taskMapper.updateById(task);
+            return true;
+        }
         boolean automatic = candidates.size() == 1 && Boolean.TRUE.equals(candidates.getFirst().selectable());
         if (automatic) {
             source.setSelectedCandidateId(candidates.getFirst().candidateId());
@@ -372,6 +455,7 @@ public class SkillImportExecutionService {
     }
 
     private SkillImportTaskDO requireCurrent(SkillExecutionClaim claim, SkillOwnedDraft owned) {
+        creationSource.requirePreparing(owned);
         SkillImportTaskDO task = taskMapper.selectByIdForUpdate(claim.jobId());
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         if (task == null || !claim.jobId().equals(owned.draft().getLatestJobId())
@@ -423,7 +507,8 @@ public class SkillImportExecutionService {
 
     private boolean processingLimitReached(SkillImportTaskDO task, LocalDateTime now) {
         if (!processingDeadline(task).isAfter(now)) {
-            task.setErrorCode("GITHUB".equals(task.getSourceType()) ? "SOURCE_TIMEOUT" : "CHECK_TIMEOUT");
+            task.setErrorCode(
+                    "GITHUB".equals(task.getSourceType()) ? "SOURCE_TIMEOUT" : "CHECK_TIMEOUT");
             task.setPublicReason("GITHUB".equals(task.getSourceType())
                     ? "处理超时，请稍后重新导入此固定提交" : "检查处理超时，请重新选择ZIP文件导入");
             return true;

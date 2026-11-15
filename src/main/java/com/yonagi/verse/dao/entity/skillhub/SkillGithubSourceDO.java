@@ -3,9 +3,11 @@ package com.yonagi.verse.dao.entity.skillhub;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
-import java.time.LocalDateTime;
+
 import lombok.Getter;
 import lombok.Setter;
+
+import java.time.LocalDateTime;
 
 /** 每个GitHub任务的私人来源与选择快照，不代表公开权限。 */
 @Getter
@@ -15,6 +17,10 @@ public class SkillGithubSourceDO {
     /** 与导入任务一对一。 */
     @TableId(type = IdType.INPUT)
     private Long jobId;
+
+    /** 仓库源包成功获取时间，重试不重置。 */
+    private java.time.LocalDateTime fetchedAt;
+
     /** 有界规范化来源请求。 */
     private String requestJson;
     /** 待用户确认的解析选项。 */

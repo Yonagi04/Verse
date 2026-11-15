@@ -10,27 +10,33 @@ import com.yonagi.verse.dao.entity.skillhub.SkillImportTaskDO;
 import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillGithubSourceMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
-import com.yonagi.verse.dto.skillhub.SkillGithubCandidateDTO;
-import com.yonagi.verse.dto.skillhub.SkillGithubSourceOptionDTO;
 import com.yonagi.verse.dto.req.SkillGithubImportCreateReqDTO;
 import com.yonagi.verse.dto.req.SkillGithubSelectionReqDTO;
 import com.yonagi.verse.dto.req.SkillGithubSourceConfirmReqDTO;
 import com.yonagi.verse.dto.resp.SkillGithubCandidatesRespDTO;
 import com.yonagi.verse.dto.resp.SkillImportTaskRespDTO;
+import com.yonagi.verse.dto.skillhub.SkillGithubCandidateDTO;
+import com.yonagi.verse.dto.skillhub.SkillGithubSourceOptionDTO;
+
 import jakarta.validation.Validator;
+
+import lombok.RequiredArgsConstructor;
+
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
-import lombok.RequiredArgsConstructor;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /** GitHub创建、来源确认与目录选择的短事务，不执行远程HTTP或包解析。 */
 @Service
 @RequiredArgsConstructor
 public class SkillGithubImportService {
     private final SkillAccessPolicy access;
+    private final SkillCreationSourcePolicy creationSource;
+    private final SkillVersionWorkspaceService workspace;
     private final SkillImportTaskService tasks;
     private final SkillImportTaskMapper taskMapper;
     private final SkillGithubSourceMapper sourceMapper;
@@ -44,8 +50,38 @@ public class SkillGithubImportService {
     @Transactional(rollbackFor = Exception.class)
     public SkillImportTaskRespDTO create(Long userId, Long draftId, SkillGithubImportCreateReqDTO input, String key) {
         validate(input);
-        SkillGithubSourceRequest request = policy.parse(input);
-        Long jobId = tasks.createGithub(userId, draftId, input.revision(), key, request);
+        SkillOwnedDraft owned = access.readDraft(userId, draftId);
+        if (creationSource.updating(owned.skill())) {
+            throw new ClientException("后续更新请沿用固定创建来源", SkillErrorCodeEnum.CONFLICT);
+        }
+        return start(userId, draftId, input.revision(), policy.parse(input), key);
+    }
+
+    /**
+     * @return 只从服务端创建来源生成的更新任务，不接受引用或目录输入
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public SkillImportTaskRespDTO createUpdate(
+            Long userId, Long skillId, Long revision, String key) {
+        SkillOwnedDraft owned = workspace.read(userId, skillId);
+        if (!creationSource.updating(owned.skill())) {
+            throw new ClientException(SkillErrorCodeEnum.CONFLICT);
+        }
+        return start(
+                userId,
+                owned.draft().getDraftId(),
+                revision,
+                creationSource.request(owned.skill(), revision),
+                key);
+    }
+
+    private SkillImportTaskRespDTO start(
+            Long userId,
+            Long draftId,
+            Long revision,
+            SkillGithubSourceRequest request,
+            String key) {
+        Long jobId = tasks.createGithub(userId, draftId, revision, key, request);
         if (sourceMapper.selectById(jobId) == null) {
             SkillGithubSourceDO source = new SkillGithubSourceDO();
             source.setJobId(jobId);
@@ -132,14 +168,24 @@ public class SkillGithubImportService {
 
     private void queue(SkillImportTaskDO task, SkillOwnedDraft owned, String phase) {
         LocalDateTime time = now();
-        taskMapper.update(null, Wrappers.lambdaUpdate(SkillImportTaskDO.class)
-                .eq(SkillImportTaskDO::getJobId, task.getJobId()).set(SkillImportTaskDO::getStatus, "QUEUED")
-                .set(SkillImportTaskDO::getPhase, phase).set(SkillImportTaskDO::getAttemptCount, 0)
-                .set(SkillImportTaskDO::getQueueDeadline, time.plusMinutes(SkillGithubLimitConstant.QUEUE_MINUTES))
-                .set(SkillImportTaskDO::getProcessingDeadline, null).set(SkillImportTaskDO::getLeaseUntil, null)
-                .set(SkillImportTaskDO::getExecutionToken, null).set(SkillImportTaskDO::getWaitUntil, null)
-                .set(SkillImportTaskDO::getErrorCode, null).set(SkillImportTaskDO::getPublicReason, null)
-                .set(SkillImportTaskDO::getNextRetryAt, time).set(SkillImportTaskDO::getUpdateTime, time));
+        taskMapper.update(
+                null,
+                Wrappers.lambdaUpdate(SkillImportTaskDO.class)
+                        .eq(SkillImportTaskDO::getJobId, task.getJobId())
+                        .set(SkillImportTaskDO::getStatus, "QUEUED")
+                        .set(SkillImportTaskDO::getPhase, phase)
+                        .set(SkillImportTaskDO::getAttemptCount, 0)
+                        .set(
+                                SkillImportTaskDO::getQueueDeadline,
+                                time.plusMinutes(SkillGithubLimitConstant.QUEUE_MINUTES))
+                        .set(SkillImportTaskDO::getProcessingDeadline, null)
+                        .set(SkillImportTaskDO::getLeaseUntil, null)
+                        .set(SkillImportTaskDO::getExecutionToken, null)
+                        .set(SkillImportTaskDO::getWaitUntil, null)
+                        .set(SkillImportTaskDO::getErrorCode, null)
+                        .set(SkillImportTaskDO::getPublicReason, null)
+                        .set(SkillImportTaskDO::getNextRetryAt, time)
+                        .set(SkillImportTaskDO::getUpdateTime, time));
         owned.draft().setRevision(owned.draft().getRevision() + 1);
         owned.draft().setUpdateTime(time);
         draftMapper.updateById(owned.draft());

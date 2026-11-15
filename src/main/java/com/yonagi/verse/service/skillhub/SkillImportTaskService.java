@@ -13,9 +13,12 @@ import com.yonagi.verse.dao.mapper.skillhub.SkillDraftMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillImportTaskMapper;
 import com.yonagi.verse.dto.req.SkillImportCreateReqDTO;
 import com.yonagi.verse.dto.resp.SkillImportTaskRespDTO;
+
 import lombok.RequiredArgsConstructor;
+
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -33,6 +36,7 @@ public class SkillImportTaskService {
     private static final int UPLOAD_LEASE_MINUTES = 2;
     private static final Set<String> TERMINAL = Set.of("SUCCEEDED", "FAILED", "CANCELLED");
     private final SkillAccessPolicy accessPolicy;
+    private final SkillCreationSourcePolicy creationSource;
     private final SkillImportTaskMapper taskMapper;
     private final SkillDraftMapper draftMapper;
     private final SkillIdempotencyService idempotencyService;
@@ -52,7 +56,16 @@ public class SkillImportTaskService {
             throw new ClientException(SkillErrorCodeEnum.INVALID_INPUT);
         }
         List<Long> request = List.of(draftId, input.revision());
-        SkillImportTaskDO task = allocate(userId, draftId, input.revision(), key, CREATE_COMMAND, request, "ZIP", "VALIDATE");
+        SkillImportTaskDO task =
+                allocate(
+                        userId,
+                        draftId,
+                        input.revision(),
+                        key,
+                        CREATE_COMMAND,
+                        request,
+                        "ZIP",
+                        "VALIDATE");
         return view(task, accessPolicy.readDraft(userId, draftId).draft());
     }
 
@@ -71,8 +84,12 @@ public class SkillImportTaskService {
             return requireOwnedTask(userId, replay);
         }
         requireEditable(owned.draft());
+        creationSource.requirePreparing(owned);
         if (revision == null || !revision.equals(owned.draft().getRevision())) {
             throw new ClientException(SkillErrorCodeEnum.CONFLICT);
+        }
+        if ("ZIP".equals(sourceType)) {
+            creationSource.validate(owned.skill(), "ZIP", null);
         }
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Long active = taskMapper.selectCount(Wrappers.lambdaQuery(SkillImportTaskDO.class)
@@ -136,6 +153,7 @@ public class SkillImportTaskService {
         SkillImportTaskDO reference = requireOwnedTask(userId, jobId);
         SkillOwnedDraft owned = accessPolicy.lockDraft(userId, reference.getDraftId());
         requireEditable(owned.draft());
+        creationSource.requirePreparing(owned);
         SkillImportTaskDO task = taskMapper.selectByIdForUpdate(jobId);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         boolean expiredUpload = SkillImportTaskStatusEnum.UPLOADING.name().equals(task.getStatus())
@@ -164,6 +182,7 @@ public class SkillImportTaskService {
     public void completeUpload(SkillUploadClaim claim, String sha256, long bytes) {
         SkillOwnedDraft owned = accessPolicy.lockDraft(claim.userId(), claim.draftId());
         requireEditable(owned.draft());
+        creationSource.requirePreparing(owned);
         SkillImportTaskDO task = taskMapper.selectByIdForUpdate(claim.jobId());
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         if (!claim.jobId().equals(owned.draft().getLatestJobId())

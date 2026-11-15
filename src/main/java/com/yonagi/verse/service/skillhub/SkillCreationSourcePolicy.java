@@ -60,7 +60,9 @@ public class SkillCreationSourcePolicy {
         if (creation == null
                 || !skill.getSkillId().equals(creation.getSkillId())
                 || !"RELEASE".equals(creation.getVersionType())
-                || artifact == null) {
+                || artifact == null
+                || creation.getPublishedBy() == null
+                || !creation.getPublishedBy().equals(artifact.getOwnerUserId())) {
             throw new ServerException("创建来源不完整，请联系管理员核验迁移", SkillErrorCodeEnum.UNAVAILABLE);
         }
         return codec.source(artifact.getSourceType(), artifact.getSourceJson());
