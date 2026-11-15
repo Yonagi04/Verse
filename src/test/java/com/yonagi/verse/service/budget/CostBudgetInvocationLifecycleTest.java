@@ -10,6 +10,7 @@ import com.yonagi.verse.dao.mapper.*;
 import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
 import com.yonagi.verse.service.pricing.CostResult;
 import com.yonagi.verse.support.BudgetTestSupport;
+import java.math.BigDecimal;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.*;
@@ -80,6 +81,82 @@ class CostBudgetInvocationLifecycleTest {
         assertTrue(saved.get().getBudgetApplied());assertEquals("UNKNOWN",row.getState());
         assertEquals("TRACKING",row.getReconciliationDisposition());assertEquals(1L,row.getOriginalUserId());
         verify(invocations,times(2)).updateById(row);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"stage", "apply"})
+    void retryKeepsVerifiedCompletionAndAppliesOriginalFixedFeeOnce(String failedPhase) {
+        var scans = mock(CostReconciliationScanMapper.class);
+        when(scans.activationGeneration()).thenReturn(1L);
+        var attempts = mock(CostReconciliationAttemptMapper.class);
+        var evidence = new ReconciliationEvidence(new com.yonagi.verse.service.pricing.CostCalculator());
+        var tracking = new CostReconciliationTracking(scans, attempts, mock(CostReconciliationCaseMapper.class),
+                mock(CostReconciliationAdjustmentMapper.class), invocations,
+                mock(com.yonagi.verse.service.pricing.PricingResolver.class), evidence,
+                new BudgetPeriodResolver(clock), mock(com.yonagi.verse.async.api.ReliableDomainEventPublisher.class),
+                mock(CostReconciliationSignals.class));
+        service.setReconciliationTracking(tracking);
+        actor.setUserId(1L);
+        begin(BudgetInvocationMode.STREAM);
+        var attempt = new CostReconciliationAttemptDO();
+        attempt.setId(31L);
+        attempt.setRequestId("request");
+        attempt.setServiceId(10L);
+        attempt.setProvider("openai");
+        attempt.setOperation("CHAT_COMPLETIONS");
+        attempt.setOutcome("INTENT");
+        attempt.setPricingJson(com.alibaba.fastjson2.JSON.toJSONString(
+                new com.yonagi.verse.service.pricing.PricingSnapshot(1L,
+                        com.yonagi.verse.common.enums.BillingMode.REQUEST, "CNY", null, null,
+                        null, null, null, new BigDecimal("600"), null, null)));
+        when(attempts.latest("request")).thenReturn(attempt);
+        var saved = new java.util.concurrent.atomic.AtomicReference<CostBudgetSettlementDO>();
+        var failOnce = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(settlements.insert(any(CostBudgetSettlementDO.class))).thenAnswer(call -> {
+            saved.set(call.getArgument(0));
+            return 1;
+        });
+        when(settlements.lockEvent(anyString())).thenAnswer(call -> {
+            if ("stage".equals(failedPhase) && failOnce.getAndSet(false)) {
+                throw new IllegalStateException("stage unavailable");
+            }
+            return saved.get();
+        });
+        when(settlements.selectOne(any())).thenAnswer(call -> {
+            if ("apply".equals(failedPhase) && failOnce.getAndSet(false)) {
+                throw new IllegalStateException("apply unavailable");
+            }
+            return saved.get();
+        });
+        TokenUsageEvent terminal = event();
+        terminal.setStatus("ABORTED");
+        terminal.setExecutionOutcome(UpstreamExecutionOutcome.COMPLETED);
+        terminal.setRequestStartedAt(row.getRequestStartedAt().atZone(BudgetPeriodResolver.ZONE).toInstant());
+        UpstreamCompletionProof proof = UpstreamCompletionProof.capture(31L, "request", 10L,
+                com.yonagi.verse.common.enums.ModelOperation.CHAT_COMPLETIONS, null);
+
+        service.settle(terminal, proof);
+        assertEquals("UNKNOWN", row.getState());
+        if ("stage".equals(failedPhase)) {
+            assertNull(saved.get());
+            assertEquals("INTENT", attempt.getOutcome());
+        } else {
+            assertFalse(saved.get().getBudgetApplied());
+        }
+
+        service.retryLocalSnapshots();
+        service.retryLocalSnapshots();
+
+        assertEquals("SETTLED", row.getState());
+        assertEquals("COMPLETED", attempt.getOutcome());
+        assertEquals("CALCULATED", saved.get().getCostStatus());
+        assertEquals(0, new BigDecimal("600").compareTo(saved.get().getEstimatedCostFen()));
+        assertTrue(saved.get().getBudgetApplied());
+        assertNull(registry.local("request"));
+        assertEquals("ABORTED", com.alibaba.fastjson2.JSON.parseObject(saved.get().getEventPayloadJson(),
+                TokenUsageEvent.class).getStatus());
+        verify(settlements).insert(any(CostBudgetSettlementDO.class));
+        verify(models).apply(model, saved.get());
     }
 
     @Test void budgetRefusalHasNoFeesAndPersistsOriginalFailureWithNoUpstream() {

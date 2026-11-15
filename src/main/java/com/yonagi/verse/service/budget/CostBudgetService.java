@@ -58,7 +58,9 @@ public class CostBudgetService {
     private final UsageOutboxProperties outboxProperties;
     private final TransactionTemplate transaction;
     private final Set<String> untrackedRequests = java.util.concurrent.ConcurrentHashMap.newKeySet();
-    private final Map<String, TokenUsageEvent> pendingSnapshots = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<String, PendingSettlement> pendingSnapshots = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private record PendingSettlement(TokenUsageEvent event, UpstreamCompletionProof proof) { }
     @Value("${verse.llm.costing.enabled:true}") private boolean costingEnabled;
 
     public CostBudgetService(ApiKeyMapper keys, CostBudgetInvocationMapper invocations,
@@ -454,11 +456,21 @@ public class CostBudgetService {
 
     /** 终态结算失败不改写成功的上游响应；持久化栅栏使后续已开启请求 503。 */
     public void settle(TokenUsageEvent event) {
+        settle(event, null);
+    }
+
+    /** 内部成功证据与原终态一起重试，不由交付状态重新推断是否执行成功。 */
+    public void settle(TokenUsageEvent event, UpstreamCompletionProof proof) {
+        settle(new PendingSettlement(event, proof));
+    }
+
+    private void settle(PendingSettlement snapshot) {
+        TokenUsageEvent event = snapshot.event();
         long started = System.nanoTime();
         registry.finalizing(event.getRequestId());
-        pendingSnapshots.putIfAbsent(event.getRequestId(), event);
+        pendingSnapshots.putIfAbsent(event.getRequestId(), snapshot);
         try {
-            String eventId = shortTransaction(ignored -> stage(event));
+            String eventId = shortTransaction(ignored -> stage(event, snapshot.proof()));
             apply(eventId);
             registry.remove(event.getRequestId());
             pendingSnapshots.remove(event.getRequestId()); untrackedRequests.remove(event.getRequestId());
@@ -487,7 +499,7 @@ public class CostBudgetService {
         return invocation.getEventId();
     }
 
-    private String stage(TokenUsageEvent event) {
+    private String stage(TokenUsageEvent event, UpstreamCompletionProof proof) {
         tenantBudgets.lock(event.getTenantId());
         ApiKeyDO key = event.getApiKeyId() == null ? null : lockKey(event.getTenantId(), event.getApiKeyId());
         var models = llmBudgets.lockForRequest(event.getTenantId(), event.getRequestId(), event.getServiceId());
@@ -500,7 +512,7 @@ public class CostBudgetService {
         }
         CostBudgetSettlementDO existing = settlements.lockEvent(event.getEventId());
         if (reconciliation != null) {
-            reconciliation.prepareTerminal(event, invocation, existing);
+            reconciliation.prepareTerminal(event, invocation, existing, proof);
         }
         CostBudgetSnapshot.validate(event);
         String payload = JSON.toJSONString(event);

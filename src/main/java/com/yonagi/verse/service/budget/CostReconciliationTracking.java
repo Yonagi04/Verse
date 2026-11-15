@@ -132,12 +132,7 @@ public class CostReconciliationTracking {
                 || !("INTENT".equals(attempt.getOutcome()) || "COMPLETED".equals(attempt.getOutcome()))) {
             return;
         }
-        var proof = new TokenUsageEvent();
-        proof.setExecutionOutcome(UpstreamExecutionOutcome.COMPLETED);
-        proof.setStatus("SUCCESS");
-        proof.setUsageSource(TokenUsageEvent.SOURCE_EXACT);
-        proof.setNormalizedUsage(usage);
-        evidence.recordTerminal(attempt, proof, true);
+        evidence.recordVerifiedCompletion(attempt, usage);
         attempts.updateById(attempt);
         advanceCaseWithProof(invocation, attempt);
     }
@@ -185,6 +180,11 @@ public class CostReconciliationTracking {
     }
 
     void prepareTerminal(TokenUsageEvent event, CostBudgetInvocationDO invocation, CostBudgetSettlementDO original) {
+        prepareTerminal(event, invocation, original, null);
+    }
+
+    void prepareTerminal(TokenUsageEvent event, CostBudgetInvocationDO invocation, CostBudgetSettlementDO original,
+                         UpstreamCompletionProof proof) {
         if (invocation == null || !captures()) {
             return;
         }
@@ -207,6 +207,22 @@ public class CostReconciliationTracking {
             throw new CostBudgetSnapshot.ConflictException();
         }
         var attempt = attempts.latest(invocation.getRequestId());
+        if (proof != null) {
+            if (attempt == null || !Objects.equals(proof.attemptId(), attempt.getId())
+                    || !Objects.equals(proof.requestId(), invocation.getRequestId())
+                    || !Objects.equals(proof.requestId(), event.getRequestId())
+                    || !Objects.equals(proof.requestId(), attempt.getRequestId())
+                    || !Objects.equals(proof.serviceId(), attempt.getServiceId())
+                    || !Objects.equals(proof.serviceId(), event.getServiceId())
+                    || !Objects.equals(proof.operation(), attempt.getOperation())
+                    || !Objects.equals(proof.operation(), event.getOperation())
+                    || event.getExecutionOutcome() != UpstreamExecutionOutcome.COMPLETED
+                    || !("INTENT".equals(attempt.getOutcome()) || "COMPLETED".equals(attempt.getOutcome()))) {
+                throw new CostBudgetSnapshot.ConflictException();
+            }
+            // 原请求锁内先应用证据，再生成费用快照，取消不能抢先固化未知费用。
+            evidence.recordVerifiedCompletion(attempt, proof.usage());
+        }
         if (attempt != null && Objects.equals(attempt.getServiceId(), event.getServiceId())
                 && Objects.equals(attempt.getOperation(), event.getOperation())) {
             evidence.recordTerminal(attempt, event);

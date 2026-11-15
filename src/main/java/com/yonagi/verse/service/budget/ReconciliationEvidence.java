@@ -69,6 +69,15 @@ public class ReconciliationEvidence {
         recordTerminal(attempt, event, false);
     }
 
+    void recordVerifiedCompletion(CostReconciliationAttemptDO attempt, UsageBreakdown usage) {
+        TokenUsageEvent proof = new TokenUsageEvent();
+        proof.setExecutionOutcome(UpstreamExecutionOutcome.COMPLETED);
+        proof.setStatus("SUCCESS");
+        proof.setUsageSource(TokenUsageEvent.SOURCE_EXACT);
+        proof.setNormalizedUsage(usage);
+        recordTerminal(attempt, proof, true);
+    }
+
     void recordTerminal(CostReconciliationAttemptDO attempt, TokenUsageEvent event, boolean verifiedTransport) {
         var outcome = event.getExecutionOutcome();
         if (outcome == UpstreamExecutionOutcome.NOT_SENT) {

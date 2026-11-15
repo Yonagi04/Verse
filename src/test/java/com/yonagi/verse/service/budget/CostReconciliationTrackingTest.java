@@ -23,6 +23,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import com.yonagi.verse.common.enums.ModelOperation;
 import com.yonagi.verse.service.forward.UpstreamExecutionOutcome;
 import org.springframework.test.util.ReflectionTestUtils;
 import com.yonagi.verse.common.enums.CostStatus;
@@ -242,6 +244,91 @@ class CostReconciliationTrackingTest {
 
         assertEquals("NOT_SENT", attempt.getOutcome());
         assertEquals(CostStatus.NOT_CHARGEABLE, event.getCostResult().status());
+    }
+
+    @Test
+    void verifiedCompletionSurvivesAbortedDeliveryAndUsesHistoricalPrice() {
+        fixedPriceIntent();
+        TokenUsageEvent event = attemptedTerminal();
+        UpstreamCompletionProof proof = UpstreamCompletionProof.capture(31L, "request", 10L,
+                ModelOperation.CHAT_COMPLETIONS, null);
+
+        tracking.prepareTerminal(event, invocation(), null, proof);
+        tracking.prepareTerminal(event, invocation(), null, proof);
+
+        assertEquals("COMPLETED", attempt.getOutcome());
+        assertEquals("ABORTED", event.getStatus());
+        assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
+        assertEquals(new BigDecimal("600"), event.getCostResult().estimatedCostFen());
+        verifyNoInteractions(prices);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"attempt", "request", "service", "operation", "eventRequest", "attemptRequest",
+            "eventService", "eventOperation", "outcome", "missingAttempt", "notSentAttempt"})
+    void completionProofMustMatchTheOriginalPhysicalAttempt(String mismatch) {
+        fixedPriceIntent();
+        TokenUsageEvent event = attemptedTerminal();
+        UpstreamCompletionProof proof = UpstreamCompletionProof.capture("attempt".equals(mismatch) ? 99L : 31L,
+                "request".equals(mismatch) ? "another-request" : "request",
+                "service".equals(mismatch) ? 99L : 10L,
+                "operation".equals(mismatch) ? ModelOperation.RESPONSES : ModelOperation.CHAT_COMPLETIONS, null);
+        switch (mismatch) {
+            case "eventRequest" -> event.setRequestId("another-request");
+            case "attemptRequest" -> attempt.setRequestId("another-request");
+            case "eventService" -> event.setServiceId(99L);
+            case "eventOperation" -> event.setOperation("RESPONSES");
+            case "outcome" -> event.setExecutionOutcome(UpstreamExecutionOutcome.UNKNOWN);
+            case "missingAttempt" -> when(attempts.latest("request")).thenReturn(null);
+            case "notSentAttempt" -> attempt.setOutcome("NOT_SENT");
+            default -> { }
+        }
+
+        assertThrows(CostBudgetSnapshot.ConflictException.class,
+                () -> tracking.prepareTerminal(event, invocation(), null, proof));
+        assertNull(event.getCostResult());
+        assertNotEquals("COMPLETED", attempt.getOutcome());
+    }
+
+    @Test
+    void unverifiedProviderCannotConfirmFixedCostAndShadowModeKeepsOriginalCost() {
+        fixedPriceIntent();
+        TokenUsageEvent event = attemptedTerminal();
+        UpstreamCompletionProof proof = UpstreamCompletionProof.capture(31L, "request", 10L,
+                ModelOperation.CHAT_COMPLETIONS, null);
+        attempt.setProvider("custom");
+        tracking.prepareTerminal(event, invocation(), null, proof);
+        assertEquals(CostStatus.UNCALCULABLE, event.getCostResult().status());
+        assertEquals("INTENT", attempt.getOutcome());
+
+        attempt.setProvider("openai");
+        CostBudgetInvocationDO shadow = invocation();
+        shadow.setReconciliationGeneration(0L);
+        event.setCostResult(CostResult.of(CostStatus.NOT_CHARGEABLE));
+        tracking.prepareTerminal(event, shadow, null, proof);
+        assertEquals(CostStatus.NOT_CHARGEABLE, event.getCostResult().status());
+        assertEquals("COMPLETED", attempt.getOutcome());
+    }
+
+    @Test
+    void completionFreezesMutableUsageAndDoesNotRepriceAnExistingSettlement() {
+        fixedPriceIntent();
+        UsageBreakdown usage = exactUsage(0L);
+        UpstreamCompletionProof proof = UpstreamCompletionProof.capture(31L, "request", 10L,
+                ModelOperation.CHAT_COMPLETIONS, usage);
+        usage.rawUsage().put("cached_tokens", 99);
+        assertEquals(0L, proof.usage().rawUsage().getLong("cached_tokens"));
+        proof.usage().rawUsage().put("cached_tokens", 123);
+        assertEquals(0L, proof.usage().rawUsage().getLong("cached_tokens"));
+
+        TokenUsageEvent event = attemptedTerminal();
+        CostBudgetSettlementDO original = new CostBudgetSettlementDO();
+        TokenUsageEvent stored = attemptedTerminal();
+        stored.setCostResult(new CostResult(CostStatus.CALCULATED, new BigDecimal("123")));
+        original.setEventPayloadJson(JSON.toJSONString(stored));
+        tracking.prepareTerminal(event, invocation(), original, proof);
+        assertEquals("COMPLETED", attempt.getOutcome());
+        assertEquals(new BigDecimal("123"), event.getCostResult().estimatedCostFen());
     }
 
     private void fixedPriceIntent() {
