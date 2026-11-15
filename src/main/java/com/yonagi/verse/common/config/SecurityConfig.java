@@ -5,6 +5,7 @@ import com.yonagi.verse.common.convention.errorcode.BaseErrorCode;
 import com.yonagi.verse.common.convention.result.Result;
 import com.yonagi.verse.common.convention.result.Results;
 import com.yonagi.verse.common.security.ApiKeyAuthenticationFilter;
+import com.yonagi.verse.common.security.CostReconciliationSessionRoutes;
 import com.yonagi.verse.common.security.JwtAuthenticationFilter;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +57,9 @@ public class SecurityConfig {
                 .csrf(AbstractHttpConfigurer::disable)
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers(HttpMethod.POST, CostReconciliationSessionRoutes.EXCHANGE_PATH).permitAll()
+                        .requestMatchers(CostReconciliationSessionRoutes.BASE_PATH + "/**",
+                                CostReconciliationSessionRoutes.BATCHES_PREFIX + "**").authenticated()
                         // 广场读取及短效下载能力均不能绕过账号登录，优先于可配置白名单。
                         .requestMatchers("/api/v1/skills", "/api/v1/skills/**").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/external/flows/*/attach-current-user").authenticated()

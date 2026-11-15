@@ -27,6 +27,15 @@ public class RedisKeyConstant {
      */
     public final static String USER_LOGIN_TOKEN_KEY = "verse:user:login:token:";
 
+    /** 补账一次性码与批次、挑战值绑定，兑换时原子删除。 */
+    public static final String RECONCILIATION_HANDOFF_KEY = "verse:reconciliation:handoff:";
+
+    /** 批次会话以不透明凭证的摘要索引。 */
+    public static final String RECONCILIATION_SESSION_KEY = "verse:reconciliation:session:";
+
+    /** 账号级签发限频。 */
+    public static final String RECONCILIATION_HANDOFF_LIMIT_KEY = "verse:reconciliation:handoff-limit:";
+
     /**
      * 用户手机号验证码key（{phone} -> code），用于找回密码场景
      */

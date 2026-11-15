@@ -18,7 +18,19 @@ public sealed interface TenantCostStatusRespDTO {
             /** 预算状态。 */ String budgetState,
             /** 最晚恢复时间。 */ String retryAt,
             /** 周期状态。 */ List<ApiKeyCostStatusRespDTO.PeriodStatus> periods,
-            /** 当前命中。 */ List<ApiKeyCostStatusRespDTO.Hit> limits) implements TenantCostStatusRespDTO { }
+            /** 当前命中。 */ List<ApiKeyCostStatusRespDTO.Hit> limits,
+            /** 与准入分开的待核账摘要，未启用时为空。 */ Reconciliation reconciliation) implements TenantCostStatusRespDTO {
+        public Full(String tenantId, String visibility, String observedSettingsVersion, CostLimitConfig costLimit,
+                    LlmCostStatusRespDTO.Warning costWarning, String currency, String timezone, List<String> consumptionSources,
+                    String asOf, String availability, String budgetState, String retryAt,
+                    List<ApiKeyCostStatusRespDTO.PeriodStatus> periods, List<ApiKeyCostStatusRespDTO.Hit> limits) {
+            this(tenantId, visibility, observedSettingsVersion, costLimit, costWarning, currency, timezone,
+                    consumptionSources, asOf, availability, budgetState, retryAt, periods, limits, null);
+        }
+    }
+    record Reconciliation(
+            /** 当前周期仍待核对的案件数。 */ long pendingCount,
+            /** 待确认的按次暂计金额，分。 */ String estimatedCostFen) {}
     record Summary(
             /** 租户标识。 */ String tenantId,
             /** 可见级别。 */ String visibility,

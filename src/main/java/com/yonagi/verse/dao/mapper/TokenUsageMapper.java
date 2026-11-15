@@ -18,6 +18,15 @@ import java.util.List;
  */
 @Mapper
 public interface TokenUsageMapper extends BaseMapper<TokenUsageDO> {
+    long countEffectiveRawExport(@Param("tenantId") Long tenantId, @Param("userId") Long userId,
+                                 @Param("apiKeyId") Long apiKeyId, @Param("serviceId") Long serviceId,
+                                 @Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+
+    List<UsageRawExportRow> selectEffectiveRawExport(@Param("tenantId") Long tenantId, @Param("userId") Long userId,
+            @Param("apiKeyId") Long apiKeyId, @Param("serviceId") Long serviceId,
+            @Param("from") LocalDateTime from, @Param("to") LocalDateTime to,
+            @Param("afterTime") LocalDateTime afterTime, @Param("afterEvent") String afterEvent, @Param("limit") int limit);
+
 
     @Select("SELECT COUNT(*) FROM t_token_usage WHERE event_id=#{eventId}")
     long countByEventId(@Param("eventId") String eventId);

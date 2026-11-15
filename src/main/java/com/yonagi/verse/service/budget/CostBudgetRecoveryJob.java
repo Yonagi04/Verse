@@ -15,17 +15,18 @@ public class CostBudgetRecoveryJob {
     private final CostBudgetService service;
     private final CostBudgetSettlementMapper settlements;
     private final CostBudgetInvocationMapper invocations;
+    private final CostReconciliationTracking reconciliation;
     // 日常恢复保留固定间隔，重放待结算快照并续约执行心跳。
     @Scheduled(fixedDelay = 10_000)
     public void recover() {
         try {
             service.retryUnsentCleanup();
             service.retryLocalSnapshots();
-            for (var row : settlements.pending()) {
+            for (var row : reconciliation.enabled() ? settlements.legacyPending() : settlements.pending()) {
                 try { service.apply(row.getEventId()); }
                 catch (RuntimeException e) { log.error("[cost-budget] 补偿失败: eventId={}", row.getEventId(), e); }
             }
-            for (var row : invocations.recoverable()) {
+            for (var row : reconciliation.enabled() ? invocations.legacyRecoverable() : invocations.recoverable()) {
                 try { service.recoverInvocation(row); }
                 catch (RuntimeException e) { log.warn("[cost-budget] 执行确认失败: requestId={}", row.getRequestId(), e); }
             }

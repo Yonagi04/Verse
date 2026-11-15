@@ -3,6 +3,7 @@ package com.yonagi.verse.common.security;
 import com.yonagi.verse.dao.projection.CurrentTenantState;
 import com.yonagi.verse.service.CurrentTenantStateService;
 import com.yonagi.verse.service.LoginSessionValidationService;
+import com.yonagi.verse.service.budget.CostReconciliationSessionService;
 import com.yonagi.verse.service.user.AccountAvailabilityService;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.DispatcherType;
@@ -108,7 +109,7 @@ class JwtAuthenticationFilterTest {
         AccountAvailabilityService accounts = mock(AccountAvailabilityService.class);
         when(accounts.isAccountActive(10L)).thenReturn(true);
         return new Fixture(new JwtAuthenticationFilter(new LoginSessionValidationService(jwtUtil, redis, accounts),
-                stateService));
+                stateService, mock(CostReconciliationSessionService.class)));
     }
 
     private static CurrentTenantState state(Long tenantId, String role) {

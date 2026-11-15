@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yonagi.verse.dao.mapper.CostBudgetSettlementMapper">
+    <resultMap id="effectiveContribution" type="com.yonagi.verse.dao.projection.EffectiveCostContribution">
+        <id column="event_id" property="eventId"/>
+        <result column="tenant_id" property="tenantId"/>
+        <result column="user_id" property="userId"/>
+        <result column="api_key_id" property="apiKeyId"/>
+        <result column="service_id" property="serviceId"/>
+        <result column="source" property="source"/>
+        <result column="operation" property="operation"/>
+        <result column="request_id" property="requestId"/>
+        <result column="request_started_at" property="requestStartedAt"/>
+        <result column="cost_status" property="costStatus"/>
+        <result column="cost_fen" property="costFen"/>
+        <result column="budget_applied" property="budgetApplied"/>
+        <result column="contribution_version" property="contributionVersion"/>
+    </resultMap>
+
+    <sql id="effectiveContributions">
+        SELECT s.event_id, s.tenant_id, s.user_id, s.api_key_id, s.service_id, s.source, s.operation,
+               s.request_id, s.request_started_at, s.cost_status, s.estimated_cost_fen AS cost_fen,
+               s.budget_applied, CAST(0 AS SIGNED) AS contribution_version
+        FROM t_cost_budget_settlement s
+        LEFT JOIN t_cost_reconciliation_case c ON c.event_id=s.event_id AND c.tenant_id=s.tenant_id
+            AND c.request_id=s.request_id AND c.source=s.source
+        WHERE s.tenant_id=#{tenantId} AND s.request_started_at &gt;= #{start} AND s.request_started_at &lt; #{end}
+          AND (c.id IS NULL OR NOT EXISTS (
+              SELECT 1 FROM t_cost_reconciliation_adjustment a WHERE a.case_id=c.id
+          ))
+        <if test="keyId != null">
+            AND s.api_key_id=#{keyId}
+        </if>
+        <if test="serviceId != null">
+            AND s.service_id=#{serviceId}
+        </if>
+        <if test="after != null">
+            AND (s.request_started_at &gt; #{after.requestStartedAt}
+                 OR (s.request_started_at=#{after.requestStartedAt} AND s.event_id &gt; #{after.eventId}))
+        </if>
+        UNION ALL
+        SELECT c.event_id, c.tenant_id, c.user_id, c.api_key_id, a.service_id, c.source, a.operation,
+               c.request_id, c.request_started_at, a.cost_status, a.cost_fen, 1, a.version
+        FROM t_cost_reconciliation_case c
+        JOIN t_cost_reconciliation_adjustment a ON a.case_id=c.id
+            AND a.version=(
+                SELECT latest.version FROM t_cost_reconciliation_adjustment latest
+                WHERE latest.case_id=c.id ORDER BY latest.version DESC LIMIT 1
+            )
+        WHERE c.tenant_id=#{tenantId} AND c.request_started_at &gt;= #{start} AND c.request_started_at &lt; #{end}
+        <if test="keyId != null">
+            AND c.api_key_id=#{keyId}
+        </if>
+        <!-- 先确定最新更正，再按模型筛选，避免旧模型重新出现费用。 -->
+        <if test="serviceId != null">
+            AND a.service_id=#{serviceId}
+        </if>
+        <if test="after != null">
+            AND (c.request_started_at &gt; #{after.requestStartedAt}
+                 OR (c.request_started_at=#{after.requestStartedAt} AND c.event_id &gt; #{after.eventId}))
+        </if>
+    </sql>
+
+    <select id="pageEffectiveContributions" resultMap="effectiveContribution">
+        <include refid="effectiveContributions"/>
+        ORDER BY request_started_at, event_id
+        LIMIT 500
+    </select>
+
+    <resultMap id="effectiveTotals" type="com.yonagi.verse.dao.projection.TenantCostBudgetAggregate">
+        <result column="used_cost_fen" property="usedCostFen"/>
+        <result column="calculated_count" property="calculatedCount"/>
+        <result column="unpriced_count" property="unpricedCount"/>
+        <result column="uncalculable_count" property="uncalculableCount"/>
+        <result column="not_chargeable_count" property="notChargeableCount"/>
+        <result column="invalid_count" property="invalidCount"/>
+    </resultMap>
+
+    <select id="aggregateEffective" resultMap="effectiveTotals">
+        <bind name="after" value="null"/>
+        SELECT COALESCE(SUM(CASE WHEN CAST(e.cost_status AS BINARY)=_binary'CALCULATED'
+                            THEN CAST(e.cost_fen AS DECIMAL(65,18)) ELSE 0 END),0) AS used_cost_fen,
+               COUNT(CASE WHEN CAST(e.cost_status AS BINARY)=_binary'CALCULATED' THEN 1 END) AS calculated_count,
+               COUNT(CASE WHEN CAST(e.cost_status AS BINARY)=_binary'UNPRICED' THEN 1 END) AS unpriced_count,
+               COUNT(CASE WHEN CAST(e.cost_status AS BINARY)=_binary'UNCALCULABLE' THEN 1 END) AS uncalculable_count,
+               COUNT(CASE WHEN CAST(e.cost_status AS BINARY)=_binary'NOT_CHARGEABLE' THEN 1 END) AS not_chargeable_count,
+               COUNT(CASE WHEN e.cost_status IS NULL OR CAST(e.cost_status AS BINARY)
+                           NOT IN (_binary'CALCULATED',_binary'UNPRICED',_binary'UNCALCULABLE',_binary'NOT_CHARGEABLE')
+                           OR (CAST(e.cost_status AS BINARY)=_binary'CALCULATED' AND e.cost_fen IS NULL)
+                          THEN 1 END) AS invalid_count
+        FROM (<include refid="effectiveContributions"/>) e
+        WHERE e.budget_applied=1
+    </select>
+</mapper>

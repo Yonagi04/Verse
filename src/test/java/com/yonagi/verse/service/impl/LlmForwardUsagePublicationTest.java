@@ -38,6 +38,7 @@ import com.yonagi.verse.common.enums.UpstreamProtocol;
 import com.yonagi.verse.service.pricing.CostCalculator;
 import com.yonagi.verse.service.pricing.PricingResolver;
 import com.yonagi.verse.service.pricing.PricingSnapshot;
+import com.yonagi.verse.service.budget.UpstreamCompletionProof;
 import com.yonagi.verse.service.usage.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -56,6 +57,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -147,6 +149,8 @@ class LlmForwardUsagePublicationTest {
     @ParameterizedTest @ValueSource(strings = {"SPEECH", "TRANSCRIPTION"})
     void mediaValidationBeforeSendingStillSettlesAsNotChargeable(String operation) {
         ModelOperation op = ModelOperation.valueOf(operation);
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), eq(op)))
+                .thenReturn(42L);
         var adapter = new OpenAiMediaAdapter(op, UpstreamProtocol.OPENAI_COMPAT);
         ReflectionTestUtils.setField(service, "providerAdapter", adapter);
         AdapterExchange.Request request = op == ModelOperation.SPEECH
@@ -157,6 +161,7 @@ class LlmForwardUsagePublicationTest {
         var event = terminalEvent();
         assertEquals(CostStatus.NOT_CHARGEABLE, event.getCostResult().status());
         assertEquals("NOT_SENT", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
+        verify(budgets).recordUpstreamRejection(42L, UpstreamExecutionOutcome.NOT_SENT);
         verify(circuitBreaker, never()).recordFailure(anyString());
     }
 
@@ -165,7 +170,8 @@ class LlmForwardUsagePublicationTest {
         tokenPricing();
         ModelOperation op = ModelOperation.valueOf(operation);
         var upstream = reactor.core.publisher.Sinks.many().unicast().<ServerSentEvent<String>>onBackpressureBuffer();
-        when(providerAdapter.stream(any())).thenReturn(upstream.asFlux());
+        var terminalReceived = new CountDownLatch(1);
+        when(providerAdapter.stream(any())).thenReturn(upstream.asFlux().doOnComplete(terminalReceived::countDown));
         var delivering = new CountDownLatch(1);
         var release = new CountDownLatch(1);
         var subscription = stream(op, "buffered-cancel").subscribe(event -> {
@@ -188,6 +194,8 @@ class LlmForwardUsagePublicationTest {
                 assertEquals(reactor.core.publisher.Sinks.EmitResult.OK,
                         upstream.tryEmitNext(ServerSentEvent.builder("[DONE]").build()));
             }
+            assertEquals(reactor.core.publisher.Sinks.EmitResult.OK, upstream.tryEmitComplete());
+            assertTrue(terminalReceived.await(5, TimeUnit.SECONDS));
             subscription.dispose();
             var event = terminalEvent();
             assertEquals("ABORTED", event.getStatus());
@@ -195,6 +203,107 @@ class LlmForwardUsagePublicationTest {
             assertEquals(CostStatus.CALCULATED, event.getCostResult().status());
             assertEquals("COMPLETED", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
         } finally { release.countDown(); subscription.dispose(); }
+    }
+
+    @Test
+    void mediaRejectionEvidenceFailureStillPublishesOriginalNotSentTerminal() {
+        var adapter = new OpenAiMediaAdapter(ModelOperation.SPEECH, UpstreamProtocol.OPENAI_COMPAT);
+        ReflectionTestUtils.setField(service, "providerAdapter", adapter);
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), any())).thenReturn(42L);
+        doThrow(new IllegalStateException("evidence unavailable"))
+                .when(budgets).recordUpstreamRejection(42L, UpstreamExecutionOutcome.NOT_SENT);
+
+        ClientException failure = assertThrows(ClientException.class, () -> service.media(context,
+                ModelOperation.SPEECH,
+                "alias", new AdapterExchange.JsonRequest(ModelOperation.SPEECH,
+                JSON.parseObject("{\"input\":\"\",\"voice\":\"alloy\"}")), "rejection-write-failed", Instant.now()));
+
+        assertEquals(LlmForwardErrorCodeEnum.CAPABILITY_UNSUPPORTED.code(), failure.getErrorCode());
+        TokenUsageEvent event = terminalEvent();
+        assertEquals(UpstreamExecutionOutcome.NOT_SENT, event.getExecutionOutcome());
+        assertEquals(CostStatus.NOT_CHARGEABLE, event.getCostResult().status());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CHAT_COMPLETIONS", "RESPONSES"})
+    void cancellationHandsOffVerifiedCompletionWithoutWaitingForTerminalDelivery(String operation) throws Exception {
+        ModelOperation op = ModelOperation.valueOf(operation);
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), eq(op))).thenReturn(42L);
+        when(pricingResolver.resolve(anyLong(), anyLong(), any())).thenReturn(new PricingSnapshot(
+                99L, BillingMode.REQUEST, "CNY", PricePeriodType.BASE, null,
+                null, null, null, new BigDecimal("600"), Instant.EPOCH, null));
+        AtomicReference<UpstreamCompletionProof> captured = new AtomicReference<>();
+        doAnswer(call -> {
+            captured.set(call.getArgument(1));
+            usagePublisher.publish(call.getArgument(0));
+            return null;
+        }).when(budgets).settle(any(), any());
+        var upstream = reactor.core.publisher.Sinks.many().unicast().<ServerSentEvent<String>>onBackpressureBuffer();
+        var terminalReceived = new CountDownLatch(1);
+        when(providerAdapter.stream(any())).thenReturn(upstream.asFlux().doOnComplete(terminalReceived::countDown));
+        var delivering = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var subscription = stream(op, "fixed-buffered-cancel").subscribe(event -> {
+            delivering.countDown();
+            try {
+                assertTrue(release.await(5, TimeUnit.SECONDS));
+            } catch (InterruptedException expected) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        try {
+            assertEquals(reactor.core.publisher.Sinks.EmitResult.OK,
+                    upstream.tryEmitNext(ServerSentEvent.builder("{\"choices\":[]}")
+                            .event("response.created").build()));
+            assertTrue(delivering.await(5, TimeUnit.SECONDS));
+            ServerSentEvent<String> terminal = op == ModelOperation.RESPONSES
+                    ? ServerSentEvent.builder("{\"response\":{\"status\":\"completed\"}}")
+                    .event("response.completed").build() : ServerSentEvent.builder("[DONE]").build();
+            assertEquals(reactor.core.publisher.Sinks.EmitResult.OK, upstream.tryEmitNext(terminal));
+            assertEquals(reactor.core.publisher.Sinks.EmitResult.OK, upstream.tryEmitComplete());
+            assertTrue(terminalReceived.await(5, TimeUnit.SECONDS));
+
+            subscription.dispose();
+
+            TokenUsageEvent event = terminalEvent();
+            assertEquals("ABORTED", event.getStatus());
+            assertEquals(UpstreamExecutionOutcome.COMPLETED, event.getExecutionOutcome());
+            UpstreamCompletionProof proof = captured.get();
+            assertNotNull(proof);
+            assertEquals(42L, proof.attemptId());
+            assertEquals("fixed-buffered-cancel", proof.requestId());
+            assertEquals(10L, proof.serviceId());
+            assertEquals(operation, proof.operation());
+            verify(budgets, never()).recordUpstreamCompletion(any(), any(), any());
+            verify(budgets, never()).settle(any());
+        } finally {
+            release.countDown();
+            subscription.dispose();
+        }
+    }
+
+    @Test
+    void successfulResponsesStillRecordsEarlyEvidenceAndHandsOffTheSameUsage() {
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), any())).thenReturn(42L);
+        AtomicReference<UpstreamCompletionProof> captured = new AtomicReference<>();
+        doAnswer(call -> {
+            captured.set(call.getArgument(1));
+            usagePublisher.publish(call.getArgument(0));
+            return null;
+        }).when(budgets).settle(any(), any());
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(ServerSentEvent.builder(
+                "{\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}}")
+                .event("response.completed").build()));
+
+        stream(ModelOperation.RESPONSES, "responses-success").blockLast();
+
+        TokenUsageEvent event = terminalEvent();
+        assertEquals("SUCCESS", event.getStatus());
+        assertEquals(UpstreamExecutionOutcome.COMPLETED, event.getExecutionOutcome());
+        assertNotNull(captured.get());
+        assertEquals(5L, captured.get().usage().inputTokens());
+        assertEquals(2L, captured.get().usage().outputTokens());
+        verify(budgets).recordUpstreamCompletion(eq(42L), eq("responses-success"), any());
     }
 
     @ParameterizedTest @ValueSource(strings = {"IMAGE_GENERATION", "SPEECH", "TRANSCRIPTION"})
@@ -331,6 +440,26 @@ class LlmForwardUsagePublicationTest {
         assertEquals("COMPLETED", JSON.parseObject(JSON.toJSONString(event)).getString("executionOutcome"));
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void chatErrorFollowedByDoneCannotCreateFixedPriceCompletionEvidence(boolean namedError) {
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), eq(ModelOperation.CHAT_COMPLETIONS)))
+                .thenReturn(42L);
+        when(pricingResolver.resolve(anyLong(), anyLong(), any())).thenReturn(new PricingSnapshot(
+                99L, BillingMode.REQUEST, "CNY", PricePeriodType.BASE, null,
+                null, null, null, new BigDecimal("600"), Instant.EPOCH, null));
+        var error = namedError ? ServerSentEvent.builder("provider failure").event("error").build()
+                : ServerSentEvent.builder("{\"error\":{\"message\":\"provider failure\"}}").build();
+        when(providerAdapter.stream(any())).thenReturn(Flux.just(error, ServerSentEvent.builder("[DONE]").build()));
+
+        var forwarded = stream(ModelOperation.CHAT_COMPLETIONS, "error-then-done").collectList().block();
+
+        assertNotNull(forwarded);
+        assertEquals(List.of(error.data(), "[DONE]"), forwarded.stream().map(ServerSentEvent::data).toList());
+        verify(budgets, never()).recordUpstreamCompletion(any(), any(), any());
+        assertUnknownTerminal("FAIL");
+    }
+
     private Flux<ServerSentEvent<String>> stream(ModelOperation operation, String id) {
         return operation == ModelOperation.RESPONSES
                 ? service.responsesStream(context, "{\"model\":\"alias\",\"stream\":true}", id, Instant.now())
@@ -393,6 +522,7 @@ class LlmForwardUsagePublicationTest {
         eventPublisher = mock(DomainEventPublisher.class);
         usagePublisher = mock(TokenUsageEventPublisher.class);
         budgets = mock(com.yonagi.verse.service.budget.CostBudgetService.class);
+        when(budgets.recordUpstreamIntent(anyLong(), anyString(), anyLong(), anyString(), any())).thenReturn(null);
         when(budgets.attempt(anyString())).thenAnswer(i -> new com.yonagi.verse.service.budget.InvocationExecutionState(
                 com.yonagi.verse.service.budget.BudgetInvocationMode.SYNC).attempt());
         when(budgets.outcome(anyString())).thenReturn(UpstreamExecutionOutcome.REJECTED);

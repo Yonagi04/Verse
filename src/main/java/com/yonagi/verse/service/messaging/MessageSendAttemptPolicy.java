@@ -12,11 +12,21 @@ public final class MessageSendAttemptPolicy {
         return attempt!=null && attempt.channel()!=null && attempt.sendRecordId()!=null;
     }
 
-    public static boolean matches(MessageSendRecordDO row,String scene,String requestId,Long userId,SendAttemptContext attempt,Date now) {
-        return row!=null && "SUBMITTING".equals(row.getStatus()) && scene.equals(row.getScene()) && requestId.equals(row.getRequestId())
-                && userId.equals(row.getUserId()) && row.getTenantId()==null
-                && Objects.equals(attempt.executionToken(),row.getExecutionToken()) && attempt.executionToken()!=null
-                && Objects.equals(attempt.attemptCount(),row.getAttemptCount()) && Objects.equals(attempt.recipientHash(),row.getRecipientHash())
-                && row.getDeadlineAt()!=null && row.getDeadlineAt().after(now);
+    /** 个人通知仍只允许没有租户归属的发送记录。 */
+    public static boolean matches(MessageSendRecordDO row, String scene, String requestId, Long userId,
+                                  SendAttemptContext attempt, Date now) {
+        return matches(row, scene, requestId, userId, null, attempt, now);
+    }
+
+    /** 期望租户必须来自业务权威数据；null 明确表示个人通知，不能表示任意租户。 */
+    public static boolean matches(MessageSendRecordDO row, String scene, String requestId, Long userId,
+                                  Long expectedTenantId, SendAttemptContext attempt, Date now) {
+        return row != null && "SUBMITTING".equals(row.getStatus()) && scene.equals(row.getScene())
+                && requestId.equals(row.getRequestId()) && userId.equals(row.getUserId())
+                && Objects.equals(expectedTenantId, row.getTenantId())
+                && Objects.equals(attempt.executionToken(), row.getExecutionToken()) && attempt.executionToken() != null
+                && Objects.equals(attempt.attemptCount(), row.getAttemptCount())
+                && Objects.equals(attempt.recipientHash(), row.getRecipientHash())
+                && row.getDeadlineAt() != null && row.getDeadlineAt().after(now);
     }
 }

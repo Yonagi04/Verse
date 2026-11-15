@@ -18,6 +18,11 @@ public class CostCalculator {
         if (!"SUCCESS".equals(terminalStatus)) {
             return CostResult.of(CostStatus.NOT_CHARGEABLE);
         }
+        return calculateCharge(usage, pricing);
+    }
+
+    /** 调用方已用上游证据确认可计费，网关交付状态不参与算价。 */
+    public CostResult calculateCharge(UsageBreakdown usage, PricingSnapshot pricing) {
         if (pricing == null || !pricing.priced()) {
             return CostResult.of(CostStatus.UNPRICED);
         }
@@ -42,7 +47,7 @@ public class CostCalculator {
     }
 
     private CostResult calculated(BigDecimal cost) {
-        if (cost == null) {
+        if (cost == null || cost.signum() < 0) {
             return CostResult.of(CostStatus.UNCALCULABLE);
         }
         BigDecimal normalized = cost.stripTrailingZeros();
@@ -50,6 +55,6 @@ public class CostCalculator {
         if (normalized.scale() > MAX_COST_SCALE || integerDigits > MAX_COST_INTEGER_DIGITS) {
             return CostResult.of(CostStatus.UNCALCULABLE);
         }
-        return new CostResult(CostStatus.CALCULATED, cost);
+        return new CostResult(CostStatus.CALCULATED, cost.scale() > MAX_COST_SCALE ? normalized : cost);
     }
 }

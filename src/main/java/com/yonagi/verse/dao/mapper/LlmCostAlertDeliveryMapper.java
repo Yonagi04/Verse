@@ -14,6 +14,16 @@ public interface LlmCostAlertDeliveryMapper extends BaseMapper<LlmCostAlertDeliv
             + "AND m.role IN ('MEMBER','ADMIN','SUPER_ADMIN') ORDER BY u.user_id")
     List<com.yonagi.verse.dao.projection.CostAlertRecipient> recipientSnapshot(@Param("tenantId") Long tenantId);
 
+    @Select("""
+            SELECT u.user_id,m.role,u.phone,u.email,u.phone_hash,u.email_hash
+            FROM t_user_tenant m JOIN t_user u ON u.user_id=m.user_id
+            WHERE m.tenant_id=#{tenantId} AND m.left_at IS NULL AND m.role IN ('ADMIN','SUPER_ADMIN')
+              AND u.status=1 AND u.del_flag=0 AND u.user_id>#{after}
+            ORDER BY u.user_id LIMIT 200
+            """)
+    List<com.yonagi.verse.dao.projection.CostAlertRecipient> reconciliationAdmins(@Param("tenantId") Long tenantId,
+                                                                                    @Param("after") long after);
+
     @Insert({"<script>INSERT INTO t_llm_cost_alert_delivery(event_id,channel,recipient_user_id,contact_hash,contact_encrypted,request_id,status,reason_code,attempt_count,next_retry_at,create_time,update_time) VALUES",
         "<foreach collection='rows' item='r' separator=','>(#{r.eventId},#{r.channel},#{r.recipientUserId},#{r.contactHash},#{r.contactEncrypted},#{r.requestId},#{r.status},#{r.reasonCode},#{r.attemptCount},#{r.nextRetryAt},#{r.createTime},#{r.updateTime})</foreach></script>"})
     void insertBatch(@Param("rows") List<LlmCostAlertDeliveryDO> rows);

@@ -79,6 +79,8 @@ class QueryCatalogueCoverageTest {
             "/api/v1/llm-services/cost-status",
             "/api/v1/tenants/{tenantId}/cost-status",
             "/api/v1/tenants/{tenantId}/cost-notification-readiness",
+            "/api/v1/cost-reconciliation-batches/{batchCode}/cases",
+            "/api/v1/cost-reconciliation-batches/{batchCode}/cases/{caseId}",
             "/api/v1/llm-services/cost-notification-readiness",
             "/api/v1/usage/{tenantId}/export");
 

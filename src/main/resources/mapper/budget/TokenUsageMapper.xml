@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yonagi.verse.dao.mapper.TokenUsageMapper">
+    <sql id="effectiveExportFacts">
+        SELECT u.id, CASE WHEN u.event_id IS NULL THEN CONCAT('0:',LPAD(u.id,20,'0'))
+                          ELSE CONCAT('1:',u.event_id) END AS event_cursor,
+               COALESCE(u.request_started_at,u.create_time) AS request_started_at,
+               u.request_id, u.tenant_id, u.user_id, u.api_key_id, COALESCE(a.service_id,u.service_id) AS service_id,
+               u.model, u.status, u.usage_source,
+               COALESCE(u.input_tokens,u.prompt_tokens,0) AS input_tokens,
+               COALESCE(u.output_tokens,u.completion_tokens,0) AS output_tokens,
+               COALESCE(u.normalized_total_tokens,u.total_tokens,0) AS total_tokens,
+               CASE WHEN a.id IS NULL THEN COALESCE(raw.cost_status,u.cost_status) ELSE a.cost_status END AS cost_status,
+               CASE WHEN a.id IS NULL THEN COALESCE(raw.estimated_cost_fen,u.estimated_cost_fen) ELSE a.cost_fen END AS estimated_cost_fen,
+               CASE WHEN a.id IS NULL THEN COALESCE(raw.currency,u.currency) ELSE 'CNY' END AS currency
+        FROM t_token_usage u
+        LEFT JOIN t_token_usage_cost raw ON raw.usage_id=u.id
+        LEFT JOIN t_cost_reconciliation_case c ON c.event_id=u.event_id AND c.tenant_id=u.tenant_id
+            AND c.request_id=u.request_id AND c.source=u.source
+        LEFT JOIN t_cost_reconciliation_adjustment a ON a.case_id=c.id AND a.version=(
+            SELECT latest.version FROM t_cost_reconciliation_adjustment latest
+            WHERE latest.case_id=c.id ORDER BY latest.version DESC LIMIT 1
+        )
+        WHERE u.tenant_id=#{tenantId} AND u.source='API_KEY'
+          AND COALESCE(u.request_started_at,u.create_time) &gt;= #{from}
+          AND COALESCE(u.request_started_at,u.create_time) &lt; #{to}
+        <if test="userId != null">AND u.user_id=#{userId}</if>
+        <if test="apiKeyId != null">AND u.api_key_id=#{apiKeyId}</if>
+        <if test="serviceId != null">AND COALESCE(a.service_id,u.service_id)=#{serviceId}</if>
+        UNION ALL
+        SELECT NULL,CONCAT('1:',c.event_id),c.request_started_at,c.request_id,c.tenant_id,COALESCE(owner.user_id,0),c.api_key_id,a.service_id,
+               COALESCE(model.model_name,CAST(a.service_id AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci),
+               'RECONCILED','UNKNOWN',NULL,NULL,NULL,a.cost_status,a.cost_fen,'CNY'
+        FROM t_cost_reconciliation_case c
+        JOIN t_cost_reconciliation_adjustment a ON a.case_id=c.id AND a.version=(
+            SELECT latest.version FROM t_cost_reconciliation_adjustment latest
+            WHERE latest.case_id=c.id ORDER BY latest.version DESC LIMIT 1
+        )
+        LEFT JOIN t_llm_service model ON model.tenant_id=c.tenant_id AND model.service_id=a.service_id
+        LEFT JOIN t_user owner ON owner.user_id=c.user_id AND owner.status&lt;&gt;2 AND owner.del_flag=0
+        WHERE c.tenant_id=#{tenantId} AND c.source='API_KEY'
+          AND c.request_started_at &gt;= #{from} AND c.request_started_at &lt; #{to}
+          AND NOT EXISTS (
+              SELECT 1 FROM t_token_usage u WHERE u.event_id=c.event_id AND u.tenant_id=c.tenant_id
+                AND u.request_id=c.request_id AND u.source=c.source
+          )
+        <if test="userId != null">AND owner.user_id=#{userId}</if>
+        <if test="apiKeyId != null">AND c.api_key_id=#{apiKeyId}</if>
+        <if test="serviceId != null">AND a.service_id=#{serviceId}</if>
+    </sql>
+
+    <select id="countEffectiveRawExport" resultType="long">
+        SELECT COUNT(*) FROM (<include refid="effectiveExportFacts"/>) f
+    </select>
+
+    <select id="selectEffectiveRawExport" resultType="com.yonagi.verse.dao.projection.UsageRawExportRow">
+        SELECT f.id, f.event_cursor AS eventCursor, f.request_started_at AS requestStartedAt, f.request_id AS requestId,
+               CASE WHEN f.user_id=0 THEN '已注销成员'
+                    ELSE COALESCE(NULLIF(usr.nickname,''),usr.username,CONCAT('成员 ',f.user_id)) END AS memberLabel,
+               COALESCE(CONCAT(k.name,' (',k.key_prefix,')'),CONCAT('API Key ',f.api_key_id)) AS apiKeyLabel,
+               COALESCE(s.name,CONCAT('服务 ',f.service_id)) AS serviceLabel,
+               f.model,f.status,f.usage_source AS usageSource,
+               f.input_tokens AS inputTokens,f.output_tokens AS outputTokens,f.total_tokens AS totalTokens,
+               f.cost_status AS costStatus,f.estimated_cost_fen AS estimatedCostFen,f.currency
+        FROM (<include refid="effectiveExportFacts"/>) f
+        LEFT JOIN t_user usr ON usr.user_id=f.user_id
+        LEFT JOIN t_api_key k ON k.api_key_id=f.api_key_id AND k.tenant_id=f.tenant_id
+        LEFT JOIN t_llm_service s ON s.service_id=f.service_id AND s.tenant_id=f.tenant_id
+        <if test="afterTime != null">
+            WHERE f.request_started_at &gt; #{afterTime} OR (f.request_started_at=#{afterTime} AND f.event_cursor &gt; #{afterEvent})
+        </if>
+        ORDER BY f.request_started_at,f.event_cursor LIMIT #{limit}
+    </select>
+</mapper>
