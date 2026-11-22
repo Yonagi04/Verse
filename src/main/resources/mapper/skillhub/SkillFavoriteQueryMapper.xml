@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.yonagi.verse.dao.mapper.skillhub.SkillFavoriteQueryMapper">
+    <resultMap id="favoriteStatus" type="com.yonagi.verse.dao.projection.SkillFavoriteProjection">
+        <id column="favorite_id" property="favoriteId"/>
+        <result column="skill_id" property="skillId"/>
+        <result column="folder_id" property="folderId"/>
+        <result column="folder_name" property="folderName"/>
+        <result column="saved_at" property="savedAt"/>
+    </resultMap>
+    <resultMap id="favorite" type="com.yonagi.verse.dao.projection.SkillFavoriteProjection" extends="favoriteStatus">
+        <result column="available" property="available"/>
+        <association property="skill" resultMap="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.publicView" columnPrefix="public_" notNullColumn="skill_id"/>
+    </resultMap>
+    <resultMap id="folderCount" type="com.yonagi.verse.dao.projection.SkillFavoriteCountProjection">
+        <id column="folder_id" property="folderId"/>
+        <result column="relation_count" property="count"/>
+    </resultMap>
+    <sql id="sourceJoins">
+        LEFT JOIN t_skill s ON s.skill_id=f.skill_id
+        LEFT JOIN t_skill_publisher p ON p.publisher_id=s.publisher_id
+        LEFT JOIN t_user u ON u.user_id=p.user_id
+        LEFT JOIN t_skill_revision r ON r.revision_id=s.public_revision_id AND r.skill_id=s.skill_id
+        LEFT JOIN t_skill_version v ON v.version_id=s.current_version_id AND v.skill_id=s.skill_id AND v.version_type='RELEASE'
+        LEFT JOIN t_skill_artifact a ON a.artifact_id=v.artifact_id
+    </sql>
+    <sql id="scope">
+        f.user_id=#{userId}
+        <if test="query.folderId != null">AND f.folder_id=#{query.folderId}</if>
+        <if test="query.keyword != null">
+            AND <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL AND LOWER(r.name) LIKE LOWER(#{query.contains}) ESCAPE '!'
+        </if>
+    </sql>
+    <select id="counts" resultMap="folderCount">
+        SELECT folder_id,COUNT(*) AS relation_count FROM t_skill_favorite WHERE user_id=#{userId} GROUP BY folder_id
+    </select>
+    <select id="statuses" resultMap="favoriteStatus">
+        SELECT f.favorite_id,f.skill_id,f.folder_id,f.saved_at,
+               CASE WHEN f.folder_id=0 THEN '默认收藏夹' ELSE ff.name END AS folder_name
+        FROM t_skill_favorite f LEFT JOIN t_skill_favorite_folder ff ON ff.folder_id=f.folder_id AND ff.user_id=f.user_id
+        WHERE f.user_id=#{userId} AND f.skill_id IN
+        <foreach collection="skillIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM t_skill_favorite f
+        <if test="query.keyword != null"><include refid="sourceJoins"/></if>
+        WHERE <include refid="scope"/>
+    </select>
+    <select id="page" resultMap="favorite">
+        SELECT f.favorite_id,f.skill_id,f.folder_id,f.saved_at,
+        CASE WHEN f.folder_id=0 THEN '默认收藏夹' ELSE ff.name END AS folder_name,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN 1 ELSE 0 END AS available,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN s.skill_id END AS public_skill_id,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN s.publisher_id END AS public_publisher_id,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN p.user_id END AS public_owner_user_id,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN p.handle END AS public_handle,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN COALESCE(NULLIF(TRIM(u.nickname),''),u.username) END AS public_public_name,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN s.slug END AS public_slug,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN r.name END AS public_name,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN r.summary END AS public_summary,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN r.category_id END AS public_category_id,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN r.revision_id END AS public_revision_id,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN v.version_id END AS public_version_id,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN CONCAT('v',v.release_number) END AS public_version_label,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN v.published_at END AS public_published_at,
+        CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN a.source_type END AS public_source_type
+        FROM t_skill_favorite f
+        LEFT JOIN t_skill_favorite_folder ff ON ff.folder_id=f.folder_id AND ff.user_id=f.user_id
+        <include refid="sourceJoins"/>
+        WHERE <include refid="scope"/>
+        ORDER BY <if test="query.sort == 'updated'">CASE WHEN <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/> AND r.revision_id IS NOT NULL THEN v.published_at END DESC,</if>
+        f.saved_at DESC,f.favorite_id DESC LIMIT #{query.size} OFFSET #{query.offset}
+    </select>
+    <select id="available" resultType="boolean">
+        SELECT EXISTS(SELECT s.skill_id <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.availableJoins"/>
+            WHERE s.skill_id=#{skillId} AND <include refid="com.yonagi.verse.dao.mapper.skillhub.SkillPublicQueryMapper.available"/>)
+    </select>
+</mapper>
