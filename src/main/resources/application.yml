@@ -39,6 +39,11 @@ server:
 
 verse:
   query-cache:
+    # 默认全部沿用全表协议；业务接入必须先 PREPARE、核验全部写入者后再 ACTIVE。
+    scope-table-modes: {}
+    max-dependencies: 64
+    scope-recovery-batch: 32
+    scope-recovery-budget-millis: 2000
     # 缓存键前缀统一定义于 RedisKeyConstant，不配置额外命名空间。
     wait-millis: 3000
     max-concurrency: 8

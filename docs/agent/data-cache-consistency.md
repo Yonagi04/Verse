@@ -62,6 +62,7 @@ public TenantSettingsRespDTO getSettings(Long userId, Long tenantId) { ... }
 - `access`：显式指定实现 `QueryAccessPolicy` 的业务策略类型；命中、回源和 Redis 降级均执行实时校验。策略解析参数并调用所属领域的权威规则，原业务入口调用同一规则。通用缓存不得识别业务权限枚举、参数位置或调用业务 Mapper。无需额外校验的查询显式指定 `NoQueryAccess.class`。
 - `tables`：完整的数据库依赖表集合；写入这些表时由统一机制失效。
 - `behavior`：可选业务策略，默认直接缓存原方法返回值。
+- `dependencyResolver`：可选无状态业务依赖解析器，默认继续采用原全表模式；接入前遵守下节作用域准入规则。
 
 `QueryCatalogue` 在服务创建前读取 Bean 类型，从方法注解收集策略与依赖表，不会提前创建服务。`QueryWriteInterceptor` 使用自动发现的依赖执行写入失效和事务栅栏。缓存键包含方法完整签名，重载方法互相隔离；用户上下文只转换为用户、租户和角色，不包含凭证。
 
@@ -70,6 +71,33 @@ public TenantSettingsRespDTO getSettings(Long userId, Long tenantId) { ... }
 现有特殊策略位于所属业务的 `service.tenant`、`service.playground`、`service.reporting` 和 `service.apikey`：工作台只缓存预设和模型元数据，价格实时计算；邀请码列表因自然过期采用实时 SQL 分页且不缓存候选集合；API Key 列表实时补充最近使用时间；报表和概览保留原有时间边界与完整性检查。优先复用或扩展这些策略，禁止在 Service 中复制相同规则。
 
 缓存依赖 Spring AOP：方法必须公开、非 `static`、非 `final`，所属类必须可代理，调用必须经过 Spring 代理。同类内自调用不会触发新的缓存拦截。事务内查询继续执行原方法；直接调用 `QueryCache.read` 的既有入口保持原实现，新增代码优先使用注解。
+
+### 用户和租户作用域准入
+
+通用设施支持 `QueryDependency(table, QueryScope)`，范围为 `TABLE`、`USER`、`TENANT`、`TENANT_USER`。当前生产配置 `scope-table-modes` 默认为空，所有业务继续使用旧全表模式，不会自动获得细粒度失效。
+
+- 业务接入是独立变更，先完成“查询—依赖表—范围—所有写入口”清单；不得只修改读取注解。
+- 查询通过 `dependencyResolver = MyDependencies.class` 选择 `QueryDependencyResolver` Bean。保留完整 `tables`；返回结果必须逐表覆盖，不能遗漏、越界或在同表混用 `TABLE` 和具体范围。
+- 解析器必须无状态，仅使用可信显式参数，不查询 DAO、不操作 Redis、不读取登录 ThreadLocal。范围不是授权，命中、回源和降级仍执行原实时访问校验。
+- 写策略实现 `QueryMutationResolver`，以 `@QueryMutationBinding(tables=..., statementIds=...)` 登记完整语句。所有者必须与 SQL 显式绑定参数一致；管理员身份不等于资源所有者。转移归属需同时声明旧、新归属及必要汇总。
+- 写解析器只返回当前目标表的合法非空集合。未绑定写或显式 `TABLE` 影响规范化为新广播加兼容旧全表；空、异表和非法声明执行前拒绝，不用广播吞掉配置错误。
+- 新 scoped 读取自动检查该表广播保护；精确写不更新广播。`TENANT` 不隐式包含所有 `TENANT_USER`，租户汇总影响由写策略明确声明；个人读取不要机械订阅同表租户汇总。
+- 单次有效依赖及含 v2 的事务累计依赖受 `max-dependencies` 限制，包含自动补充和兼容依赖。超限在 SQL/BEGIN 前拒绝，不静默折叠已准备的范围。
+- 标准单目标写才可接入。保护表检查先于首表未登记早退；涉及启用表的 JOIN、多目标或无法判定的写拒绝。主表未启用、但子查询只读引用启用表的写也可能被保守拒绝，因此迁移清单必须覆盖所有引用该表的写 SQL。
+- 手工 `readScoped/getScoped` 仅用于明确必要入口，所属 Bean 仍通过 `QueryCacheDependencies` 登记完整表。新结果前缀必须取自 `RedisKeyConstant`，禁止控制键和锁前缀；旧 `read/get` 不变。
+
+表阶段为 `LEGACY → PREPARE → ACTIVE`。PREPARE 同时保护新旧写，但查询回到旧全表路径。配置示意如下，Map 表名使用引号和方括号保留下划线；示例不是业务接入批准：
+
+```yaml
+verse:
+  query-cache:
+    scope-table-modes:
+      "[t_api_key]": PREPARE
+```
+
+阶段变更通过统一重启/发布生效，不支持请求并发期间热修改配置 Map。ACTIVE 前核验 HTTP 实例、消费者、定时/清理任务和维护写入者全部升级，在停写且 DB 已结束的窗口处理残留，并对目标表 v2 广播索引完整失效和换代；首次或再次启用均执行，防止复用历史 v2 值。不能仅凭新 Key 前缀或旧 writer 为空就启用。
+
+动态恢复只登记活动资源，不枚举全部用户。版本和未知 writer 不设置过期时间；仅有明确结束证明的写可自动清理。范围、完成证明、索引、活动登记及人工恢复必须一起迁移。具体恢复和回滚操作见本地 `dev_docs_local/query-cache-recovery.md`。
 
 ## 写入与失效
 
