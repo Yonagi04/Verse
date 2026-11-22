@@ -63,7 +63,8 @@ public class SkillExceptionAdvice {
                 || SkillErrorCodeEnum.VERSION_UNAVAILABLE.code().equals(code)) {
             status = 404;
         } else if (SkillErrorCodeEnum.CONFLICT.code().equals(code)
-                || SkillErrorCodeEnum.IDEMPOTENCY_CONFLICT.code().equals(code)) {
+                || SkillErrorCodeEnum.IDEMPOTENCY_CONFLICT.code().equals(code)
+                || SkillErrorCodeEnum.FAVORITE_UNDO_EXPIRED.code().equals(code)) {
             status = 409;
         } else if (SkillErrorCodeEnum.LIMIT_EXCEEDED.code().equals(code)) {
             status = 413;

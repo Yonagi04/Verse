@@ -22,6 +22,8 @@ public enum SkillErrorCodeEnum implements IErrorCode {
     VERSION_UNAVAILABLE("A001708", "该版本暂不可下载"),
     /** 超过当前主体的操作频率。 */
     RATE_LIMITED("A001709", "操作过于频繁，请稍后重试"),
+    /** 原取消回执不存在或已超过首次撤销期限。 */
+    FAVORITE_UNDO_EXPIRED("A001710", "撤销已过期，请重新收藏"),
     /** 存储等必要依赖不可用，不伪装为空结果或成功。 */
     UNAVAILABLE("B001701", "Skill服务暂不可用，请稍后重试");
 
