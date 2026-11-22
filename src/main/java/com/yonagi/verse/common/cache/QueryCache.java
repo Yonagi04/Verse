@@ -268,17 +268,18 @@ public class QueryCache {
                 long remaining = Math.max(1, TimeUnit.NANOSECONDS.toMillis(deadline-System.nanoTime()));
                 // 不指定 leaseTime，使用 Redisson 看门狗，慢查询不会因固定租约到期产生第二个构建者。
                 long lockStarted = System.nanoTime();
-                boolean acquired;
+                boolean acquired = false;
+                // 指标记录也可能失败，成功拿锁后的所有出口必须进入释放边界。
                 try {
-                    acquired = lock.tryLock(remaining, TimeUnit.MILLISECONDS);
-                } finally {
-                    metrics.timer("verse.query.cache.lock.wait", "query", name)
-                            .record(System.nanoTime() - lockStarted, TimeUnit.NANOSECONDS);
-                }
-                if (!acquired) {
-                    throw busy();
-                }
-                try {
+                    try {
+                        acquired = lock.tryLock(remaining, TimeUnit.MILLISECONDS);
+                    } finally {
+                        metrics.timer("verse.query.cache.lock.wait", "query", name)
+                                .record(System.nanoTime() - lockStarted, TimeUnit.NANOSECONDS);
+                    }
+                    if (!acquired) {
+                        throw busy();
+                    }
                     versions = snapshotDependencies(dependencies);
                     if (versions == null) {
                         continue;
@@ -328,7 +329,7 @@ public class QueryCache {
                         return value;
                     } finally { if (ownsPermit) { loading.remove(); permits.release(); } }
                 } finally {
-                    if (lock.isHeldByCurrentThread()) {
+                    if (acquired && lock.isHeldByCurrentThread()) {
                         lock.unlock();
                     }
                 }
