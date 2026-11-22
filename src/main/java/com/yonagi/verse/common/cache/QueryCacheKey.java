@@ -4,7 +4,15 @@ import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONWriter;
 
 import java.lang.reflect.Array;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 
 /** 参数规范化：Map 递归排序，列表保留业务顺序，集合按规范化内容排序。 */
 final class QueryCacheKey {
@@ -12,6 +20,30 @@ final class QueryCacheKey {
 
     static String parametersJson(Object parameters) {
         return JSON.toJSONString(normalize(parameters), JSONWriter.Feature.WriteNulls);
+    }
+
+    static List<QueryDependency> dependencies(List<QueryDependency> dependencies,
+                                               Collection<String> tables, int limit) {
+        if (dependencies == null || dependencies.isEmpty() || dependencies.size() > limit
+                || tables == null || tables.isEmpty()) {
+            throw new IllegalArgumentException("查询缓存依赖为空或超过上限");
+        }
+        Map<String, QueryDependency> sorted = new TreeMap<>();
+        Map<String, Boolean> tableModes = new HashMap<>();
+        for (QueryDependency dependency : dependencies) {
+            if (dependency == null || dependency.isBroadcast() || !tables.contains(dependency.table())) {
+                throw new IllegalArgumentException("查询缓存依赖包含非法范围或未声明表");
+            }
+            Boolean previous = tableModes.putIfAbsent(dependency.table(), dependency.isTable());
+            if (previous != null && previous != dependency.isTable()) {
+                throw new IllegalArgumentException("同表不能混用全表和具体范围读取");
+            }
+            sorted.put(dependency.identity(), dependency);
+        }
+        if (!tableModes.keySet().equals(new HashSet<>(tables))) {
+            throw new IllegalArgumentException("查询缓存依赖遗漏声明表");
+        }
+        return List.copyOf(sorted.values());
     }
 
     private static Object normalize(Object value) {
@@ -24,12 +56,16 @@ final class QueryCacheKey {
             List<Object> values = new ArrayList<>();
             collection.forEach(item -> values.add(normalize(item)));
             // Set 不表达顺序，避免不同 JVM 的遍历顺序产生不同缓存键。
-            if (value instanceof Set<?>) values.sort(Comparator.comparing(QueryCacheKey::parametersJson));
+            if (value instanceof Set<?>) {
+                values.sort(Comparator.comparing(QueryCacheKey::parametersJson));
+            }
             return values;
         }
         if (value != null && value.getClass().isArray()) {
             List<Object> values = new ArrayList<>();
-            for (int i = 0; i < Array.getLength(value); i++) values.add(normalize(Array.get(value, i)));
+            for (int i = 0; i < Array.getLength(value); i++) {
+                values.add(normalize(Array.get(value, i)));
+            }
             return values;
         }
         // DTO 转为 JSON 树后递归排序，保证嵌套 Map 与顶层 Map 使用相同规则。

@@ -1,6 +1,10 @@
 package com.yonagi.verse.common.cache;
 
-import java.lang.annotation.*;
+import java.lang.annotation.Documented;
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
 
 /** 在 Spring Bean 的公开实现方法上声明查询缓存，无需修改中心清单。 */
 @Target(ElementType.METHOD)
@@ -15,6 +19,8 @@ public @interface QueryCached {
     Class<? extends QueryAccessPolicy> access();
     /** 查询依赖的数据库表，写入时自动触发失效。 */
     String[] tables();
+    /** 可选业务依赖解析器；默认继续使用原全表依赖。 */
+    Class<? extends QueryDependencyResolver> dependencyResolver() default QueryDependencyResolver.class;
     /** 特殊业务策略；默认直接缓存方法返回值。 */
     Class<? extends QueryCacheBehavior> behavior() default QueryCacheBehavior.class;
 }
