@@ -14,6 +14,9 @@ class QueryCatalogueCoverageTest {
     private static final Map<String, String> CORE = new LinkedHashMap<>();
     static {
         add("/api/v1/users/me", "UserServiceImpl.getCurrentUser");
+        add("/api/v1/skills/me/favorite-folders", "SkillFavoriteQueryService.folders");
+        add("/api/v1/skills/me/favorites", "SkillFavoriteQueryService.page");
+        add("/api/v1/skills/me/favorites/statuses", "SkillFavoriteQueryService.statuses");
         add("/api/v1/users/getUserInfo", "UserServiceImpl.getUserInfo");
         add("/api/v1/users/me/login-history", "LoginHistoryServiceImpl.getLoginHistoryList");
         add("/api/v1/tenants", "TenantCrudServiceImpl.listTenants");
@@ -150,7 +153,7 @@ class QueryCatalogueCoverageTest {
         }
         Set<String> classified = new TreeSet<>(CORE.keySet()); classified.addAll(EXCEPTIONS);
         assertEquals(classified, routes, "新增 GET 必须明确缓存策略或业务例外");
-        assertEquals(34, CORE.size());
+        assertEquals(37, CORE.size());
         QueryCatalogue catalogue = QueryCacheTestSupport.catalogue();
         for (String entry : CORE.values()) {
             assertTrue(catalogue.policies().values().stream().anyMatch(policy -> policy.name().equals(entry)), entry);

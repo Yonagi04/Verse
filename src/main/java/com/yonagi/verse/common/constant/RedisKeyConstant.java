@@ -8,6 +8,12 @@ package com.yonagi.verse.common.constant;
  * @date 2026/07/12 14:33
  */
 public class RedisKeyConstant {
+    /** 个人收藏夹及计数缓存，账号参数参与键。 */
+    public static final String SKILL_FAVORITE_FOLDERS_KEY = "verse:skill:favorite-folders:";
+    /** 个人批量收藏状态缓存。 */
+    public static final String SKILL_FAVORITE_STATUSES_KEY = "verse:skill:favorite-statuses:";
+    /** 个人收藏分页及当前公开卡片缓存。 */
+    public static final String SKILL_FAVORITES_KEY = "verse:skill:favorites:";
 
     /** 同一手机号跨发码业务、首次计数起 24 小时固定窗口内的尝试计数。 */
     public static final String VERIFICATION_SMS_DAILY_KEY = "verse:verification-sms:daily:";
