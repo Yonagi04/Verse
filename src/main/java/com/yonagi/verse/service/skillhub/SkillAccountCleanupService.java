@@ -32,6 +32,7 @@ public class SkillAccountCleanupService {
     private final SkillImportTaskMapper taskMapper;
     private final SkillAccountCleanupMapper cleanupMapper;
     private final ReliableDomainEventPublisher events;
+    private final SkillFavoriteCleanupService favorites;
 
     /**
      * @param userId 注销事务已持用户排他锁的账号
@@ -39,6 +40,7 @@ public class SkillAccountCleanupService {
      */
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public void freeze(Long userId) {
+        favorites.clear(userId);
         SkillPublisherDO publisher = publisherMapper.selectByUserIdForUpdate(userId);
         if (publisher == null) {
             return;

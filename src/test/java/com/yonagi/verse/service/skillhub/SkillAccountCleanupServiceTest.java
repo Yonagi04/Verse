@@ -29,8 +29,9 @@ class SkillAccountCleanupServiceTest {
     private final SkillImportTaskMapper tasks = mock(SkillImportTaskMapper.class);
     private final SkillAccountCleanupMapper progress = mock(SkillAccountCleanupMapper.class);
     private final ReliableDomainEventPublisher events = mock(ReliableDomainEventPublisher.class);
+    private final SkillFavoriteCleanupService favorites = mock(SkillFavoriteCleanupService.class);
     private final SkillAccountCleanupService service = new SkillAccountCleanupService(publishers, drafts, tasks,
-            progress, events);
+            progress, events, favorites);
 
     @BeforeEach
     void mapping() {
@@ -79,6 +80,7 @@ class SkillAccountCleanupServiceTest {
     @Test
     void accountWithoutPublisherHasNoSkillObligation() {
         assertTrue(service.isComplete(1L));
+        verify(favorites).clear(1L);
         verify(progress, never()).insert(any(SkillAccountCleanupDO.class));
         verify(drafts, never()).update(any(), any());
     }
