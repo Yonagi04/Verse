@@ -329,8 +329,13 @@ public class QueryCache {
                         return value;
                     } finally { if (ownsPermit) { loading.remove(); permits.release(); } }
                 } finally {
-                    if (acquired && lock.isHeldByCurrentThread()) {
-                        lock.unlock();
+                    if (acquired) {
+                        try {
+                            // unlock 原子校验所有权，避免前置远程查询失败导致跳过释放。
+                            lock.unlock();
+                        } catch (IllegalMonitorStateException error) {
+                            log.warn("[query-cache] 重建锁所有权已丢失，无需重复释放: query={}", name, error);
+                        }
                     }
                 }
             }
