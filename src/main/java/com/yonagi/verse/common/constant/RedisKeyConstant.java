@@ -282,6 +282,12 @@ public class RedisKeyConstant {
     /** 核心查询依赖索引有序集合：表名。 */
     public static final String CORE_QUERY_CACHE_INDEX_KEY = "verse:query-cache:index:";
 
+    /** 带完整依赖身份的 v2 控制记录前缀，类型后拼接表和业务范围。 */
+    public static final String QUERY_CACHE_V2_KEY = "verse:query-cache:v2:";
+
+    /** 需要检查或恢复的 v2 资源；与 writer 原子登记，不按年龄过期。 */
+    public static final String QUERY_CACHE_ACTIVE_DEPENDENCIES_KEY = "verse:query-cache:v2:active-dependencies";
+
     /** 查询缓存测试数据前缀，生产业务不使用。 */
     public static final String CORE_QUERY_CACHE_TEST_KEY = "verse:test:query-cache:";
 }
