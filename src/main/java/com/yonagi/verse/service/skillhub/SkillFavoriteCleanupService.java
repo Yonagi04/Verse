@@ -1,8 +1,5 @@
 package com.yonagi.verse.service.skillhub;
 
-import com.baomidou.mybatisplus.core.toolkit.Wrappers;
-import com.yonagi.verse.dao.entity.skillhub.SkillFavoriteDO;
-import com.yonagi.verse.dao.entity.skillhub.SkillFavoriteFolderDO;
 import com.yonagi.verse.dao.mapper.skillhub.SkillFavoriteMapper;
 import com.yonagi.verse.dao.mapper.skillhub.SkillFavoriteFolderMapper;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +18,7 @@ public class SkillFavoriteCleanupService {
     @Transactional(propagation = Propagation.MANDATORY, rollbackFor = Exception.class)
     public void clear(Long userId) {
         SkillFavoriteRules.positiveId(userId);
-        favorites.delete(Wrappers.lambdaQuery(SkillFavoriteDO.class).eq(SkillFavoriteDO::getUserId, userId));
-        folders.delete(Wrappers.lambdaQuery(SkillFavoriteFolderDO.class).eq(SkillFavoriteFolderDO::getUserId, userId));
+        favorites.deleteAllOwned(userId);
+        folders.deleteAllOwned(userId);
     }
 }

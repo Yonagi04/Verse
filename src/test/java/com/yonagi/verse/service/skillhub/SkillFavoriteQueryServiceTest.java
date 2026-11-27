@@ -32,7 +32,8 @@ class SkillFavoriteQueryServiceTest {
         assertEquals(0L, result.total()); assertEquals(1, result.folders().size());
         assertEquals("0", result.folders().getFirst().folderId()); assertTrue(result.folders().getFirst().defaultFolder());
         assertEquals(0L, result.folders().getFirst().count()); assertEquals(20, result.folderLimit());
-        assertEquals(1000, result.favoriteLimit()); verify(folders, never()).insert(any(SkillFavoriteFolderDO.class));
+        assertEquals(1000, result.favoriteLimit());
+        verify(folders, never()).insertOwned(anyLong(), any(SkillFavoriteFolderDO.class));
     }
 
     @Test void folderCountsIncludeUnavailableRelationsAndEmptyCustomFolders() {

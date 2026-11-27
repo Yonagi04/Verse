@@ -81,7 +81,7 @@ public class SkillFavoriteCommandService {
         row.setNameKey(SkillFavoriteRules.nameKey(name));
         row.setCreateTime(now);
         row.setUpdateTime(now);
-        requireWritten(folders.insert(row));
+        requireWritten(folders.insertOwned(userId, row));
         SkillFavoriteFolderReceiptRespDTO receipt = new SkillFavoriteFolderReceiptRespDTO(
                 row.getFolderId().toString(), true, 0);
         idempotency.record(userId, FOLDER_CREATE, key, name, row.getFolderId(), receipt);
@@ -103,10 +103,7 @@ public class SkillFavoriteCommandService {
         requireUniqueName(userId, name, folderId);
         boolean changed = !folder.getName().equals(name);
         if (changed) {
-            requireWritten(folders.update(null, Wrappers.lambdaUpdate(SkillFavoriteFolderDO.class)
-                    .eq(SkillFavoriteFolderDO::getUserId, userId).eq(SkillFavoriteFolderDO::getFolderId, folderId)
-                    .set(SkillFavoriteFolderDO::getName, name).set(SkillFavoriteFolderDO::getNameKey,
-                            SkillFavoriteRules.nameKey(name)).set(SkillFavoriteFolderDO::getUpdateTime, now())));
+            requireWritten(folders.renameOwned(userId, folderId, name, SkillFavoriteRules.nameKey(name), now()));
         }
         SkillFavoriteFolderReceiptRespDTO receipt = new SkillFavoriteFolderReceiptRespDTO(folderId.toString(), changed, 0);
         idempotency.record(userId, FOLDER_RENAME, key, payload, folderId, receipt);
@@ -125,12 +122,8 @@ public class SkillFavoriteCommandService {
         SkillFavoriteFolderDO folder = findFolder(userId, folderId);
         int migrated = 0;
         if (folder != null) {
-            migrated = favorites.update(null, Wrappers.lambdaUpdate(SkillFavoriteDO.class)
-                    .eq(SkillFavoriteDO::getUserId, userId).eq(SkillFavoriteDO::getFolderId, folderId)
-                    .set(SkillFavoriteDO::getFolderId, SkillFavoriteRules.DEFAULT_FOLDER)
-                    .set(SkillFavoriteDO::getUpdateTime, now()));
-            requireWritten(folders.delete(Wrappers.lambdaQuery(SkillFavoriteFolderDO.class)
-                    .eq(SkillFavoriteFolderDO::getUserId, userId).eq(SkillFavoriteFolderDO::getFolderId, folderId)));
+            migrated = favorites.moveFolderToDefault(userId, folderId, SkillFavoriteRules.DEFAULT_FOLDER, now());
+            requireWritten(folders.deleteOwned(userId, folderId));
         }
         SkillFavoriteFolderReceiptRespDTO receipt = new SkillFavoriteFolderReceiptRespDTO(
                 folderId.toString(), folder != null, migrated);
@@ -181,9 +174,7 @@ public class SkillFavoriteCommandService {
         }
         requireDestination(userId, folderId);
         if (!folderId.equals(row.getFolderId())) {
-            requireWritten(favorites.update(null, Wrappers.lambdaUpdate(SkillFavoriteDO.class)
-                    .eq(SkillFavoriteDO::getUserId, userId).eq(SkillFavoriteDO::getFavoriteId, favoriteId)
-                    .set(SkillFavoriteDO::getFolderId, folderId).set(SkillFavoriteDO::getUpdateTime, now())));
+            requireWritten(favorites.moveOwned(userId, favoriteId, folderId, now()));
             row.setFolderId(folderId);
         }
         SkillFavoriteReceiptRespDTO receipt = receipt("MOVED", row, false);
@@ -206,8 +197,7 @@ public class SkillFavoriteCommandService {
             receipt = new SkillFavoriteReceiptRespDTO("ABSENT", favoriteId.toString(), null, null, null,
                     false, null, false);
         } else {
-            requireWritten(favorites.delete(Wrappers.lambdaQuery(SkillFavoriteDO.class)
-                    .eq(SkillFavoriteDO::getUserId, userId).eq(SkillFavoriteDO::getFavoriteId, favoriteId)));
+            requireWritten(favorites.deleteOwned(userId, favoriteId));
             receipt = new SkillFavoriteReceiptRespDTO("CANCELLED", favoriteId.toString(), row.getSkillId().toString(),
                     row.getFolderId().toString(), row.getSavedAt().atOffset(ZoneOffset.UTC), true,
                     now().plusSeconds(UNDO_SECONDS).atOffset(ZoneOffset.UTC), false);
@@ -311,7 +301,7 @@ public class SkillFavoriteCommandService {
         row.setSavedAt(savedAt);
         row.setCreateTime(now());
         row.setUpdateTime(row.getCreateTime());
-        requireWritten(favorites.insert(row));
+        requireWritten(favorites.insertOwned(userId, row));
         return row;
     }
 

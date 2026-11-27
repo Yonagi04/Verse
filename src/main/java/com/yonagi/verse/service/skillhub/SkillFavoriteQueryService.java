@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 import static com.yonagi.verse.common.cache.QueryCacheTtl.*;
 
-/** 个人只读入口；缓存依赖完整源表，源失效时不返回历史卡片字段。 */
+/** 个人只读入口；收藏依赖按账号隔离，共享源保留完整失效保护。 */
 @Service
 @RequiredArgsConstructor
 public class SkillFavoriteQueryService {
@@ -33,7 +33,8 @@ public class SkillFavoriteQueryService {
 
     /** @return 默认夹、自定义夹及不随搜索变化的权威计数。 */
     @QueryCached(keyPrefix = RedisKeyConstant.SKILL_FAVORITE_FOLDERS_KEY, seconds = MINUTES_30,
-            access = SkillFavoriteQueryAccess.class, tables = {"t_skill_favorite_folder", "t_skill_favorite"})
+            access = SkillFavoriteQueryAccess.class, dependencyResolver = SkillFavoriteQueryDependencies.class,
+            tables = {"t_skill_favorite_folder", "t_skill_favorite"})
     public SkillFavoriteFoldersRespDTO folders(Long userId) {
         access.requireAccount(userId);
         Map<Long, Long> counts = new HashMap<>();
@@ -52,7 +53,8 @@ public class SkillFavoriteQueryService {
 
     /** @return 按规范标识顺序返回状态，未收藏明确 favoriteId=null。 */
     @QueryCached(keyPrefix = RedisKeyConstant.SKILL_FAVORITE_STATUSES_KEY, seconds = MINUTES_10,
-            access = SkillFavoriteQueryAccess.class, tables = {"t_skill_favorite_folder", "t_skill_favorite"})
+            access = SkillFavoriteQueryAccess.class, dependencyResolver = SkillFavoriteQueryDependencies.class,
+            tables = {"t_skill_favorite_folder", "t_skill_favorite"})
     public List<SkillFavoriteStatusRespDTO> statuses(Long userId, List<Long> skillIds) {
         access.requireAccount(userId);
         List<Long> ids = SkillFavoriteRules.statusIds(skillIds);
@@ -68,7 +70,8 @@ public class SkillFavoriteQueryService {
 
     /** @return 按稳定规则分页；越界返回空页，由界面修正地址。 */
     @QueryCached(keyPrefix = RedisKeyConstant.SKILL_FAVORITES_KEY, seconds = MINUTES_10,
-            access = SkillFavoriteQueryAccess.class, tables = {"t_skill_favorite_folder", "t_skill_favorite",
+            access = SkillFavoriteQueryAccess.class, dependencyResolver = SkillFavoriteQueryDependencies.class,
+            tables = {"t_skill_favorite_folder", "t_skill_favorite",
             "t_skill", "t_skill_revision", "t_skill_revision_tag", "t_skill_version", "t_skill_artifact",
             "t_skill_publisher", "t_user"})
     public SkillFavoritePageRespDTO page(Long userId, SkillFavoriteCondition query) {

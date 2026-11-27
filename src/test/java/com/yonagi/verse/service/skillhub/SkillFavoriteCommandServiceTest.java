@@ -33,19 +33,22 @@ class SkillFavoriteCommandServiceTest {
         when(favorites.selectCount(any())).thenReturn(0L);
         when(folders.selectCount(any())).thenReturn(0L);
         when(queries.available(20L)).thenReturn(true);
-        when(favorites.insert(any(SkillFavoriteDO.class))).thenReturn(1);
-        when(folders.insert(any(SkillFavoriteFolderDO.class))).thenReturn(1);
-        when(favorites.update(isNull(), any())).thenReturn(1);
-        when(folders.update(isNull(), any())).thenReturn(1);
-        when(favorites.delete(any())).thenReturn(1);
-        when(folders.delete(any())).thenReturn(1);
+        when(favorites.insertOwned(anyLong(), any(SkillFavoriteDO.class))).thenReturn(1);
+        when(folders.insertOwned(anyLong(), any(SkillFavoriteFolderDO.class))).thenReturn(1);
+        when(favorites.moveOwned(anyLong(), anyLong(), anyLong(), any(LocalDateTime.class))).thenReturn(1);
+        when(favorites.moveFolderToDefault(anyLong(), anyLong(), eq(SkillFavoriteRules.DEFAULT_FOLDER),
+                any(LocalDateTime.class))).thenReturn(1);
+        when(folders.renameOwned(anyLong(), anyLong(), anyString(), anyString(), any(LocalDateTime.class)))
+                .thenReturn(1);
+        when(favorites.deleteOwned(anyLong(), anyLong())).thenReturn(1);
+        when(folders.deleteOwned(anyLong(), anyLong())).thenReturn(1);
     }
 
     @Test void createNormalizesFolderAndRecordsStableReceipt() {
         var result = service.createFolder(1L, "\u00A0DeV\uFEFF", KEY);
         assertTrue(result.created());
         ArgumentCaptor<SkillFavoriteFolderDO> row = ArgumentCaptor.forClass(SkillFavoriteFolderDO.class);
-        verify(folders).insert(row.capture());
+        verify(folders).insertOwned(eq(1L), row.capture());
         assertEquals("DeV", row.getValue().getName());
         assertEquals("dev", row.getValue().getNameKey());
         assertEquals(1L, row.getValue().getUserId());
@@ -69,7 +72,7 @@ class SkillFavoriteCommandServiceTest {
         when(folders.selectOne(any())).thenReturn(folder(10L, "Dev"));
         assertFalse(service.renameFolder(1L, 10L, "Dev", KEY).changed());
         assertTrue(service.renameFolder(1L, 10L, "New", KEY).changed());
-        verify(folders).update(isNull(), any());
+        verify(folders).renameOwned(eq(1L), eq(10L), eq("New"), eq("new"), any(LocalDateTime.class));
         verifyNoInteractions(favorites);
     }
 
@@ -77,14 +80,16 @@ class SkillFavoriteCommandServiceTest {
         when(folders.selectOne(any())).thenReturn(folder(10L, "Dev"), folder(11L, "New"));
         code(SkillErrorCodeEnum.CONFLICT, () -> service.renameFolder(1L, 10L, "New", KEY));
         when(folders.selectOne(any())).thenReturn(folder(10L, "Dev"), null);
-        when(folders.update(isNull(), any())).thenReturn(0);
+        when(folders.renameOwned(anyLong(), anyLong(), anyString(), anyString(), any(LocalDateTime.class)))
+                .thenReturn(0);
         assertThrows(ServerException.class, () -> service.renameFolder(1L, 10L, "New", KEY));
         verify(keys, never()).record(any(), any(), any(), any(), any(), any());
     }
 
     @Test void deleteReportsActualMigrationAndAbsentDeletionHasNoChange() {
         when(folders.selectOne(any())).thenReturn(folder(10L, "Dev"));
-        when(favorites.update(isNull(), any())).thenReturn(7);
+        when(favorites.moveFolderToDefault(eq(1L), eq(10L), eq(SkillFavoriteRules.DEFAULT_FOLDER),
+                any(LocalDateTime.class))).thenReturn(7);
         var result = service.deleteFolder(1L, 10L, KEY);
         assertTrue(result.changed()); assertEquals(7, result.migrated());
         when(folders.selectOne(any())).thenReturn(null);
@@ -94,7 +99,7 @@ class SkillFavoriteCommandServiceTest {
 
     @Test void migrationDependencyFailureDoesNotReturnOrRecordSuccess() {
         when(folders.selectOne(any())).thenReturn(folder(10L, "Dev"));
-        when(folders.delete(any())).thenThrow(new IllegalStateException("database unavailable"));
+        when(folders.deleteOwned(anyLong(), anyLong())).thenThrow(new IllegalStateException("database unavailable"));
         assertThrows(IllegalStateException.class, () -> service.deleteFolder(1L, 10L, KEY));
         verify(keys, never()).record(any(), any(), any(), any(), any(), any());
     }
@@ -104,7 +109,7 @@ class SkillFavoriteCommandServiceTest {
         var created = service.create(1L, 20L, 0L, KEY);
         assertTrue(created.created()); assertEquals("CREATED", created.receipt().outcome());
         ArgumentCaptor<SkillFavoriteDO> inserted = ArgumentCaptor.forClass(SkillFavoriteDO.class);
-        verify(favorites).insert(inserted.capture());
+        verify(favorites).insertOwned(eq(1L), inserted.capture());
         assertEquals(1L, inserted.getValue().getUserId()); assertEquals(20L, inserted.getValue().getSkillId());
         assertEquals(NOW, created.receipt().savedAt().toInstant());
         when(favorites.selectOne(any())).thenReturn(row());
@@ -120,7 +125,7 @@ class SkillFavoriteCommandServiceTest {
         when(favorites.selectCount(any())).thenReturn(0L);
         when(queries.available(20L)).thenReturn(false);
         code(SkillErrorCodeEnum.NOT_ACCESSIBLE, () -> service.create(1L, 20L, 0L, KEY));
-        verify(favorites, never()).insert(any(SkillFavoriteDO.class));
+        verify(favorites, never()).insertOwned(anyLong(), any(SkillFavoriteDO.class));
     }
 
     @Test void newFavoriteAndMoveAcceptAnOwnedCustomFolder() {
@@ -146,7 +151,7 @@ class SkillFavoriteCommandServiceTest {
         var result = service.move(1L, 100L, 0L, KEY);
         assertEquals("0", result.folderId()); assertEquals(SAVED, result.savedAt().toLocalDateTime());
         service.move(1L, 100L, 0L, KEY);
-        verify(favorites).update(isNull(), any());
+        verify(favorites).moveOwned(eq(1L), eq(100L), eq(0L), any(LocalDateTime.class));
         code(SkillErrorCodeEnum.NOT_ACCESSIBLE, () -> service.move(1L, 100L, 999L, KEY));
         when(favorites.selectOne(any())).thenReturn(null);
         code(SkillErrorCodeEnum.CONFLICT, () -> service.move(1L, 100L, 0L, KEY));
@@ -183,7 +188,7 @@ class SkillFavoriteCommandServiceTest {
         result = service.restore(1L, 100L, KEY);
         assertEquals("EXISTING", result.outcome()); assertEquals("200", result.favoriteId());
         assertEquals("30", result.folderId()); assertEquals(SAVED.plusDays(1), result.savedAt().toLocalDateTime());
-        verify(favorites, times(1)).insert(any(SkillFavoriteDO.class));
+        verify(favorites, times(1)).insertOwned(anyLong(), any(SkillFavoriteDO.class));
     }
 
     @Test void deadlineIsInclusiveAndExpiredMissingOrNoopCancelRejects() {
@@ -200,7 +205,7 @@ class SkillFavoriteCommandServiceTest {
         previous(NOW.plusSeconds(30), true);
         when(favorites.selectCount(any())).thenReturn(1000L);
         code(SkillErrorCodeEnum.LIMIT_EXCEEDED, () -> service.restore(1L, 100L, KEY));
-        verify(favorites, never()).insert(any(SkillFavoriteDO.class));
+        verify(favorites, never()).insertOwned(anyLong(), any(SkillFavoriteDO.class));
         verify(keys, never()).record(any(), any(), any(), any(), any(), any());
     }
 
@@ -247,7 +252,7 @@ class SkillFavoriteCommandServiceTest {
                 .thenThrow(new ClientException(SkillErrorCodeEnum.IDEMPOTENCY_CONFLICT));
         code(SkillErrorCodeEnum.IDEMPOTENCY_CONFLICT, () -> service.create(1L, 20L, 0L, KEY));
         reset(keys);
-        when(favorites.insert(any(SkillFavoriteDO.class))).thenReturn(0);
+        when(favorites.insertOwned(anyLong(), any(SkillFavoriteDO.class))).thenReturn(0);
         assertThrows(ServerException.class, () -> service.create(1L, 20L, 0L, KEY));
         verify(keys, never()).record(any(), any(), any(), any(), any(), any());
     }

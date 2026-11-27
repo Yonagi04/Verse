@@ -39,8 +39,10 @@ server:
 
 verse:
   query-cache:
-    # 默认全部沿用全表协议；业务接入必须先 PREPARE、核验全部写入者后再 ACTIVE。
-    scope-table-modes: {}
+    # 收藏先部署读写解析器；核验全部写入者并停写换代后，再统一切换为 ACTIVE。
+    scope-table-modes:
+      "[t_skill_favorite]": PREPARE
+      "[t_skill_favorite_folder]": PREPARE
     max-dependencies: 64
     scope-recovery-batch: 32
     scope-recovery-budget-millis: 2000
